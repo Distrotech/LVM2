@@ -43,6 +43,9 @@ struct label {
 	uint64_t sector;
 	struct labeller *labeller;
 	void *info;
+	struct dm_list mdas;	/* list head for metadata areas */
+	struct dm_list das;	/* list head for data areas */
+	struct dm_list eas;	/* list head for embedding areas */
 };
 
 struct labeller;
