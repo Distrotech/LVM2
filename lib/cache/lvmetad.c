@@ -875,7 +875,7 @@ int lvmetad_pvscan_single(struct cmd_context *cmd, struct device *dev,
 		return 1;
 	}
 
-	info = (struct lvmcache_info *) label->info;
+	info = lvmcache_info_from_pvid(dev->pvid, 0);
 
 	baton.vg = NULL;
 	baton.fid = lvmcache_fmt(info)->ops->create_instance(lvmcache_fmt(info),
