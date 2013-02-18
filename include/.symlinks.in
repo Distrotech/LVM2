@@ -32,6 +32,7 @@
 @top_srcdir@/lib/format_text/text_import.h
 @top_srcdir@/lib/label/label.h
 @top_srcdir@/lib/locking/locking.h
+@top_srcdir@/lib/locking/lockcache.h
 @top_srcdir@/lib/log/log.h
 @top_srcdir@/lib/log/lvm-logging.h
 @top_srcdir@/lib/metadata/lv.h

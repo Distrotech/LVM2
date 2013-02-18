@@ -28,6 +28,7 @@
 #include "activate.h"
 #include "display.h"
 #include "locking.h"
+#include "lockcache.h"
 #include "archiver.h"
 #include "defaults.h"
 
@@ -2697,7 +2698,7 @@ int vg_commit(struct volume_group *vg)
 {
 	int cache_updated = 0;
 
-	if (!lvmcache_vgname_is_locked(vg->name)) {
+	if (!lockcache_vgname_is_locked(vg->name)) {
 		log_error(INTERNAL_ERROR "Attempt to write new VG metadata "
 			  "without locking %s", vg->name);
 		return cache_updated;
@@ -4025,7 +4026,7 @@ static struct volume_group *_vg_lock_and_read(struct cmd_context *cmd, const cha
 		return NULL;
 	}
 
-	already_locked = lvmcache_vgname_is_locked(vg_name);
+	already_locked = lockcache_vgname_is_locked(vg_name);
 
 	if (!already_locked && !(misc_flags & READ_WITHOUT_LOCK) &&
 	    !lock_vol(cmd, vg_name, lock_flags, NULL)) {

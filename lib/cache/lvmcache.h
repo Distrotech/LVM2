@@ -60,10 +60,7 @@ int lvmcache_update_vgname_and_id(struct lvmcache_info *info,
 				  const char *vgname, const char *vgid,
 				  uint32_t vgstatus, const char *hostname);
 int lvmcache_update_vg(struct volume_group *vg, unsigned precommitted);
-
-void lvmcache_lock_vgname(const char *vgname, int read_only);
-void lvmcache_unlock_vgname(const char *vgname);
-int lvmcache_verify_lock_order(const char *vgname);
+void lvmcache_update_lock_state(const char *vgname, int locked);
 
 /* Queries */
 const struct format_type *lvmcache_fmt_from_vgname(struct cmd_context *cmd, const char *vgname, const char *vgid, unsigned revalidate_labels);
@@ -82,8 +79,6 @@ const char *lvmcache_pvid_from_devname(struct cmd_context *cmd,
 			      const char *dev_name);
 char *lvmcache_vgname_from_pvid(struct cmd_context *cmd, const char *pvid);
 const char *lvmcache_vgname_from_info(struct lvmcache_info *info);
-int lvmcache_vgs_locked(void);
-int lvmcache_vgname_is_locked(const char *vgname);
 
 void lvmcache_seed_infos_from_lvmetad(struct cmd_context *cmd);
 

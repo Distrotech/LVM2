@@ -81,6 +81,7 @@ SOURCES =\
 	locking/file_locking.c \
 	locking/locking.c \
 	locking/no_locking.c \
+	locking/lockcache.c \
 	log/log.c \
 	metadata/lv.c \
 	metadata/lv_manip.c \

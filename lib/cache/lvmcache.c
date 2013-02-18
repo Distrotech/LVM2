@@ -18,6 +18,7 @@
 #include "toolcontext.h"
 #include "dev-cache.h"
 #include "locking.h"
+#include "lockcache.h"
 #include "metadata.h"
 #include "filter.h"
 #include "filter-persistent.h"
@@ -68,20 +69,14 @@ struct lvmcache_vginfo {
 static struct dm_hash_table *_pvid_hash = NULL;
 static struct dm_hash_table *_vgid_hash = NULL;
 static struct dm_hash_table *_vgname_hash = NULL;
-static struct dm_hash_table *_lock_hash = NULL;
 static DM_LIST_INIT(_vginfos);
 static int _scanning_in_progress = 0;
 static int _has_scanned = 0;
-static int _vgs_locked = 0;
-static int _vg_global_lock_held = 0;	/* Global lock held when cache wiped? */
 
 int lvmcache_init(void)
 {
-	/*
-	 * FIXME add a proper lvmcache_locking_reset() that
-	 * resets the cache so no previous locks are locked
-	 */
-	_vgs_locked = 0;
+	int vg_global_lock_held = lockcache_vgname_is_locked(VG_GLOBAL);
+	lockcache_destroy();
 
 	dm_list_init(&_vginfos);
 
@@ -94,18 +89,13 @@ int lvmcache_init(void)
 	if (!(_pvid_hash = dm_hash_create(128)))
 		return 0;
 
-	if (!(_lock_hash = dm_hash_create(128)))
-		return 0;
-
 	/*
 	 * Reinitialising the cache clears the internal record of
 	 * which locks are held.  The global lock can be held during
 	 * this operation so its state must be restored afterwards.
 	 */
-	if (_vg_global_lock_held) {
-		lvmcache_lock_vgname(VG_GLOBAL, 0);
-		_vg_global_lock_held = 0;
-	}
+	if (vg_global_lock_held)
+		lockcache_lock_vgname(VG_GLOBAL, 0);
 
 	return 1;
 }
@@ -197,7 +187,7 @@ static void _update_cache_info_lock_state(struct lvmcache_info *info,
 	 * Cache becomes invalid whenever lock state changes unless
 	 * exclusive VG_GLOBAL is held (i.e. while scanning).
 	 */
-	if (!lvmcache_vgname_is_locked(VG_GLOBAL) && (was_locked != locked)) {
+	if (!lockcache_vgname_is_locked(VG_GLOBAL) && (was_locked != locked)) {
 		info->status |= CACHE_INVALID;
 		*cached_vgmetadata_valid = 0;
 	}
@@ -222,7 +212,7 @@ static void _update_cache_vginfo_lock_state(struct lvmcache_vginfo *vginfo,
 		_free_cached_vgmetadata(vginfo);
 }
 
-static void _update_cache_lock_state(const char *vgname, int locked)
+void lvmcache_update_lock_state(const char *vgname, int locked)
 {
 	struct lvmcache_vginfo *vginfo;
 
@@ -290,113 +280,8 @@ void lvmcache_drop_metadata(const char *vgname, int drop_precommitted)
 
 		/* Indicate that PVs could now be missing from the cache */
 		init_full_scan_done(0);
-	} else if (!lvmcache_vgname_is_locked(VG_GLOBAL))
+	} else if (!lockcache_vgname_is_locked(VG_GLOBAL))
 		_drop_metadata(vgname, drop_precommitted);
-}
-
-/*
- * Ensure vgname2 comes after vgname1 alphabetically.
- * Orphan locks come last.
- * VG_GLOBAL comes first.
- */
-static int _vgname_order_correct(const char *vgname1, const char *vgname2)
-{
-	if (is_global_vg(vgname1))
-		return 1;
-
-	if (is_global_vg(vgname2))
-		return 0;
-
-	if (is_orphan_vg(vgname1))
-		return 0;
-
-	if (is_orphan_vg(vgname2))
-		return 1;
-
-	if (strcmp(vgname1, vgname2) < 0)
-		return 1;
-
-	return 0;
-}
-
-/*
- * Ensure VG locks are acquired in alphabetical order.
- */
-int lvmcache_verify_lock_order(const char *vgname)
-{
-	struct dm_hash_node *n;
-	const char *vgname2;
-
-	if (!_lock_hash)
-		return_0;
-
-	dm_hash_iterate(n, _lock_hash) {
-		if (!dm_hash_get_data(_lock_hash, n))
-			return_0;
-
-		if (!(vgname2 = dm_hash_get_key(_lock_hash, n))) {
-			log_error(INTERNAL_ERROR "VG lock %s hits NULL.",
-				 vgname);
-			return 0;
-		}
-
-		if (!_vgname_order_correct(vgname2, vgname)) {
-			log_errno(EDEADLK, INTERNAL_ERROR "VG lock %s must "
-				  "be requested before %s, not after.",
-				  vgname, vgname2);
-			return 0;
-		}
-	}
-
-	return 1;
-}
-
-void lvmcache_lock_vgname(const char *vgname, int read_only __attribute__((unused)))
-{
-	if (!_lock_hash && !lvmcache_init()) {
-		log_error("Internal cache initialisation failed");
-		return;
-	}
-
-	if (dm_hash_lookup(_lock_hash, vgname))
-		log_error(INTERNAL_ERROR "Nested locking attempted on VG %s.",
-			  vgname);
-
-	if (!dm_hash_insert(_lock_hash, vgname, (void *) 1))
-		log_error("Cache locking failure for %s", vgname);
-
-	_update_cache_lock_state(vgname, 1);
-
-	if (strcmp(vgname, VG_GLOBAL))
-		_vgs_locked++;
-}
-
-int lvmcache_vgname_is_locked(const char *vgname)
-{
-	if (!_lock_hash)
-		return 0;
-
-	return dm_hash_lookup(_lock_hash, is_orphan_vg(vgname) ? VG_ORPHANS : vgname) ? 1 : 0;
-}
-
-void lvmcache_unlock_vgname(const char *vgname)
-{
-	if (!dm_hash_lookup(_lock_hash, vgname))
-		log_error(INTERNAL_ERROR "Attempt to unlock unlocked VG %s.",
-			  vgname);
-
-	_update_cache_lock_state(vgname, 0);
-
-	dm_hash_remove(_lock_hash, vgname);
-
-	/* FIXME Do this per-VG */
-	if (strcmp(vgname, VG_GLOBAL) && !--_vgs_locked)
-		dev_close_all();
-}
-
-int lvmcache_vgs_locked(void)
-{
-	return _vgs_locked;
 }
 
 static void _vginfo_attach_info(struct lvmcache_vginfo *vginfo,
@@ -551,7 +436,7 @@ static int _info_is_valid(struct lvmcache_info *info)
 	 * So if the VG appears to be unlocked here, it should be safe
 	 * to use the cached value.
 	 */
-	if (info->vginfo && !lvmcache_vgname_is_locked(info->vginfo->vgname))
+	if (info->vginfo && !lockcache_vgname_is_locked(info->vginfo->vgname))
 		return 1;
 
 	if (!(info->status & CACHE_LOCKED))
@@ -1317,7 +1202,7 @@ static int _lvmcache_update_vgname(struct lvmcache_info *info,
 	else if (!_lvmcache_update_vgid(NULL, vginfo, vgid)) /* Orphans */
 		return_0;
 
-	_update_cache_vginfo_lock_state(vginfo, lvmcache_vgname_is_locked(vgname));
+	_update_cache_vginfo_lock_state(vginfo, lockcache_vgname_is_locked(vgname));
 
 	/* FIXME Check consistency of list! */
 	vginfo->fmt = fmt;
@@ -1375,7 +1260,7 @@ static int _lvmcache_update_vgstatus(struct lvmcache_info *info, uint32_t vgstat
 
 int lvmcache_add_orphan_vginfo(const char *vgname, struct format_type *fmt)
 {
-	if (!_lock_hash && !lvmcache_init()) {
+	if (!_vgid_hash && !lvmcache_init()) {
 		log_error("Internal cache initialisation failed");
 		return 0;
 	}
@@ -1580,22 +1465,6 @@ static void _lvmcache_destroy_vgnamelist(struct lvmcache_vginfo *vginfo)
 	} while ((vginfo = next));
 }
 
-static void _lvmcache_destroy_lockname(struct dm_hash_node *n)
-{
-	char *vgname;
-
-	if (!dm_hash_get_data(_lock_hash, n))
-		return;
-
-	vgname = dm_hash_get_key(_lock_hash, n);
-
-	if (!strcmp(vgname, VG_GLOBAL))
-		_vg_global_lock_held = 1;
-	else
-		log_error(INTERNAL_ERROR "Volume Group %s was not unlocked",
-			  dm_hash_get_key(_lock_hash, n));
-}
-
 void lvmcache_destroy(struct cmd_context *cmd, int retain_orphans)
 {
 	struct dm_hash_node *n;
@@ -1621,13 +1490,6 @@ void lvmcache_destroy(struct cmd_context *cmd, int retain_orphans)
 		_vgname_hash = NULL;
 	}
 
-	if (_lock_hash) {
-		dm_hash_iterate(n, _lock_hash)
-			_lvmcache_destroy_lockname(n);
-		dm_hash_destroy(_lock_hash);
-		_lock_hash = NULL;
-	}
-
 	if (!dm_list_empty(&_vginfos))
 		log_error(INTERNAL_ERROR "_vginfos list should be empty");
 	dm_list_init(&_vginfos);
@@ -1643,7 +1505,7 @@ int lvmcache_pvid_is_locked(const char *pvid) {
 	if (!info || !info->vginfo)
 		return 0;
 
-	return lvmcache_vgname_is_locked(info->vginfo->vgname);
+	return lockcache_vgname_is_locked(info->vginfo->vgname);
 }
 
 int lvmcache_fid_add_mdas(struct lvmcache_info *info, struct format_instance *fid,
