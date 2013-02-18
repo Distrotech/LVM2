@@ -42,7 +42,6 @@ struct label {
 	char type[8];
 	uint64_t sector;
 	struct labeller *labeller;
-	void *info;
 	struct device *dev;
 	struct dm_list mdas;	/* list head for metadata areas */
 	struct dm_list das;	/* list head for data areas */

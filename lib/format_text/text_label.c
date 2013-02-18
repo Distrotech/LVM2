@@ -99,7 +99,7 @@ static int _text_write(struct label *label, void *buf)
 	strncpy((char *)lh->type, label->type, sizeof(label->type));
 
 	pvhdr = (struct pv_header *) ((char *) buf + xlate32(lh->offset_xl));
-	info = (struct lvmcache_info *) label->info;
+	info = lvmcache_info_from_pvid(label->dev->pvid, 0);
 	pvhdr->device_size_xl = xlate64(lvmcache_device_size(info));
 	memcpy(pvhdr->pv_uuid, &lvmcache_device(info)->pvid, sizeof(struct id));
 	if (!id_write_format((const struct id *)pvhdr->pv_uuid, buffer,
@@ -439,11 +439,13 @@ out:
 static void _text_destroy_label(struct labeller *l __attribute__((unused)),
 				struct label *label)
 {
-	struct lvmcache_info *info = (struct lvmcache_info *) label->info;
+	struct lvmcache_info *info = lvmcache_info_from_pvid(label->dev->pvid, 0);
 
-	lvmcache_del_mdas(info);
-	lvmcache_del_das(info);
-	lvmcache_del_eas(info);
+	if (info) {
+		lvmcache_del_mdas(info);
+		lvmcache_del_das(info);
+		lvmcache_del_eas(info);
+	}
 }
 
 static void _fmt_text_destroy(struct labeller *l)

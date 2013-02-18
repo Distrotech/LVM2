@@ -806,11 +806,10 @@ static struct device *_device_from_pvid(const struct id *pvid,
 		}
 
 		if (label_read(info->label->dev, &label, UINT64_C(0))) {
-			info = (struct lvmcache_info *) label->info;
-			if (id_equal(pvid, (struct id *) &info->label->dev->pvid)) {
+			if (id_equal(pvid, (struct id *) &label->dev->pvid)) {
 				if (label_sector)
 					*label_sector = label->sector;
-				return info->label->dev;
+				return label->dev;
                         }
 		}
 	}
@@ -1355,7 +1354,6 @@ struct lvmcache_info *lvmcache_add(struct labeller *labeller, const char *pvid,
 			return NULL;
 		}
 
-		label->info = info;
 		info->label = label;
 		dm_list_init(&info->list);
 		info->label->dev = dev;
@@ -1416,7 +1414,6 @@ struct lvmcache_info *lvmcache_add(struct labeller *labeller, const char *pvid,
 			if (!(info->label = label_create(labeller)))
 				/* FIXME leaves info without label! */
 				return_NULL;
-			info->label->info = info;
 			info->label->dev = dev;
 			lvmcache_del_mdas(info);
 			lvmcache_del_das(info);

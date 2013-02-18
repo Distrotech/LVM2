@@ -1455,7 +1455,7 @@ static int _text_pv_read(const struct format_type *fmt, const char *pv_name,
 		struct label *label;
 		if (!(label_read(dev, &label, UINT64_C(0))))
 			return_0;
-		info = label->info;
+		info = lvmcache_info_from_pvid(dev->pvid, 0);
 	}
 
 	if (!info)

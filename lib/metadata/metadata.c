@@ -3617,7 +3617,7 @@ static struct physical_volume *_pv_read(struct cmd_context *cmd,
 					  pv_name);
 			return NULL;
 		}
-		info = (struct lvmcache_info *) label->info;
+		info = lvmcache_info_from_pvid(label->dev->pvid, 0);
 	}
 
 	fmt = lvmcache_fmt(info);
@@ -3873,7 +3873,7 @@ int pv_analyze(struct cmd_context *cmd, const char *pv_name,
 	/*
 	 * Next, loop through metadata areas
 	 */
-	info = label->info;
+	info = lvmcache_info_from_pvid(label->dev->pvid, 0);
 	lvmcache_foreach_mda(info, _analyze_mda, (void *)lvmcache_fmt(info));
 
 	return 1;
