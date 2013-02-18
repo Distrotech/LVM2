@@ -392,3 +392,8 @@ struct label *label_create(struct labeller *labeller)
 
 	return label;
 }
+
+const struct format_type *label_fmt(struct label *label)
+{
+	return label->labeller->fmt;
+}
