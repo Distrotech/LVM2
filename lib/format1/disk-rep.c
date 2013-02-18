@@ -493,24 +493,6 @@ int read_pvs_in_vg(const struct format_type *fmt, const char *vg_name,
 	baton.mem = mem;
 	baton.vg_name = vg_name;
 
-	/* Fast path if we already saw this VG and cached the list of PVs */
-	if (vg_name && (vginfo = lvmcache_vginfo_from_vgname(vg_name, NULL))) {
-
-		lvmcache_foreach_pv(vginfo, _read_pv_in_vg, &baton);
-
-		if (!baton.empty) {
-			/* Did we find the whole VG? */
-			if (!vg_name || is_orphan_vg(vg_name) ||
-			    (baton.data && *baton.data->pvd.vg_name &&
-			     dm_list_size(head) == baton.data->vgd.pv_cur))
-				return 1;
-
-			/* Failed */
-			dm_list_init(head);
-			/* vgcache_del(vg_name); */
-		}
-	}
-
 	if (!(iter = dev_iter_create(filter, 1))) {
 		log_error("read_pvs_in_vg: dev_iter_create failed");
 		return 0;
