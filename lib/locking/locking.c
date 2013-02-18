@@ -22,6 +22,7 @@
 #include "memlock.h"
 #include "defaults.h"
 #include "lvmcache.h"
+#include "lockcache.h"
 
 #include <assert.h>
 #include <signal.h>
@@ -381,8 +382,10 @@ static int _lock_vol(struct cmd_context *cmd, const char *resource,
 
 	if ((ret = _locking.lock_resource(cmd, resource, flags))) {
 		if (lck_scope == LCK_VG && !(flags & LCK_CACHE)) {
-			if (lck_type != LCK_UNLOCK)
-				lvmcache_lock_vgname(resource, lck_type == LCK_READ);
+			if (lck_type != LCK_UNLOCK) {
+				lockcache_lock_vgname(resource, lck_type == LCK_READ);
+				lvmcache_update_lock_state(resource, 1);
+			}
 			dev_reset_error_count(cmd);
 		}
 
@@ -392,7 +395,8 @@ static int _lock_vol(struct cmd_context *cmd, const char *resource,
 
 	/* If unlocking, always remove lock from lvmcache even if operation failed. */
 	if (lck_scope == LCK_VG && !(flags & LCK_CACHE) && lck_type == LCK_UNLOCK) {
-		lvmcache_unlock_vgname(resource);
+		lockcache_unlock_vgname(resource);
+		lvmcache_update_lock_state(resource, 0);
 		if (!ret)
 			_update_vg_lock_count(resource, flags);
 	}
@@ -436,7 +440,7 @@ int lock_vol(struct cmd_context *cmd, const char *vol, uint32_t flags)
 		/* VG locks alphabetical, ORPHAN lock last */
 		if ((lck_type != LCK_UNLOCK) &&
 		    !(flags & LCK_CACHE) &&
-		    !lvmcache_verify_lock_order(vol))
+		    !lockcache_verify_lock_order(vol))
 			return_0;
 
 		/* Lock VG to change on-disk metadata. */
