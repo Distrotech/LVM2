@@ -90,7 +90,7 @@ struct label_ops {
 
 struct labeller {
 	struct label_ops *ops;
-	const void *private;
+	const struct format_type *fmt;
 };
 
 int label_init(void);
@@ -107,5 +107,6 @@ int label_write(struct device *dev, struct label *label);
 int label_verify(struct device *dev);
 struct label *label_create(struct labeller *labeller);
 void label_destroy(struct label *label);
+const struct format_type *label_fmt(struct label *label);
 
 #endif

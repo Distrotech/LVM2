@@ -39,7 +39,6 @@ struct lvmcache_info {
 	struct dm_list list;	/* Join VG members together */
 	struct lvmcache_vginfo *vginfo;	/* NULL == unknown */
 	struct label *label; /* move to PV */
-	const struct format_type *fmt;
 	uint64_t device_size;	/* move to label */ /* Bytes */
 	uint32_t status;
 };
@@ -1275,7 +1274,7 @@ int lvmcache_update_vgname_and_id(struct lvmcache_info *info,
 	if (!vgname && !info->vginfo) {
 		log_error(INTERNAL_ERROR "NULL vgname handed to cache");
 		/* FIXME Remove this */
-		vgname = info->fmt->orphan_vg_name;
+		vgname = label_fmt(info->label)->orphan_vg_name;
 		vgid = vgname;
 	}
 
@@ -1294,7 +1293,7 @@ int lvmcache_update_vgname_and_id(struct lvmcache_info *info,
 		info->status &= ~CACHE_INVALID;
 
 	if (!_lvmcache_update_vgname(info, vgname, vgid, vgstatus,
-				     creation_host, info->fmt) ||
+				     creation_host, label_fmt(info->label)) ||
 	    !_lvmcache_update_vgid(info, info->vginfo, vgid) ||
 	    !_lvmcache_update_vgstatus(info, vgstatus, creation_host))
 		return_0;
@@ -1421,7 +1420,6 @@ struct lvmcache_info *lvmcache_add(struct labeller *labeller, const char *pvid,
 		label = info->label;
 	}
 
-	info->fmt = (const struct format_type *) labeller->private;
 	info->status |= CACHE_INVALID;
 
 	if (!_lvmcache_update_pvid(info, pvid_s)) {
@@ -1544,7 +1542,7 @@ static int _get_pv_if_in_vg(struct lvmcache_info *info,
 		strcpy(vgname, info->vginfo->vgname);
 		memcpy(vgid, info->vginfo->vgid, sizeof(vgid));
 
-		if (get_pv_from_vg_by_id(info->fmt, vgname, vgid,
+		if (get_pv_from_vg_by_id(label_fmt(info->label), vgname, vgid,
 					 info->label->dev->pvid, pv))
 			return 1;
 	}
@@ -1564,7 +1562,7 @@ int lvmcache_populate_pv_fields(struct lvmcache_info *info,
 
 	/* Perform full scan (just the first time) and try again */
 	if (!scan_label_only && !critical_section() && !full_scan_done()) {
-		lvmcache_label_scan(info->fmt->cmd, 2);
+		lvmcache_label_scan(label_fmt(info->label)->cmd, 2);
 
 		if (_get_pv_if_in_vg(info, pv))
 			return 1;
@@ -1572,7 +1570,7 @@ int lvmcache_populate_pv_fields(struct lvmcache_info *info,
 
 	/* Orphan */
 	pv->dev = info->label->dev;
-	pv->fmt = info->fmt;
+	pv->fmt = label_fmt(info->label);
 	pv->size = info->device_size >> SECTOR_SHIFT;
 	pv->vg_name = FMT_TEXT_ORPHAN_VG_NAME;
 	memcpy(&pv->id, &info->label->dev->pvid, sizeof(pv->id));
@@ -1604,9 +1602,9 @@ int lvmcache_populate_pv_fields(struct lvmcache_info *info,
 
 int lvmcache_check_format(struct lvmcache_info *info, const struct format_type *fmt)
 {
-	if (info->fmt != fmt) {
+	if (label_fmt(info->label) != fmt) {
 		log_error("PV %s is a different format (seqno %s)",
-			  dev_name(info->label->dev), info->fmt->name);
+			  dev_name(info->label->dev), label_fmt(info->label)->name);
 		return 0;
 	}
 	return 1;
@@ -1636,7 +1634,7 @@ void lvmcache_del_eas(struct lvmcache_info *info)
 int lvmcache_add_mda(struct lvmcache_info *info, struct device *dev,
 		     uint64_t start, uint64_t size, unsigned ignored)
 {
-	return add_mda(info->fmt, NULL, &info->label->mdas, dev, start, size, ignored);
+	return add_mda(label_fmt(info->label), NULL, &info->label->mdas, dev, start, size, ignored);
 }
 
 int lvmcache_add_da(struct lvmcache_info *info, uint64_t start, uint64_t size)
@@ -1653,7 +1651,9 @@ void lvmcache_update_pv(struct lvmcache_info *info, struct physical_volume *pv,
 			const struct format_type *fmt)
 {
 	info->device_size = pv->size << SECTOR_SHIFT;
-	info->fmt = fmt;
+	if (label_fmt(info->label) != fmt)
+		log_error(INTERNAL_ERROR "Unexpected format mismatch on %s: %s found while %s expected.",
+			  dev_name(pv->dev), fmt->name, label_fmt(info->label)->name);
 }
 
 int lvmcache_update_das(struct lvmcache_info *info, struct physical_volume *pv)
@@ -1810,5 +1810,5 @@ uint64_t lvmcache_smallest_mda_size(struct lvmcache_info *info)
 }
 
 const struct format_type *lvmcache_fmt(struct lvmcache_info *info) {
-	return info->fmt;
+	return label_fmt(info->label);
 }
