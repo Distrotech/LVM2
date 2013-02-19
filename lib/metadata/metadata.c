@@ -2301,8 +2301,8 @@ int vg_validate(struct volume_group *vg)
 		}
 
 		if (pvl->pv->vg != vg) {
-			log_error(INTERNAL_ERROR "VG %s PV list entry points "
-				  "to different VG %s.", vg->name,
+			log_error(INTERNAL_ERROR "VG %s PV %s list entry points "
+				  "to different VG %s.", vg->name, dev_name(pvl->pv->dev),
 				  pvl->pv->vg ? pvl->pv->vg->name : "NULL");
 			r = 0;
 		}
