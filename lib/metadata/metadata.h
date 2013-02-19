@@ -172,7 +172,6 @@ struct device *mda_get_device(struct metadata_area *mda);
 struct format_instance_ctx {
 	uint32_t type;
 	union {
-		const char *pv_id;
 		struct {
 			const char *vg_name;
 			const char *vg_id;
