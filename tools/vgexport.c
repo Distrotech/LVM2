@@ -54,6 +54,8 @@ bad:
 
 int vgexport(struct cmd_context *cmd, int argc, char **argv)
 {
+	uint32_t flags = READ_FOR_UPDATE;
+
 	if (!argc && !arg_count(cmd, all_ARG)) {
 		log_error("Please supply volume groups or use -a for all.");
 		return ECMD_FAILED;
@@ -64,6 +66,9 @@ int vgexport(struct cmd_context *cmd, int argc, char **argv)
 		return ECMD_FAILED;
 	}
 
-	return process_each_vg(cmd, argc, argv, READ_FOR_UPDATE, NULL,
+	if (!argc && arg_count(cmd, all_ARG))
+		flags |= ENABLE_ALL_VGNAMES;
+
+	return process_each_vg(cmd, argc, argv, flags, NULL,
 			       &vgexport_single);
 }

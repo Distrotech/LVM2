@@ -477,7 +477,6 @@ int process_each_segment_in_lv(struct cmd_context *cmd,
 }
 
 static int _process_one_vg(struct cmd_context *cmd, const char *vg_name,
-			   const char *vgid,
 			   struct dm_list *tags, struct dm_list *arg_vgnames,
 			   uint32_t flags, void *handle, int ret_max,
 			   process_single_vg_fn_t process_single_vg)
@@ -489,7 +488,7 @@ static int _process_one_vg(struct cmd_context *cmd, const char *vg_name,
 	log_verbose("Finding volume group \"%s\"", vg_name);
 
 	dm_list_init(&cmd_vgs);
-	if (!(cvl_vg = cmd_vg_add(cmd->mem, &cmd_vgs, vg_name, vgid, flags)))
+	if (!(cvl_vg = cmd_vg_add(cmd->mem, &cmd_vgs, vg_name, NULL, flags)))
 		return_0;
 
 	for (;;) {
@@ -527,98 +526,6 @@ static int _process_one_vg(struct cmd_context *cmd, const char *vg_name,
 	free_cmd_vgs(&cmd_vgs);
 
 	return (ret > ret_max) ? ret : ret_max;
-}
-
-int process_each_vg(struct cmd_context *cmd, int argc, char **argv,
-		    uint32_t flags, void *handle,
-		    process_single_vg_fn_t process_single_vg)
-{
-	int opt = 0;
-	int ret_max = ECMD_PROCESSED;
-
-	struct str_list *sl;
-	struct dm_list *vgnames, *vgids;
-	struct dm_list arg_vgnames, tags;
-
-	const char *vg_name, *vgid;
-
-	dm_list_init(&tags);
-	dm_list_init(&arg_vgnames);
-
-	if (argc) {
-		log_verbose("Using volume group(s) on command line");
-
-		for (; opt < argc; opt++) {
-			vg_name = argv[opt];
-			if (*vg_name == '@') {
-				if (!validate_tag(vg_name + 1)) {
-					log_error("Skipping invalid tag %s",
-						  vg_name);
-					if (ret_max < EINVALID_CMD_LINE)
-						ret_max = EINVALID_CMD_LINE;
-					continue;
-				}
-				if (!str_list_add(cmd->mem, &tags,
-						  dm_pool_strdup(cmd->mem,
-							      vg_name + 1))) {
-					log_error("strlist allocation failed");
-					return ECMD_FAILED;
-				}
-				continue;
-			}
-
-			vg_name = skip_dev_dir(cmd, vg_name, NULL);
-			if (strchr(vg_name, '/')) {
-				log_error("Invalid volume group name: %s",
-					  vg_name);
-				if (ret_max < EINVALID_CMD_LINE)
-					ret_max = EINVALID_CMD_LINE;
-				continue;
-			}
-			if (!str_list_add(cmd->mem, &arg_vgnames,
-					  dm_pool_strdup(cmd->mem, vg_name))) {
-				log_error("strlist allocation failed");
-				return ECMD_FAILED;
-			}
-		}
-
-		vgnames = &arg_vgnames;
-	}
-
-	if (!argc || !dm_list_empty(&tags)) {
-		log_verbose("Finding all volume groups");
-		if (!lvmetad_vg_list_to_lvmcache(cmd))
-			stack;
-		if (!(vgids = get_vgids(cmd, 0)) || dm_list_empty(vgids)) {
-			log_error("No volume groups found");
-			return ret_max;
-		}
-		dm_list_iterate_items(sl, vgids) {
-			vgid = sl->str;
-			if (!(vgid) || !(vg_name = lvmcache_vgname_from_vgid(cmd->mem, vgid)))
-				continue;
-			ret_max = _process_one_vg(cmd, vg_name, vgid, &tags,
-						  &arg_vgnames,
-						  flags, handle,
-					  	  ret_max, process_single_vg);
-			if (sigint_caught())
-				return ret_max;
-		}
-	} else {
-		dm_list_iterate_items(sl, vgnames) {
-			vg_name = sl->str;
-			if (is_orphan_vg(vg_name))
-				continue;	/* FIXME Unnecessary? */
-			ret_max = _process_one_vg(cmd, vg_name, NULL, &tags,
-						  &arg_vgnames,
-						  flags, handle,
-					  	  ret_max, process_single_vg);
-			if (sigint_caught())
-				return ret_max;
-		}
-	}
-
-	return ret_max;
 }
 
 int process_each_pv_in_vg(struct cmd_context *cmd, struct volume_group *vg,
@@ -1736,3 +1643,152 @@ uint32_t percent_of_extents(uint32_t percents, uint32_t count, int roundup)
 	return (uint32_t)(((uint64_t)percents * (uint64_t)count +
 			   ((roundup) ? 99 : 0)) / 100);
 }
+
+/*
+ * If arg is tag, add it to arg_tags.
+ * Else the arg is vgname, add the vgname
+ * from each arg to arg_vgnames.
+ */
+
+static int get_arg_vgnames(struct cmd_context *cmd,
+			   int argc, char **argv,
+			   struct dm_list *arg_vgnames,
+			   struct dm_list *arg_tags)
+{
+	int opt = 0;
+	int ret_max = ECMD_PROCESSED;
+	const char *vg_name;
+
+	log_verbose("Using volume group(s) on command line");
+
+	for (; opt < argc; opt++) {
+		vg_name = argv[opt];
+		if (*vg_name == '@') {
+			if (!validate_tag(vg_name + 1)) {
+				log_error("Skipping invalid tag %s", vg_name);
+				if (ret_max < EINVALID_CMD_LINE)
+					ret_max = EINVALID_CMD_LINE;
+				continue;
+			}
+			if (!str_list_add(cmd->mem, arg_tags,
+					  dm_pool_strdup(cmd->mem, vg_name + 1))) {
+				log_error("strlist allocation failed");
+				return ECMD_FAILED;
+			}
+			continue;
+		}
+
+		vg_name = skip_dev_dir(cmd, vg_name, NULL);
+		if (strchr(vg_name, '/')) {
+			log_error("Invalid volume group name: %s", vg_name);
+			if (ret_max < EINVALID_CMD_LINE)
+				ret_max = EINVALID_CMD_LINE;
+			continue;
+		}
+		if (!str_list_add(cmd->mem, arg_vgnames,
+				  dm_pool_strdup(cmd->mem, vg_name))) {
+			log_error("strlist allocation failed");
+			return ECMD_FAILED;
+		}
+	}
+
+	return ret_max;
+}
+
+static int get_all_vgnames(struct cmd_context *cmd, struct dm_list *all_vgnames)
+{
+	int ret_max = ECMD_PROCESSED;
+	struct dm_list *vgnames;
+	struct str_list *sl;
+	const char *vg_name;
+
+	log_verbose("Finding all volume groups");
+
+	if (!lvmetad_vg_list_to_lvmcache(cmd))
+		stack;
+
+	if (!(vgnames = get_vgnames(cmd, 0)) || dm_list_empty(vgnames))
+		goto out;
+
+	dm_list_iterate_items(sl, vgnames) {
+		vg_name = sl->str;
+		if (!vg_name)
+			continue;
+
+		if (!str_list_add(cmd->mem, all_vgnames,
+				  dm_pool_strdup(cmd->mem, vg_name))) {
+			log_error("strlist allocation failed");
+			return ECMD_FAILED;
+		}
+	}
+out:
+	return ret_max;
+}
+
+static int process_vg_name_list(struct cmd_context *cmd, uint32_t flags,
+				struct dm_list *vg_name_list,
+				struct dm_list *arg_vgnames,
+				struct dm_list *arg_tags,
+				void *handle,
+				process_single_vg_fn_t process_single_vg)
+{
+	struct str_list *sl;
+	const char *vgname;
+	int ret_max = ECMD_PROCESSED;
+
+	dm_list_iterate_items(sl, vg_name_list) {
+		vgname = sl->str;
+		ret_max = _process_one_vg(cmd, vgname,
+					  arg_tags, arg_vgnames,
+					  flags, handle, ret_max,
+					  process_single_vg);
+
+		if (sigint_caught())
+			break;
+	}
+
+	return ret_max;
+}
+
+int process_each_vg(struct cmd_context *cmd,
+		    int argc, char **argv, uint32_t flags,
+		    void *handle,
+		    process_single_vg_fn_t process_single_vg)
+{
+	struct dm_list all_vgnames;
+	struct dm_list arg_vgnames;
+	struct dm_list arg_tags;
+	struct dm_list *vg_name_list;
+	int ret;
+
+	dm_list_init(&all_vgnames);
+	dm_list_init(&arg_vgnames);
+	dm_list_init(&arg_tags);
+
+	ret = get_arg_vgnames(cmd, argc, argv, &arg_vgnames, &arg_tags);
+	if (ret != ECMD_PROCESSED)
+		return ret;
+
+	if ((dm_list_empty(&arg_vgnames) && (flags & ENABLE_ALL_VGNAMES)) ||
+	    !dm_list_empty(&arg_tags)) {
+		ret = get_all_vgnames(cmd, &all_vgnames);
+		if (ret != ECMD_PROCESSED)
+			return ret;
+	}
+
+	if (dm_list_empty(&arg_vgnames) && dm_list_empty(&all_vgnames)) {
+		log_error("No volume groups found");
+		return ECMD_PROCESSED;
+	}
+
+	if (!dm_list_empty(&all_vgnames))
+		vg_name_list = &all_vgnames;
+	else
+		vg_name_list = &arg_vgnames;
+
+	ret = process_vg_name_list(cmd, flags, vg_name_list,
+				   &arg_vgnames, &arg_tags,
+				   handle, process_single_vg);
+	return ret;
+}
+
