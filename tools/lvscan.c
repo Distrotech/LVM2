@@ -74,6 +74,6 @@ int lvscan(struct cmd_context *cmd, int argc, char **argv)
 		return EINVALID_CMD_LINE;
 	}
 
-	return process_each_lv(cmd, argc, argv, 0, NULL,
-			       &lvscan_single);
+	return process_each_lv(cmd, argc, argv, ENABLE_ALL_VGNAMES,
+			       NULL, &lvscan_single);
 }

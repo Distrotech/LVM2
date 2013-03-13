@@ -366,8 +366,8 @@ static int _report(struct cmd_context *cmd, int argc, char **argv,
 
 	switch (report_type) {
 	case LVS:
-		r = process_each_lv(cmd, argc, argv, 0, report_handle,
-				    &_lvs_single);
+		r = process_each_lv(cmd, argc, argv, ENABLE_ALL_VGNAMES,
+				    report_handle, &_lvs_single);
 		break;
 	case VGS:
 		r = process_each_vg(cmd, argc, argv, ENABLE_ALL_VGNAMES,
@@ -386,8 +386,8 @@ static int _report(struct cmd_context *cmd, int argc, char **argv,
 					    report_handle, &_pvs_in_vg);
 		break;
 	case SEGS:
-		r = process_each_lv(cmd, argc, argv, 0, report_handle,
-				    &_lvsegs_single);
+		r = process_each_lv(cmd, argc, argv, ENABLE_ALL_VGNAMES,
+				    report_handle, &_lvsegs_single);
 		break;
 	case PVSEGS:
 		if (args_are_pvs)
