@@ -831,6 +831,21 @@ int vgcreate_params_validate(struct cmd_context *cmd,
 	return 1;
 }
 
+static int _vg_metadata_snapshot(struct volume_group *vg)
+{
+	struct dm_config_tree *cft;
+	if (vg->ondisk) /* we already have it */
+		return 1;
+
+	cft = export_vg_to_config_tree(vg);
+	if (!cft)
+		return 0;
+
+	vg->ondisk = import_vg_from_config_tree(cft, vg->fid);
+	dm_config_destroy(cft);
+	return 1;
+}
+
 /*
  * Create a (struct volume_group) volume group handle from a struct volume_group pointer and a
  * possible failure code or zero for success.
@@ -839,6 +854,7 @@ static struct volume_group *_vg_make_handle(struct cmd_context *cmd,
 					    struct volume_group *vg,
 					    uint32_t failure)
 {
+
 	/* Never return a cached VG structure for a failure */
 	if (vg && vg->vginfo && failure != SUCCESS) {
 		release_vg(vg);
@@ -847,6 +863,9 @@ static struct volume_group *_vg_make_handle(struct cmd_context *cmd,
 
 	if (!vg && !(vg = alloc_vg("vg_make_handle", cmd, NULL)))
 		return_NULL;
+
+	if (vg->fid && !_vg_metadata_snapshot(vg))
+		vg->read_status |= FAILED_ALLOCATION;
 
 	if (vg->read_status != failure)
 		vg->read_status = failure;
@@ -2690,6 +2709,12 @@ int vg_commit(struct volume_group *vg)
 		 * The volume_group structure could be reused later.
 		 */
 		vg->old_name = NULL;
+
+		/* This *is* the original now that it's commited. */
+		release_vg(vg->ondisk);
+		vg->ondisk = NULL;
+		if (!_vg_metadata_snapshot(vg)) /* make a new one for future edits */
+			return_0;
 	}
 
 	/* If update failed, remove any cached precommitted metadata. */
@@ -4523,4 +4548,35 @@ char *tags_format_and_copy(struct dm_pool *mem, const struct dm_list *tags)
 		return NULL;
 	}
 	return dm_pool_end_object(mem);
+}
+
+struct logical_volume *lv_ondisk(struct logical_volume *lv)
+{
+	struct volume_group *vg;
+	struct lv_list *lvl;
+
+	if (!lv)
+		return NULL;
+
+	vg = lv->vg;
+
+	if (vg->ondisk)
+		vg = vg->ondisk;
+
+	/*
+	 * LVM1 snapshots are somehow broken in the ondisk copy of VG. Since
+	 * they are deprecated, we just bail here on LVM1 and take the slow
+	 * (re-read from disk or lvmetad) path.
+	 */
+	if (vg->fid && !strcmp(vg->fid->fmt->name, "lvm1"))
+		return NULL;
+
+	dm_list_iterate_items(lvl, &vg->lvs)
+		if (!strncmp(lvl->lv->lvid.s, lv->lvid.s, sizeof(lv->lvid))) {
+			log_error("Found original of LV %p at %p", lvl->lv, lv);
+			return lvl->lv;
+		}
+
+	log_error(INTERNAL_ERROR "LV %s/%s has vanished into thin air.", lv->vg->name, lv->name);
+	return NULL;
 }

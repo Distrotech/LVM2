@@ -48,6 +48,9 @@ struct volume_group {
 	uint32_t cmd_missing_vgs;/* Flag marks missing VG */
 	uint32_t seqno;		/* Metadata sequence number */
 
+	struct volume_group *ondisk; /* the parsed on-disk copy of this VG;
+				      * NULL if this is the on-disk version */
+
 	alloc_policy_t alloc;
 	uint64_t status;
 
