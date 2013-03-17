@@ -841,5 +841,25 @@ size_t export_vg_to_buffer(struct volume_group *vg, char **buf)
 	return text_vg_export_raw(vg, "", buf);
 }
 
+struct dm_config_tree *export_vg_to_config_tree(struct volume_group *vg)
+{
+	char *buf = NULL;
+	struct dm_config_tree *vgmeta;
+
+	if (!export_vg_to_buffer(vg, &buf)) {
+		log_error("Could not format VG metadata.");
+		return 0;
+	}
+
+	if (!(vgmeta = dm_config_from_string(buf))) {
+		log_error("Error parsing VG metadata.");
+		dm_free(buf);
+		return 0;
+	}
+
+	dm_free(buf);
+	return vgmeta;
+}
+
 #undef outf
 #undef outnl
