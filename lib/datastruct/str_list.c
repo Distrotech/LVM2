@@ -50,6 +50,44 @@ int str_list_add(struct dm_pool *mem, struct dm_list *sll, const char *str)
 	return 1;
 }
 
+int str_list_add_order(struct dm_pool *mem, struct dm_list *sll, const char *str)
+{
+	struct str_list *sl_tmp;
+	struct str_list *sl_new;
+
+	if (!str)
+		return_0;
+
+	/* Already in list? */
+	if (str_list_match_item(sll, str))
+		return 1;
+
+	if (!(sl_new = dm_pool_alloc(mem, sizeof(*sl_new))))
+		return_0;
+
+	sl_new->str = str;
+
+	if (dm_list_empty(sll)) {
+		dm_list_add(sll, &sl_new->list);
+		return 1;
+	}
+
+	dm_list_iterate_items(sl_tmp, sll) {
+		/*
+		 * If new str (s1) is less than existing/tmp str (s2),
+		 * then break and insert new before existing.
+		 */
+		if (strcmp(sl_new->str, sl_tmp->str) < 0)
+			break;
+	}
+
+	sl_new->list.n    = &sl_tmp->list;
+	sl_new->list.p    = sl_tmp->list.p;
+	sl_tmp->list.p->n = &sl_new->list;
+	sl_tmp->list.p    = &sl_new->list;
+	return 1;
+}
+
 void str_list_del(struct dm_list *sll, const char *str)
 {
 	struct dm_list *slh, *slht;

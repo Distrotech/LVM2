@@ -16,6 +16,11 @@
 #include "tools.h"
 #include <sys/stat.h>
 
+struct vg_list {
+	struct dm_list list;
+	struct volume_group *vg;
+};
+
 const char *command_name(struct cmd_context *cmd)
 {
 	return cmd->command->name;
@@ -1419,8 +1424,8 @@ static int get_arg_vgnames(struct cmd_context *cmd,
 				ret_max = EINVALID_CMD_LINE;
 			continue;
 		}
-		if (!str_list_add(cmd->mem, arg_vgnames,
-				  dm_pool_strdup(cmd->mem, vg_name))) {
+		if (!str_list_add_order(cmd->mem, arg_vgnames,
+					dm_pool_strdup(cmd->mem, vg_name))) {
 			log_error("strlist allocation failed");
 			return ECMD_FAILED;
 		}
@@ -1449,8 +1454,8 @@ static int get_all_vgnames(struct cmd_context *cmd, struct dm_list *all_vgnames)
 		if (!vg_name)
 			continue;
 
-		if (!str_list_add(cmd->mem, all_vgnames,
-				  dm_pool_strdup(cmd->mem, vg_name))) {
+		if (!str_list_add_order(cmd->mem, all_vgnames,
+					dm_pool_strdup(cmd->mem, vg_name))) {
 			log_error("strlist allocation failed");
 			return ECMD_FAILED;
 		}
@@ -1459,14 +1464,79 @@ out:
 	return ret_max;
 }
 
+static struct vg_list *find_vgl(struct dm_list *vgl_list, const char *vg_name)
+{
+	struct vg_list *vgl;
+
+	dm_list_iterate_items(vgl, vgl_list) {
+		if (!strcmp(vg_name, vgl->vg->name))
+			return vgl;
+	}
+	return NULL;
+}
+
+static void release_vg_list(struct cmd_context *cmd, struct dm_list *vgl_list)
+{
+	struct vg_list *vgl;
+
+	dm_list_iterate_items(vgl, vgl_list) {
+		if (vg_read_error(vgl->vg))
+			release_vg(vgl->vg);
+		else
+			unlock_and_release_vg(cmd, vgl->vg, vgl->vg->name);
+	}
+}
+
+static int read_vg_name_list(struct cmd_context *cmd, uint32_t flags,
+			     struct dm_list *vg_name_list,
+			     struct dm_list *vgl_list)
+{
+	struct volume_group *vg;
+	struct vg_list *vgl;
+	struct str_list *sl;
+	const char *vg_name;
+	int ret_max = ECMD_PROCESSED;
+
+	dm_list_iterate_items(sl, vg_name_list) {
+		vg_name = sl->str;
+
+		if (!(vgl = dm_pool_alloc(cmd->mem, sizeof(*vgl)))) {
+			log_error("vg_list alloc failed");
+			release_vg_list(cmd, vgl_list);
+			return ECMD_FAILED;
+		}
+
+		vg = vg_read(cmd, vg_name, NULL, flags);
+		if (vg_read_error(vg)) {
+			if (!((flags & READ_ALLOW_INCONSISTENT) &&
+			     (vg_read_error(vg) == FAILED_INCONSISTENT))) {
+				ret_max = ECMD_FAILED;
+				release_vg(vg);
+				stack;
+				continue;
+			}
+		}
+
+		vgl->vg = vg;
+		dm_list_add(vgl_list, &vgl->list);
+
+		if (sigint_caught())
+			break;
+	}
+
+	return ret_max;
+}
+
 static int process_vg_name_list(struct cmd_context *cmd, uint32_t flags,
 				struct dm_list *vg_name_list,
 				struct dm_list *arg_vgnames,
 				struct dm_list *arg_tags,
+				struct dm_list *vgl_list,
 				void *handle,
 				process_single_vg_fn_t process_single_vg)
 {
 	struct volume_group *vg;
+	struct vg_list *vgl;
 	struct str_list *sl;
 	const char *vgname;
 	int ret_max = ECMD_PROCESSED;
@@ -1480,16 +1550,11 @@ static int process_vg_name_list(struct cmd_context *cmd, uint32_t flags,
 	dm_list_iterate_items(sl, vg_name_list) {
 		vgname = sl->str;
 
-		vg = vg_read(cmd, vgname, NULL, flags);
-		if (vg_read_error(vg)) {
-			if (!((flags & READ_ALLOW_INCONSISTENT) &&
-			     (vg_read_error(vg) == FAILED_INCONSISTENT))) {
-				ret_max = ECMD_FAILED;
-				release_vg(vg);
-				stack;
-				continue;
-			}
-		}
+		vgl = find_vgl(vgl_list, vgname);
+		if (!vgl)
+			continue;
+
+		vg = vgl->vg;
 
 		process_vg = 0;
 
@@ -1506,11 +1571,6 @@ static int process_vg_name_list(struct cmd_context *cmd, uint32_t flags,
 
 		if (process_vg)
 			ret = process_single_vg(cmd, vgname, vg, handle);
-
-		if (vg_read_error(vg))
-			release_vg(vg);
-		else
-			unlock_and_release_vg(cmd, vg, vgname);
 
 		if (ret > ret_max)
 			ret_max = ret;
@@ -1529,12 +1589,15 @@ int process_each_vg(struct cmd_context *cmd,
 	struct dm_list all_vgnames;
 	struct dm_list arg_vgnames;
 	struct dm_list arg_tags;
+	struct dm_list vgl_list;
 	struct dm_list *vg_name_list;
+	int ret_max = ECMD_PROCESSED;
 	int ret;
 
 	dm_list_init(&all_vgnames);
 	dm_list_init(&arg_vgnames);
 	dm_list_init(&arg_tags);
+	dm_list_init(&vgl_list);
 
 	ret = get_arg_vgnames(cmd, argc, argv, &arg_vgnames, &arg_tags);
 	if (ret != ECMD_PROCESSED)
@@ -1557,10 +1620,27 @@ int process_each_vg(struct cmd_context *cmd,
 	else
 		vg_name_list = &arg_vgnames;
 
+	ret = read_vg_name_list(cmd, flags, vg_name_list, &vgl_list);
+
+	if (ret > ret_max)
+		ret_max = ret;
+	if (sigint_caught())
+		goto out;
+
+	if (dm_list_empty(&vgl_list)) {
+		stack;
+		goto out;
+	}
+
 	ret = process_vg_name_list(cmd, flags, vg_name_list,
-				   &arg_vgnames, &arg_tags,
-				   handle, process_single_vg);
-	return ret;
+			           &arg_vgnames, &arg_tags,
+			           &vgl_list,
+			           handle, process_single_vg);
+	if (ret > ret_max)
+		ret_max = ret;
+out:
+	release_vg_list(cmd, &vgl_list);
+	return ret_max;
 }
 
 /*
@@ -1637,8 +1717,8 @@ static int get_arg_lvnames(struct cmd_context *cmd,
 		} else
 			lv_name = NULL;
 
-		if (!str_list_add(cmd->mem, arg_vgnames,
-				  dm_pool_strdup(cmd->mem, vgname))) {
+		if (!str_list_add_order(cmd->mem, arg_vgnames,
+					dm_pool_strdup(cmd->mem, vgname))) {
 			log_error("strlist allocation failed");
 			return ECMD_FAILED;
 		}
@@ -1671,10 +1751,12 @@ static int process_lv_vg_name_list(struct cmd_context *cmd, uint32_t flags,
 				   struct dm_list *arg_vgnames,
 				   struct dm_list *arg_lvnames,
 				   struct dm_list *arg_tags,
+				   struct dm_list *vgl_list,
 				   void *handle,
 				   process_single_lv_fn_t process_single_lv)
 {
 	struct volume_group *vg;
+	struct vg_list *vgl;
 	struct str_list *sl, *sll;
 	struct dm_list *tags_arg;
 	struct dm_list lvnames;
@@ -1684,6 +1766,12 @@ static int process_lv_vg_name_list(struct cmd_context *cmd, uint32_t flags,
 
 	dm_list_iterate_items(sl, vg_name_list) {
 		vgname = sl->str;
+
+		vgl = find_vgl(vgl_list, vgname);
+		if (!vgl)
+			continue;
+
+		vg = vgl->vg;
 
 		/*
 		 * arg_lvnames contains some elements that are just "vgname"
@@ -1716,18 +1804,8 @@ static int process_lv_vg_name_list(struct cmd_context *cmd, uint32_t flags,
 			}
 		}
 
-		vg = vg_read(cmd, vgname, NULL, flags);
-		if (vg_read_error(vg)) {
-			ret_max = ECMD_FAILED;
-			release_vg(vg);
-			stack;
-			continue;
-		}
-
 		ret = process_each_lv_in_vg(cmd, vg, &lvnames, tags_arg,
 					    handle, process_single_lv);
-
-		unlock_and_release_vg(cmd, vg, vgname);
 
 		if (ret > ret_max)
 			ret_max = ret;
@@ -1747,13 +1825,16 @@ int process_each_lv(struct cmd_context *cmd,
 	struct dm_list arg_vgnames;
 	struct dm_list arg_lvnames;
 	struct dm_list arg_tags;
+	struct dm_list vgl_list;
 	struct dm_list *vg_name_list;
+	int ret_max = ECMD_PROCESSED;
 	int ret;
 
 	dm_list_init(&all_vgnames);
 	dm_list_init(&arg_vgnames);
 	dm_list_init(&arg_lvnames);
 	dm_list_init(&arg_tags);
+	dm_list_init(&vgl_list);
 
 	ret = get_arg_lvnames(cmd, argc, argv,
 			      &arg_vgnames, &arg_lvnames, &arg_tags);
@@ -1777,9 +1858,27 @@ int process_each_lv(struct cmd_context *cmd,
 	else
 		vg_name_list = &arg_vgnames;
 
+	ret = read_vg_name_list(cmd, flags, vg_name_list, &vgl_list);
+
+	if (ret > ret_max)
+		ret_max = ret;
+	if (sigint_caught())
+		goto out;
+
+	if (dm_list_empty(&vgl_list)) {
+		stack;
+		goto out;
+	}
+
 	ret = process_lv_vg_name_list(cmd, flags, vg_name_list,
 				      &arg_vgnames, &arg_lvnames, &arg_tags,
+				      &vgl_list,
 				      handle, process_single_lv);
-	return ret;
+	if (ret > ret_max)
+		ret_max = ret;
+out:
+	release_vg_list(cmd, &vgl_list);
+
+	return ret_max;
 }
 
