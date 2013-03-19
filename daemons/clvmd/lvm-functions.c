@@ -455,7 +455,7 @@ static int do_suspend_lv(char *resource, unsigned char command, unsigned char lo
 		return EIO;
 
 	if (lvi.exists &&
-	    !lv_suspend_if_active(cmd, resource, origin_only, exclusive, NULL))
+	    !lv_suspend_if_active(cmd, resource, origin_only, exclusive, NULL, NULL))
 		return EIO;
 
 	return 0;
