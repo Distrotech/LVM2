@@ -122,6 +122,7 @@
 /* meta-flags, useful with toollib for_each_* functions. */
 #define READ_FOR_UPDATE		0x00100000U
 #define ENABLE_ALL_VGNAMES	0x00200000U	/* run cmd on all vg names if none are named */
+#define ENABLE_ALL_DEVS		0x00400000U	/* run cmd on all devs if none are named */
 
 /* vg's "read_status" field */
 #define FAILED_INCONSISTENT	0x00000001U

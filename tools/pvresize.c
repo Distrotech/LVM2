@@ -29,12 +29,10 @@ static int _pv_resize_single(struct cmd_context *cmd,
 			     struct physical_volume *pv,
 			     const uint64_t new_size)
 {
-	struct pv_list *pvl;
 	uint64_t size = 0;
 	int r = 0;
 	const char *pv_name = pv_dev_name(pv);
 	const char *vg_name = pv_vg_name(pv);
-	struct volume_group *old_vg = vg;
 	int vg_needs_pv_write = 0;
 
 	if (is_orphan_vg(vg_name)) {
@@ -48,26 +46,19 @@ static int _pv_resize_single(struct cmd_context *cmd,
 			log_error("Unable to read PV \"%s\"", pv_name);
 			return 0;
 		}
-	} else {
-		vg = vg_read_for_update(cmd, vg_name, NULL, 0);
-
-		if (vg_read_error(vg)) {
-			release_vg(vg);
-			log_error("Unable to read volume group \"%s\".",
-				  vg_name);
-			return 0;
-		}
-
-		if (!(pvl = find_pv_in_vg(vg, pv_name))) {
-			log_error("Unable to find \"%s\" in volume group \"%s\"",
-				  pv_name, vg->name);
-			goto out;
-		}
-
-		pv = pvl->pv;
+	} else if (vg) {
+		/*
+		 * READ_FOR_UPDATE is passed to process_each_pv below,
+		 * and process_each_pv uses that flag in vg_read, so
+		 * reading the vg again here appears to be unnecessary.
+		 */
 
 		if (!archive(vg))
 			goto out;
+	} else {
+		/* should not happen */
+		log_error("pv is not orphan or in a vg");
+		return ECMD_FAILED;
 	}
 
 	if (!(pv->fmt->features & FMT_RESIZE_PV)) {
@@ -125,11 +116,11 @@ out:
 	if (!r && vg_needs_pv_write)
 		log_error("Use pvcreate and vgcfgrestore "
 			  "to repair from archived metadata.");
-	unlock_vg(cmd, vg_name);
-	if (is_orphan_vg(vg_name))
+
+	if (is_orphan_vg(vg_name)) {
+		unlock_vg(cmd, vg_name);
 		free_pv_fid(pv);
-	if (!old_vg)
-		release_vg(vg);
+	}
 	return r;
 }
 
