@@ -35,31 +35,19 @@ static int _pv_resize_single(struct cmd_context *cmd,
 	const char *vg_name = pv_vg_name(pv);
 	int vg_needs_pv_write = 0;
 
+	/*
+	 * process_each_pv locks non-orphan vgs because
+	 * READ_FOR_UPDATE is passed below.
+	 */
 	if (is_orphan_vg(vg_name)) {
 		if (!lock_vol(cmd, vg_name, LCK_VG_WRITE, NULL)) {
 			log_error("Can't get lock for orphans");
 			return 0;
 		}
-
-		if (!(pv = pv_read(cmd, pv_name, 1, 0))) {
-			unlock_vg(cmd, vg_name);
-			log_error("Unable to read PV \"%s\"", pv_name);
-			return 0;
-		}
-	} else if (vg) {
-		/*
-		 * READ_FOR_UPDATE is passed to process_each_pv below,
-		 * and process_each_pv uses that flag in vg_read, so
-		 * reading the vg again here appears to be unnecessary.
-		 */
-
-		if (!archive(vg))
-			goto out;
-	} else {
-		/* should not happen */
-		log_error("pv is not orphan or in a vg");
-		return ECMD_FAILED;
 	}
+
+	if (!archive(vg))
+		goto out;
 
 	if (!(pv->fmt->features & FMT_RESIZE_PV)) {
 		log_error("Physical volume %s format does not support resizing.",
@@ -113,14 +101,13 @@ static int _pv_resize_single(struct cmd_context *cmd,
 	r = 1;
 
 out:
+	if (is_orphan_vg(vg_name))
+		unlock_vg(cmd, vg_name);
+
 	if (!r && vg_needs_pv_write)
 		log_error("Use pvcreate and vgcfgrestore "
 			  "to repair from archived metadata.");
 
-	if (is_orphan_vg(vg_name)) {
-		unlock_vg(cmd, vg_name);
-		free_pv_fid(pv);
-	}
 	return r;
 }
 

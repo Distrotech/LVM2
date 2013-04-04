@@ -513,7 +513,7 @@ int pv_resize(struct physical_volume *pv,
 	/* pv->pe_count is 0 now! We need to recalculate! */
 
 	/* If there's a VG, calculate new PE count value. */
-	if (vg) {
+	if (vg && !is_orphan_vg(vg->name)) {
 		/* FIXME: Maybe PE calculation should go into pv->fmt->resize?
 		          (like it is for pv->fmt->setup) */
 		if (!(new_pe_count = pv_size(pv) / vg->extent_size)) {
