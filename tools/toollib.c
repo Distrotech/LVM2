@@ -2060,13 +2060,16 @@ int process_each_pv(struct cmd_context *cmd,
 				return ret;
 		}
 #endif
-	} else {
+	} else if (flags & ENABLE_ALL_VGNAMES) {
 		/*
 		 * In thise case, arg_pvnames and arg_tags are both empty,
 		 * which means process all pvs.
 		 */
 		dm_list_splice(&pv_vgs, &all_vgs);
 		dm_list_splice(&pv_vgnames, &all_vgnames);
+	} else {
+		release_vg_list(cmd, &all_vgs);
+		goto out;
 	}
 
 process:
