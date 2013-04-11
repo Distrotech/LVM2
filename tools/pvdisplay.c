@@ -96,7 +96,7 @@ int pvdisplay(struct cmd_context *cmd, int argc, char **argv)
 	 */
 	if (!lvmetad_active()) {
 		lock_global = 1;
-		if (!lock_vol(cmd, VG_GLOBAL, LCK_VG_READ)) {
+		if (!lock_vol(cmd, VG_GLOBAL, LCK_VG_READ, NULL)) {
 			log_error("Unable to obtain global lock.");
 			return ECMD_FAILED;
 		}
