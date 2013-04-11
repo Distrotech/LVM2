@@ -345,12 +345,12 @@ static int _report(struct cmd_context *cmd, int argc, char **argv,
 				    report_handle, &_vgs_single);
 		break;
 	case LABEL:
-		r = process_each_pv(cmd, argc, argv, NULL, flags, 0,
+		r = process_each_pv(cmd, argc, argv, NULL, flags,
 				    report_handle, &_label_single);
 		break;
 	case PVS:
 		if (args_are_pvs)
-			r = process_each_pv(cmd, argc, argv, NULL, flags, 0,
+			r = process_each_pv(cmd, argc, argv, NULL, flags,
 					    report_handle, &_pvs_single);
 		else
 			r = process_each_vg(cmd, argc, argv, ENABLE_ALL_VGNAMES,
@@ -362,7 +362,7 @@ static int _report(struct cmd_context *cmd, int argc, char **argv,
 		break;
 	case PVSEGS:
 		if (args_are_pvs)
-			r = process_each_pv(cmd, argc, argv, NULL, flags, 0,
+			r = process_each_pv(cmd, argc, argv, NULL, flags,
 					    report_handle, &_pvsegs_single);
 		else
 			r = process_each_vg(cmd, argc, argv, ENABLE_ALL_VGNAMES,

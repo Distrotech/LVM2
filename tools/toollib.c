@@ -1942,7 +1942,6 @@ int process_each_pv(struct cmd_context *cmd,
 		    int argc, char **argv,
 		    struct volume_group *vg,
 		    uint32_t flags,
-		    int scan_label_only,
 		    void *handle,
 		    process_single_pv_fn_t process_single_pv)
 {

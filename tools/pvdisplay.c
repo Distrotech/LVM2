@@ -108,7 +108,7 @@ int pvdisplay(struct cmd_context *cmd, int argc, char **argv)
 		flags = ENABLE_ALL_VGNAMES;
 
 	ret = process_each_pv(cmd, argc, argv, NULL, flags,
-			      0, NULL, _pvdisplay_single);
+			      NULL, _pvdisplay_single);
 
 	if (lock_global)
 		unlock_vg(cmd, VG_GLOBAL);
