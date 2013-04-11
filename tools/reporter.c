@@ -345,8 +345,7 @@ static int _report(struct cmd_context *cmd, int argc, char **argv,
 				    report_handle, &_vgs_single);
 		break;
 	case LABEL:
-		r = process_each_pv(cmd, argc, argv, NULL,
-				    flags | READ_WITHOUT_LOCK, 1,
+		r = process_each_pv(cmd, argc, argv, NULL, flags, 0,
 				    report_handle, &_label_single);
 		break;
 	case PVS:
