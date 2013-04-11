@@ -103,6 +103,7 @@ void lvmcache_drop_metadata(const char *vgname, int drop_precommitted);
 void lvmcache_commit_metadata(const char *vgname);
 
 int lvmcache_pvid_is_locked(const char *pvid);
+int lvmcache_pvid_is_in_vg(const char *pvid, const char *vgname);
 int lvmcache_fid_add_mdas(struct lvmcache_info *info, struct format_instance *fid,
 			  const char *id, int id_len);
 int lvmcache_fid_add_mdas_pv(struct lvmcache_info *info, struct format_instance *fid);
