@@ -1041,7 +1041,7 @@ static response dump(lvmetad_state *s)
 	return res;
 }
 
-static response handler(daemon_state s, client_handle h, request r)
+static response handler(daemon_state s, request r)
 {
 	lvmetad_state *state = s.private;
 	const char *rq = daemon_request_str(r, "request", "NONE");

@@ -356,12 +356,26 @@ end:
 	return res;
 }
 
-struct thread_baton {
-	daemon_state s;
-	client_handle client;
+struct thread_pool {
+	int num_workers;
+	int max_workers;
+	int free_workers;
+	int quit;
+	struct dm_list work_data;
+	pthread_mutex_t mutex;
+	pthread_cond_t cond;
+	pthread_cond_t quit_wait;
 };
 
-static response builtin_handler(daemon_state s, client_handle h, request r)
+static struct thread_pool pool;
+
+struct thread_baton {
+	struct dm_list list;
+	daemon_state s;
+	int socket_fd;
+};
+
+static response builtin_handler(daemon_state s, request r)
 {
 	const char *rq = daemon_request_str(r, "request", "NONE");
 	response res = { .error = EPROTO };
@@ -375,16 +389,15 @@ static response builtin_handler(daemon_state s, client_handle h, request r)
 	return res;
 }
 
-static void *client_thread(void *baton)
+static void client_thread_work(struct thread_baton *baton)
 {
-	struct thread_baton *b = baton;
 	request req;
 	response res;
 
 	buffer_init(&req.buffer);
 
 	while (1) {
-		if (!buffer_read(b->client.socket_fd, &req.buffer))
+		if (!buffer_read(baton->socket_fd, &req.buffer))
 			goto fail;
 
 		req.cft = dm_config_from_string(req.buffer.mem);
@@ -392,12 +405,12 @@ static void *client_thread(void *baton)
 		if (!req.cft)
 			fprintf(stderr, "error parsing request:\n %s\n", req.buffer.mem);
 		else
-			daemon_log_cft(b->s.log, DAEMON_LOG_WIRE, "<- ", req.cft->root);
+			daemon_log_cft(baton->s.log, DAEMON_LOG_WIRE, "<- ", req.cft->root);
 
-		res = builtin_handler(b->s, b->client, req);
+		res = builtin_handler(baton->s, req);
 
 		if (res.error == EPROTO) /* Not a builtin, delegate to the custom handler. */
-			res = b->s.handler(b->s, b->client, req);
+			res = baton->s.handler(baton->s, req);
 
 		if (!res.buffer.mem) {
 			if (!dm_config_write_node(res.cft->root, buffer_line, &res.buffer))
@@ -411,45 +424,145 @@ static void *client_thread(void *baton)
 			dm_config_destroy(req.cft);
 		buffer_destroy(&req.buffer);
 
-		daemon_log_multi(b->s.log, DAEMON_LOG_WIRE, "-> ", res.buffer.mem);
-		buffer_write(b->client.socket_fd, &res.buffer);
+		daemon_log_multi(baton->s.log, DAEMON_LOG_WIRE, "-> ", res.buffer.mem);
+		buffer_write(baton->socket_fd, &res.buffer);
 
 		buffer_destroy(&res.buffer);
 	}
 fail:
 	/* TODO what should we really do here? */
-	if (close(b->client.socket_fd))
+	if (close(baton->socket_fd))
 		perror("close");
 	buffer_destroy(&req.buffer);
-	dm_free(baton);
+}
+
+static void *thread_pool_worker(void *data)
+{
+	struct thread_baton *baton;
+	struct dm_list *elem;
+
+	pthread_mutex_lock(&pool.mutex);
+
+	while (1) {
+		while (!pool.quit && dm_list_empty(&pool.work_data)) {
+			pool.free_workers++;
+			pthread_cond_wait(&pool.cond, &pool.mutex);
+			pool.free_workers--;
+		}
+
+		while (!dm_list_empty(&pool.work_data)) {
+			elem = dm_list_first(&pool.work_data);
+			dm_list_del(elem);
+			pthread_mutex_unlock(&pool.mutex);
+
+			baton = dm_list_item(elem, struct thread_baton);
+			client_thread_work(baton);
+			free(baton);
+
+			pthread_mutex_lock(&pool.mutex);
+		}
+
+		if (pool.quit)
+			break;
+	}
+
+	pool.num_workers--;
+	if (!pool.num_workers)
+		pthread_cond_signal(&pool.quit_wait);
+	pthread_mutex_unlock(&pool.mutex);
+
 	return NULL;
+}
+
+static int thread_pool_add_work(struct thread_baton *baton)
+{
+	pthread_t th;
+	int rv;
+
+	pthread_mutex_lock(&pool.mutex);
+	if (pool.quit) {
+		pthread_mutex_unlock(&pool.mutex);
+		return -1;
+	}
+
+	dm_list_add(&baton->list, &pool.work_data);
+
+	if (!pool.free_workers && pool.num_workers < pool.max_workers) {
+		rv = pthread_create(&th, NULL, thread_pool_worker,
+				    (void *)(long)pool.num_workers);
+		if (rv < 0) {
+			dm_list_del(&baton->list);
+			pthread_mutex_unlock(&pool.mutex);
+			return rv;
+		}
+		pool.num_workers++;
+	}
+
+	pthread_cond_signal(&pool.cond);
+	pthread_mutex_unlock(&pool.mutex);
+	return 0;
+}
+
+static void thread_pool_free(void)
+{
+	pthread_mutex_lock(&pool.mutex);
+	pool.quit = 1;
+	if (pool.num_workers > 0) {
+		pthread_cond_broadcast(&pool.cond);
+		pthread_cond_wait(&pool.quit_wait, &pool.mutex);
+	}
+	pthread_mutex_unlock(&pool.mutex);
+}
+
+static int thread_pool_create(int min_workers, int max_workers)
+{
+	pthread_t th;
+	int i, rv;
+
+	memset(&pool, 0, sizeof(pool));
+	dm_list_init(&pool.work_data);
+	pthread_mutex_init(&pool.mutex, NULL);
+	pthread_cond_init(&pool.cond, NULL);
+	pthread_cond_init(&pool.quit_wait, NULL);
+	pool.max_workers = max_workers;
+
+	for (i = 0; i < min_workers; i++) {
+		rv = pthread_create(&th, NULL, thread_pool_worker,
+				    (void *)(long)i);
+		if (rv < 0)
+			break;
+		pool.num_workers++;
+	}
+
+	if (rv < 0)
+		thread_pool_free();
+
+	return rv;
 }
 
 static int handle_connect(daemon_state s)
 {
 	struct thread_baton *baton;
 	struct sockaddr_un sockaddr;
-	client_handle client = { .thread_id = 0 };
 	socklen_t sl = sizeof(sockaddr);
+	int socket_fd;
 
-	client.socket_fd = accept(s.socket_fd, (struct sockaddr *) &sockaddr, &sl);
-	if (client.socket_fd < 0)
+	socket_fd = accept(s.socket_fd, (struct sockaddr *) &sockaddr, &sl);
+	if (socket_fd < 0)
 		return 0;
 
 	if (!(baton = malloc(sizeof(struct thread_baton)))) {
-		if (close(client.socket_fd))
+		if (close(socket_fd))
 			perror("close");
 		ERROR(&s, "Failed to allocate thread baton");
 		return 0;
 	}
 
 	baton->s = s;
-	baton->client = client;
+	baton->socket_fd = socket_fd;
 
-	if (pthread_create(&baton->client.thread_id, NULL, client_thread, baton))
+	if (thread_pool_add_work(baton))
 		return 0;
-
-	pthread_detach(baton->client.thread_id);
 
 	return 1;
 }
@@ -514,6 +627,10 @@ void daemon_start(daemon_state s)
 			failed = 1;
 	}
 
+	/* TODO: make min/max configurable via daemon_state */
+	if (thread_pool_create(DAEMON_MIN_THREADS, DAEMON_MAX_THREADS))
+		failed = 1;
+
 	/* Signal parent, letting them know we are ready to go. */
 	if (!s.foreground)
 		kill(getppid(), SIGTERM);
@@ -547,6 +664,7 @@ void daemon_start(daemon_state s)
 	closelog(); /* FIXME */
 	if (s.pidfile)
 		remove_lockfile(s.pidfile);
+	thread_pool_free();
 	if (failed)
 		exit(1);
 }

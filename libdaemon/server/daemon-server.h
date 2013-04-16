@@ -18,13 +18,6 @@
 #include "daemon-client.h"
 
 typedef struct {
-	int socket_fd; /* the fd we use to talk to the client */
-	pthread_t thread_id;
-	char *read_buf;
-	void *private; /* this holds per-client state */
-} client_handle;
-
-typedef struct {
 	struct dm_config_tree *cft;
 	struct buffer buffer;
 } request;
@@ -62,13 +55,22 @@ static inline const char *daemon_request_str(request r, const char *path, const 
  * client. The client blocks until the request processing is done and reply is
  * sent.
  */
-typedef response (*handle_request)(struct daemon_state s, client_handle h, request r);
+typedef response (*handle_request)(struct daemon_state s, request r);
 
 typedef struct {
 	uint32_t log_config[32];
 	void *backend_state[32];
 	const char *name;
 } log_state;
+
+/*
+ * The number of daemon worker threads that handle processing for client
+ * connections (commands).  This will limit the number of client/command
+ * requests that can be processed in parallel.  The number of threads
+ * begins at MIN and expands to MAX as needed.
+ */
+#define DAEMON_MIN_THREADS 2
+#define DAEMON_MAX_THREADS 16
 
 typedef struct daemon_state {
 	/*
