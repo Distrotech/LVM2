@@ -28,19 +28,21 @@ aux enable_dev "$dev1" "$dev2"
 
 vgremove -ff $vg; vgcreate -c n $vg "$dev1" "$dev2" "$dev3" "$dev4" "$dev5" "$dev6"
 
-# 2-way, mirrored log
-# Double log failure, full replace
-lvcreate --mirrorlog mirrored -m 1 --ig -L 1 -n 2way $vg \
-    "$dev1" "$dev2" "$dev3":0 "$dev4":0
-aux disable_dev "$dev3" "$dev4"
-echo y | lvconvert --repair $vg/2way 2>&1 | tee 2way.out
-lvs -a -o +devices $vg | not grep unknown
-not grep "WARNING: Failed" 2way.out
-vgreduce --removemissing $vg
-check mirror $vg 2way
-aux enable_dev "$dev3" "$dev4"
+if kernel_at_least 3 0 0; then
+    # 2-way, mirrored log
+    # Double log failure, full replace
+    lvcreate --mirrorlog mirrored -m 1 --ig -L 1 -n 2way $vg \
+        "$dev1" "$dev2" "$dev3":0 "$dev4":0
+    aux disable_dev "$dev3" "$dev4"
+    echo y | lvconvert --repair $vg/2way 2>&1 | tee 2way.out
+    lvs -a -o +devices $vg | not grep unknown
+    not grep "WARNING: Failed" 2way.out
+    vgreduce --removemissing $vg
+    check mirror $vg 2way
+    aux enable_dev "$dev3" "$dev4"
 
-vgremove -ff $vg; vgcreate -c n $vg "$dev1" "$dev2" "$dev3" "$dev4" "$dev5" "$dev6"
+    vgremove -ff $vg; vgcreate -c n $vg "$dev1" "$dev2" "$dev3" "$dev4" "$dev5" "$dev6"
+fi
 
 # 3-way, mirrored log
 # Single log failure, replace
