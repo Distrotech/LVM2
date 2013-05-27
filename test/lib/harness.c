@@ -313,7 +313,7 @@ static void run(int i, char *f) {
 		printf("Running %-50s ", buf);
 		fflush(stdout);
 		char outpath[512];
-		sprintf(outpath, "results/%s", f);
+		sprintf(outpath, "results/%s.txt", f);
 		while (strchr(outpath + 8, '/'))
 			*strchr(outpath + 8, '/') = '_';
 		if (outfile)
