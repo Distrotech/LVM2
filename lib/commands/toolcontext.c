@@ -1652,7 +1652,7 @@ void destroy_toolcontext(struct cmd_context *cmd)
 	struct dm_config_tree *cft_cmdline;
 	FILE *new_stream;
 
-	if (cmd->dump_filter && cmd->filter->dump)
+	if (cmd->dump_filter && cmd->filter && cmd->filter->dump)
 		cmd->filter->dump(cmd->filter);
 
 	archive_exit(cmd);
