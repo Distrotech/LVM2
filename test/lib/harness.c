@@ -316,8 +316,6 @@ static void run(int i, char *f) {
 		sprintf(outpath, "results/%s.txt", f);
 		while (strchr(outpath + 8, '/'))
 			*strchr(outpath + 8, '/') = '_';
-		if (outfile)
-			fclose(outfile);
 		outfile = fopen(outpath, "w");
 		while ((w = waitpid(pid, &st, WNOHANG)) == 0) {
 			drain();
@@ -340,6 +338,7 @@ static void run(int i, char *f) {
 			failed(i, f, st);
 		}
 		clear();
+		fclose(outfile);
 	}
 }
 
