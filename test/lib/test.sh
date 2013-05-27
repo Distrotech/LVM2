@@ -57,6 +57,7 @@ cd "$TESTDIR"
 echo "$TESTNAME" >TESTNAME
 
 if test -n "$LVM_TEST_FLAVOUR"; then
+    touch flavour_overrides
     env | grep ^$LVM_TEST_FLAVOUR | while read var; do
 	(echo -n "export "; echo $var | sed -e s,^${LVM_TEST_FLAVOUR}_,,) >> flavour_overrides
     done
