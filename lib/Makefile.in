@@ -52,11 +52,11 @@ SOURCES =\
 	datastruct/btree.c \
 	datastruct/str_list.c \
 	device/dev-cache.c \
+	device/dev-type.c \
 	device/dev-io.c \
 	device/dev-md.c \
 	device/dev-swap.c \
 	device/dev-luks.c \
-	device/device.c \
 	display/display.c \
 	error/errseg.c \
 	unknown/unknown.c \

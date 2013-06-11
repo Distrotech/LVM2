@@ -14,9 +14,10 @@
  */
 
 #include "lib.h"
+#include "dev-type.h"
 #include "metadata.h"
 #include "xlate.h"
-#include "filter.h"
+#include "toolcontext.h"
 
 #ifdef linux
 
@@ -127,10 +128,11 @@ out:
 }
 
 static int _md_sysfs_attribute_snprintf(char *path, size_t size,
-					const char *sysfs_dir,
+					struct dev_type_register *dtr,
 					struct device *blkdev,
 					const char *attribute)
 {
+	const char *sysfs_dir = dm_sysfs_dir();
 	struct stat info;
 	dev_t dev = blkdev->dev;
 	int ret = -1;
@@ -138,13 +140,13 @@ static int _md_sysfs_attribute_snprintf(char *path, size_t size,
 	if (!sysfs_dir || !*sysfs_dir)
 		return ret;
 
-	if (MAJOR(dev) == blkext_major()) {
+	if (MAJOR(dev) == dtr->blkext_major) {
 		/* lookup parent MD device from blkext partition */
-		if (!get_primary_dev(blkdev, &dev))
+		if (!dev_get_primary_dev(dtr, blkdev, &dev))
 			return ret;
 	}
 
-	if (MAJOR(dev) != md_major())
+	if (MAJOR(dev) != dtr->md_major)
 		return ret;
 
 	ret = dm_snprintf(path, size, "%s/dev/block/%d:%d/md/%s", sysfs_dir,
@@ -171,7 +173,7 @@ static int _md_sysfs_attribute_snprintf(char *path, size_t size,
 	return ret;
 }
 
-static int _md_sysfs_attribute_scanf(const char *sysfs_dir,
+static int _md_sysfs_attribute_scanf(struct dev_type_register *dtr,
 				     struct device *dev,
 				     const char *attribute_name,
 				     const char *attribute_fmt,
@@ -181,7 +183,7 @@ static int _md_sysfs_attribute_scanf(const char *sysfs_dir,
 	FILE *fp;
 	int ret = 0;
 
-	if (_md_sysfs_attribute_snprintf(path, PATH_MAX, sysfs_dir,
+	if (_md_sysfs_attribute_snprintf(path, PATH_MAX, dtr,
 					 dev, attribute_name) < 0)
 		return ret;
 
@@ -211,13 +213,13 @@ out:
 /*
  * Retrieve chunk size from md device using sysfs.
  */
-static unsigned long dev_md_chunk_size(const char *sysfs_dir,
+static unsigned long dev_md_chunk_size(struct dev_type_register *dtr,
 				       struct device *dev)
 {
 	const char *attribute = "chunk_size";
 	unsigned long chunk_size_bytes = 0UL;
 
-	if (_md_sysfs_attribute_scanf(sysfs_dir, dev, attribute,
+	if (_md_sysfs_attribute_scanf(dtr, dev, attribute,
 				      "%lu", &chunk_size_bytes) != 1)
 		return 0;
 
@@ -230,13 +232,13 @@ static unsigned long dev_md_chunk_size(const char *sysfs_dir,
 /*
  * Retrieve level from md device using sysfs.
  */
-static int dev_md_level(const char *sysfs_dir, struct device *dev)
+static int dev_md_level(struct dev_type_register *dtr, struct device *dev)
 {
 	char level_string[MD_MAX_SYSFS_SIZE];
 	const char *attribute = "level";
 	int level = -1;
 
-	if (_md_sysfs_attribute_scanf(sysfs_dir, dev, attribute,
+	if (_md_sysfs_attribute_scanf(dtr, dev, attribute,
 				      "%s", &level_string) != 1)
 		return -1;
 
@@ -253,12 +255,12 @@ static int dev_md_level(const char *sysfs_dir, struct device *dev)
 /*
  * Retrieve raid_disks from md device using sysfs.
  */
-static int dev_md_raid_disks(const char *sysfs_dir, struct device *dev)
+static int dev_md_raid_disks(struct dev_type_register *dtr, struct device *dev)
 {
 	const char *attribute = "raid_disks";
 	int raid_disks = 0;
 
-	if (_md_sysfs_attribute_scanf(sysfs_dir, dev, attribute,
+	if (_md_sysfs_attribute_scanf(dtr, dev, attribute,
 				      "%d", &raid_disks) != 1)
 		return 0;
 
@@ -271,22 +273,21 @@ static int dev_md_raid_disks(const char *sysfs_dir, struct device *dev)
 /*
  * Calculate stripe width of md device using its sysfs files.
  */
-unsigned long dev_md_stripe_width(struct device *dev)
+unsigned long dev_md_stripe_width(struct dev_type_register *dtr, struct device *dev)
 {
-	const char *sysfs_dir = dm_sysfs_dir();
 	unsigned long chunk_size_sectors = 0UL;
 	unsigned long stripe_width_sectors = 0UL;
 	int level, raid_disks, data_disks;
 
-	chunk_size_sectors = dev_md_chunk_size(sysfs_dir, dev);
+	chunk_size_sectors = dev_md_chunk_size(dtr, dev);
 	if (!chunk_size_sectors)
 		return 0;
 
-	level = dev_md_level(sysfs_dir, dev);
+	level = dev_md_level(dtr, dev);
 	if (level < 0)
 		return 0;
 
-	raid_disks = dev_md_raid_disks(sysfs_dir, dev);
+	raid_disks = dev_md_raid_disks(dtr, dev);
 	if (!raid_disks)
 		return 0;
 
@@ -333,7 +334,8 @@ int dev_is_md(struct device *dev __attribute__((unused)),
 	return 0;
 }
 
-unsigned long dev_md_stripe_width(struct device *dev  __attribute__((unused)))
+unsigned long dev_md_stripe_width(struct dev_type_register *dtr __attribute__((unused)),
+				  struct device *dev __attribute__((unused)))
 {
 	return 0UL;
 }
