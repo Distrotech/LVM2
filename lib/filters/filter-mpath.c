@@ -176,8 +176,9 @@ static void _destroy(struct dev_filter *f)
 	dm_free(f);
 }
 
-struct dev_filter *mpath_filter_create(const char *sysfs_dir)
+struct dev_filter *mpath_filter_create(void)
 {
+	const char *sysfs_dir = dm_sysfs_dir();
 	struct dev_filter *f;
 
 	if (!*sysfs_dir) {
