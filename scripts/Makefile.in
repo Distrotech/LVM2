@@ -25,7 +25,7 @@ include $(top_builddir)/make.tmpl
 ifeq ("@APPLIB@", "yes")
 	DEPLIBS += $(top_builddir)/liblvm/liblvm2app.so $(top_builddir)/libdm/libdevmapper.so
 	LDFLAGS += -L$(top_builddir)/liblvm
-	LVMLIBS = @LVM2APP_LIB@ -ldevmapper
+	LVMLIBS = @LVM2APP_LIB@ -ldevmapper @DL_LIBS@
 endif
 
 ifeq ("@DMEVENTD@", "yes")
