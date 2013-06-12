@@ -21,7 +21,7 @@ SOURCES2 = dmeventd.c
 TARGETS = dmeventd
 
 .PHONY: install_lib_dynamic install_lib_static install_include \
-	install_pkgconfig install_dmeventd_dynamic install_dmeventd_static \
+	install_pkgconfig install_dmeventd_dynamic \
 	install_lib install_dmeventd
 
 INSTALL_DMEVENTD_TARGETS = install_dmeventd_dynamic
@@ -30,15 +30,14 @@ INSTALL_LIB_TARGETS = install_lib_dynamic
 LIB_NAME = libdevmapper-event
 ifeq ("@STATIC_LINK@", "yes")
   LIB_STATIC = $(LIB_NAME).a
-  TARGETS += $(LIB_STATIC) dmeventd.static
-  INSTALL_DMEVENTD_TARGETS += install_dmeventd_static
+  TARGETS += $(LIB_STATIC)
   INSTALL_LIB_TARGETS += install_lib_static
 endif
 
 LIB_VERSION = $(LIB_VERSION_DM)
 LIB_SHARED = $(LIB_NAME).$(LIB_SUFFIX)
 
-CLEAN_TARGETS = dmeventd.static $(LIB_NAME).a
+CLEAN_TARGETS = $(LIB_NAME).a
 
 ifneq ($(MAKECMDGOALS),device-mapper)
   SUBDIRS+=plugins
@@ -62,10 +61,6 @@ LVMLIBS += -ldevmapper-event $(PTHREAD_LIBS)
 dmeventd: $(LIB_SHARED) dmeventd.o
 	$(CC) $(CFLAGS) $(LDFLAGS) $(ELDFLAGS) -L. -o $@ dmeventd.o \
 	$(DL_LIBS) $(LVMLIBS) $(LIBS) -rdynamic
-
-dmeventd.static: $(LIB_STATIC) dmeventd.o $(interfacebuilddir)/libdevmapper.a
-	$(CC) $(CFLAGS) $(LDFLAGS) $(ELDFLAGS) -static -L. -L$(interfacebuilddir) -o $@ \
-	dmeventd.o $(DL_LIBS) $(LVMLIBS) $(LIBS) $(STATIC_LIBS)
 
 ifeq ("@PKGCONFIG@", "yes")
   INSTALL_LIB_TARGETS += install_pkgconfig
@@ -95,9 +90,6 @@ install_lib: $(INSTALL_LIB_TARGETS)
 
 install_dmeventd_dynamic: dmeventd
 	$(INSTALL_PROGRAM) -D $< $(sbindir)/$(<F)
-
-install_dmeventd_static: dmeventd.static
-	$(INSTALL_PROGRAM) -D $< $(staticdir)/$(<F)
 
 install_dmeventd: $(INSTALL_DMEVENTD_TARGETS)
 
