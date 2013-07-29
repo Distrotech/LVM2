@@ -787,11 +787,10 @@ static int _pvmdafree_disp(struct dm_report *rh, struct dm_pool *mem,
 			   struct dm_report_field *field,
 			   const void *data, void *private)
 {
-	const struct physical_volume *pv =
-	    (const struct physical_volume *) data;
+	const struct label *label = (const struct label *) data;
 	uint64_t freespace;
 
-	freespace = pv_mda_free(pv);
+	freespace = lvmcache_info_mda_free(label->info);
 
 	return _size64_disp(rh, mem, field, &freespace, private);
 }
