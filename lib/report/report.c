@@ -31,6 +31,7 @@ struct lvm_report_object {
 	struct physical_volume *pv;
 	struct lv_segment *seg;
 	struct pv_segment *pvseg;
+	struct label *label;
 };
 
 static const uint64_t _minusone64 = UINT64_C(-1);
@@ -1256,6 +1257,11 @@ static void *_obj_get_pv(void *obj)
 	return ((struct lvm_report_object *)obj)->pv;
 }
 
+static void *_obj_get_label(void *obj)
+{
+	return ((struct lvm_report_object *)obj)->label;
+}
+
 static void *_obj_get_seg(void *obj)
 {
 	return ((struct lvm_report_object *)obj)->seg;
@@ -1270,7 +1276,7 @@ static const struct dm_report_object_type _report_types[] = {
 	{ VGS, "Volume Group", "vg_", _obj_get_vg },
 	{ LVS, "Logical Volume", "lv_", _obj_get_lv },
 	{ PVS, "Physical Volume", "pv_", _obj_get_pv },
-	{ LABEL, "Physical Volume Label", "pv_", _obj_get_pv },
+	{ LABEL, "Physical Volume Label", "pv_", _obj_get_label },
 	{ SEGS, "Logical Volume Segment", "seg_", _obj_get_seg },
 	{ PVSEGS, "Physical Volume Segment", "pvseg_", _obj_get_pvseg },
 	{ 0, "", "", NULL },
@@ -1291,6 +1297,7 @@ typedef struct logical_volume type_lv;
 typedef struct volume_group type_vg;
 typedef struct lv_segment type_seg;
 typedef struct pv_segment type_pvseg;
+typedef struct label type_label;
 
 static const struct dm_report_field_type _fields[] = {
 #include "columns.h"
@@ -1341,7 +1348,8 @@ void *report_init(struct cmd_context *cmd, const char *format, const char *keys,
  */
 int report_object(void *handle, struct volume_group *vg,
 		  struct logical_volume *lv, struct physical_volume *pv,
-		  struct lv_segment *seg, struct pv_segment *pvseg)
+		  struct lv_segment *seg, struct pv_segment *pvseg,
+		  struct label *label)
 {
 	struct lvm_report_object obj;
 
@@ -1354,6 +1362,7 @@ int report_object(void *handle, struct volume_group *vg,
 	obj.pv = pv;
 	obj.seg = seg;
 	obj.pvseg = pvseg;
+	obj.label = label ? label : (pv ? pv_label(pv) : NULL);
 
 	return dm_report_object(handle, &obj);
 }
