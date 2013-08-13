@@ -82,7 +82,6 @@ int process_each_lv_in_vg(struct cmd_context *cmd,
 			  struct volume_group *vg,
 			  const struct dm_list *arg_lvnames,
 			  const struct dm_list *tags,
-			  struct dm_list *failed_lvnames,
 			  void *handle,
 			  process_single_lv_fn_t process_single_lv)
 {
@@ -93,7 +92,6 @@ int process_each_lv_in_vg(struct cmd_context *cmd,
 	unsigned tags_supplied = 0;
 	unsigned lvargs_supplied = 0;
 	unsigned lvargs_matched = 0;
-	char *lv_name;
 	struct lv_list *lvl;
 
 	if (!vg_check_status(vg, EXPORTED_VG))
@@ -164,18 +162,8 @@ int process_each_lv_in_vg(struct cmd_context *cmd,
 		if (sigint_caught())
 			return_ECMD_FAILED;
 
-		lvl->lv->vg->cmd_missing_vgs = 0;
 		ret = process_single_lv(cmd, lvl->lv, handle);
-		if (ret != ECMD_PROCESSED && failed_lvnames) {
-			lv_name = dm_pool_strdup(cmd->mem, lvl->lv->name);
-			if (!lv_name ||
-			    !str_list_add(cmd->mem, failed_lvnames, lv_name)) {
-				log_error("Allocation failed for str_list.");
-				return ECMD_FAILED;
-			}
-			if (lvl->lv->vg->cmd_missing_vgs)
-				ret = ECMD_PROCESSED;
-		}
+
 		if (ret > ret_max)
 			ret_max = ret;
 	}
@@ -1715,36 +1703,16 @@ static int process_lv_vg_name_list(struct cmd_context *cmd, uint32_t flags,
 				   void *handle,
 				   process_single_lv_fn_t process_single_lv)
 {
+	struct volume_group *vg;
 	struct str_list *sl, *sll;
-	struct cmd_vg *cvl_vg;
 	struct dm_list *tags_arg;
-	struct dm_list cmd_vgs;
-	struct dm_list failed_lvnames;
 	struct dm_list lvnames;
 	const char *vgname;
 	int ret_max = ECMD_PROCESSED;
 	int ret = 0;
 
-	dm_list_init(&failed_lvnames);
-
 	dm_list_iterate_items(sl, vg_name_list) {
 		vgname = sl->str;
-
-		dm_list_init(&cmd_vgs);
-		if (!(cvl_vg = cmd_vg_add(cmd->mem, &cmd_vgs,
-					  vgname, NULL, flags))) {
-			return_ECMD_FAILED;
-		}
-
-		if (!cmd_vg_read(cmd, &cmd_vgs)) {
-			free_cmd_vgs(&cmd_vgs);
-			if (ret_max < ECMD_FAILED) {
-				log_error("Skipping volume group %s", vgname);
-				ret_max = ECMD_FAILED;
-			} else
-				stack;
-			continue;
-		}
 
 		/*
 		 * arg_lvnames contains some elements that are just "vgname"
@@ -1772,42 +1740,28 @@ static int process_lv_vg_name_list(struct cmd_context *cmd, uint32_t flags,
 				if (!str_list_add(cmd->mem, &lvnames,
 						  dm_pool_strdup(cmd->mem, lv_name + 1))) {
 					log_error("strlist allocation failed");
-					free_cmd_vgs(&cmd_vgs);
 					return ECMD_FAILED;
 				}
 			}
 		}
 
-		while (!sigint_caught()) {
-			ret = process_each_lv_in_vg(cmd, cvl_vg->vg, &lvnames,
-						    tags_arg, &failed_lvnames,
-						    handle, process_single_lv);
-			if (ret != ECMD_PROCESSED) {
-				stack;
-				break;
-			}
-
-			if (dm_list_empty(&failed_lvnames))
-				break;
-
-			/* Try again with failed LVs in this VG */
-			dm_list_init(&lvnames);
-			dm_list_splice(&lvnames, &failed_lvnames);
-
-			free_cmd_vgs(&cmd_vgs);
-			if (!cmd_vg_read(cmd, &cmd_vgs)) {
-				stack;
-				ret = ECMD_FAILED; /* break */
-				break;
-			}
+		vg = vg_read(cmd, vgname, NULL, flags);
+		if (vg_read_error(vg)) {
+			ret_max = ECMD_FAILED;
+			release_vg(vg);
+			stack;
+			continue;
 		}
+
+		ret = process_each_lv_in_vg(cmd, vg, &lvnames, tags_arg,
+					    handle, process_single_lv);
+		unlock_and_release_vg(cmd, vg, vgname);
+
 		if (ret > ret_max)
 			ret_max = ret;
 
-		free_cmd_vgs(&cmd_vgs);
-		/* FIXME: logic for breaking command is not consistent */
 		if (sigint_caught())
-			return_ECMD_FAILED;
+			break;
 	}
 
 	return ret_max;
