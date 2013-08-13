@@ -539,6 +539,8 @@ static int vgchange_single(struct cmd_context *cmd, const char *vg_name,
 
 int vgchange(struct cmd_context *cmd, int argc, char **argv)
 {
+	uint32_t flags = 0;
+
 	/* Update commands that can be combined */
 	int update_partial_safe =
 		arg_count(cmd, deltag_ARG) ||
@@ -626,6 +628,10 @@ int vgchange(struct cmd_context *cmd, int argc, char **argv)
 	if (!update || !update_partial_unsafe)
 		cmd->handles_missing_pvs = 1;
 
-	return process_each_vg(cmd, argc, argv, update ? READ_FOR_UPDATE : 0,
+	flags = ENABLE_ALL_VGNAMES;
+	if (update)
+		flags |= READ_FOR_UPDATE;
+
+	return process_each_vg(cmd, argc, argv, flags,
 			       NULL, &vgchange_single);
 }

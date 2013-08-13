@@ -60,7 +60,7 @@ int vgscan(struct cmd_context *cmd, int argc, char **argv)
 
 	log_print_unless_silent("Reading all physical volumes.  This may take a while...");
 
-	maxret = process_each_vg(cmd, argc, argv, 0, NULL,
+	maxret = process_each_vg(cmd, argc, argv, ENABLE_ALL_VGNAMES, NULL,
 				 &vgscan_single);
 
 	if (arg_count(cmd, mknodes_ARG)) {

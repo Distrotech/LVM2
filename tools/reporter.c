@@ -358,7 +358,7 @@ static int _report(struct cmd_context *cmd, int argc, char **argv,
 				    &_lvs_single);
 		break;
 	case VGS:
-		r = process_each_vg(cmd, argc, argv, 0,
+		r = process_each_vg(cmd, argc, argv, ENABLE_ALL_VGNAMES,
 				    report_handle, &_vgs_single);
 		break;
 	case LABEL:
@@ -370,7 +370,7 @@ static int _report(struct cmd_context *cmd, int argc, char **argv,
 			r = process_each_pv(cmd, argc, argv, NULL, 0,
 					    0, report_handle, &_pvs_single);
 		else
-			r = process_each_vg(cmd, argc, argv, 0,
+			r = process_each_vg(cmd, argc, argv, ENABLE_ALL_VGNAMES,
 					    report_handle, &_pvs_in_vg);
 		break;
 	case SEGS:
@@ -382,7 +382,7 @@ static int _report(struct cmd_context *cmd, int argc, char **argv,
 			r = process_each_pv(cmd, argc, argv, NULL, 0,
 					    0, report_handle, &_pvsegs_single);
 		else
-			r = process_each_vg(cmd, argc, argv, 0,
+			r = process_each_vg(cmd, argc, argv, ENABLE_ALL_VGNAMES,
 					    report_handle, &_pvsegs_in_vg);
 		break;
 	}

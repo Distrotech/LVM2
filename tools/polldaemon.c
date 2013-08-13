@@ -290,7 +290,8 @@ static void _poll_for_all_vgs(struct cmd_context *cmd,
 {
 	while (1) {
 		parms->outstanding_count = 0;
-		process_each_vg(cmd, 0, NULL, READ_FOR_UPDATE, parms, _poll_vg);
+		process_each_vg(cmd, 0, NULL, READ_FOR_UPDATE | ENABLE_ALL_VGNAMES,
+				parms, _poll_vg);
 		if (!parms->outstanding_count)
 			break;
 		sleep(parms->interval);

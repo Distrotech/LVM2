@@ -37,6 +37,6 @@ static int vgck_single(struct cmd_context *cmd __attribute__((unused)),
 
 int vgck(struct cmd_context *cmd, int argc, char **argv)
 {
-	return process_each_vg(cmd, argc, argv, 0, NULL,
+	return process_each_vg(cmd, argc, argv, ENABLE_ALL_VGNAMES, NULL,
 			       &vgck_single);
 }
