@@ -625,6 +625,18 @@ int dev_close_immediate(struct device *dev)
 	return _dev_close(dev, 1);
 }
 
+void dev_close_vg(const char *vgname)
+{
+	struct dm_list *doh, *doht;
+	struct device *dev;
+
+	dm_list_iterate_safe(doh, doht, &_open_devices) {
+		dev = dm_list_struct_base(doh, struct device, open_list);
+		if (dev->open_count < 1 && lvmcache_pvid_is_in_vg(dev->pvid, vgname))
+			_close(dev);
+	}
+}
+
 void dev_close_all(void)
 {
 	struct dm_list *doh, *doht;

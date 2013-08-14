@@ -1649,6 +1649,18 @@ int lvmcache_pvid_is_locked(const char *pvid) {
 	return lvmcache_vgname_is_locked(info->vginfo->vgname);
 }
 
+int lvmcache_pvid_is_in_vg(const char *pvid, const char *vgname)
+{
+	struct lvmcache_info *info;
+	info = lvmcache_info_from_pvid(pvid, 0);
+	if (!info || !info->vginfo)
+		return 0;
+
+	if (!strcmp(info->vginfo->vgname, vgname))
+		return 1;
+	return 0;
+}
+
 int lvmcache_fid_add_mdas(struct lvmcache_info *info, struct format_instance *fid,
 			  const char *id, int id_len)
 {

@@ -1493,22 +1493,38 @@ static struct vg_list *find_vgl(struct dm_list *vgl_list, const char *vg_name)
 	struct vg_list *vgl;
 
 	dm_list_iterate_items(vgl, vgl_list) {
-		if (!strcmp(vg_name, vgl->vg->name))
+		if (vgl->vg && !strcmp(vg_name, vgl->vg->name))
 			return vgl;
 	}
 	return NULL;
+}
+
+static void release_vgl(struct cmd_context *cmd, struct vg_list *vgl)
+{
+	if (!vgl->vg)
+		return;
+
+	if (is_orphan_vg(vgl->vg->name)) {
+		dev_close_vg(vgl->vg->name);
+		release_vg(vgl->vg);
+	} else if (vg_read_error(vgl->vg)) {
+		dev_close_vg(vgl->vg->name);
+		release_vg(vgl->vg);
+	} else {
+		dev_close_vg(vgl->vg->name);
+		unlock_vg(cmd, vgl->vg->name);
+		release_vg(vgl->vg);
+	}
+
+	vgl->vg = NULL;
 }
 
 static void release_vg_list(struct cmd_context *cmd, struct dm_list *vgl_list)
 {
 	struct vg_list *vgl;
 
-	dm_list_iterate_items(vgl, vgl_list) {
-		if (vg_read_error(vgl->vg))
-			release_vg(vgl->vg);
-		else
-			unlock_and_release_vg(cmd, vgl->vg, vgl->vg->name);
-	}
+	dm_list_iterate_items(vgl, vgl_list)
+		release_vgl(cmd, vgl);
 }
 
 static int read_vg_name_list(struct cmd_context *cmd, uint32_t flags,
@@ -1595,6 +1611,12 @@ static int process_vg_name_list(struct cmd_context *cmd, uint32_t flags,
 
 		if (process_vg)
 			ret = process_single_vg(cmd, vgname, vg, handle);
+
+		/*
+		 * Close devices after each because open devices
+		 * from one may cause the next to fail.
+		 */
+		release_vgl(cmd, vgl);
 
 		if (ret > ret_max)
 			ret_max = ret;
@@ -1830,6 +1852,9 @@ static int process_lv_vg_name_list(struct cmd_context *cmd, uint32_t flags,
 
 		ret = process_each_lv_in_vg(cmd, vg, &lvnames, tags_arg,
 					    handle, process_single_lv);
+
+		release_vgl(cmd, vgl);
+
 		if (ret > ret_max)
 			ret_max = ret;
 
