@@ -1171,7 +1171,6 @@ int process_each_label(struct cmd_context *cmd, int argc, char **argv, void *han
 		if (!label_read(dev, &label, 0))
 			continue;
 
-		log_error("processing %s", dev_name(dev));
 		ret = process_single_label(cmd, label, handle);
 
 		if (ret > ret_max)
