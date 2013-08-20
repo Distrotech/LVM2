@@ -1302,15 +1302,18 @@ static struct vg_list *find_vgl(struct dm_list *vgl_list, const char *vg_name)
 	return NULL;
 }
 
-static void release_vgl(struct cmd_context *cmd, struct vg_list *vgl)
+static int release_vgl(struct cmd_context *cmd, struct vg_list *vgl)
 {
 	if (!vgl->vg)
-		return;
+		return 0;
+
+	int r = 0;
 
 	if (is_orphan_vg(vgl->vg->name)) {
 		log_debug("release_vgl orphan %s", vgl->vg->name);
 		dev_close_vg(vgl->vg->name);
 		release_vg(vgl->vg);
+		r = 1;
 	} else if (vg_read_error(vgl->vg)) {
 		log_debug("release_vgl error %s", vgl->vg->name);
 		dev_close_vg(vgl->vg->name);
@@ -1323,14 +1326,24 @@ static void release_vgl(struct cmd_context *cmd, struct vg_list *vgl)
 	}
 
 	vgl->vg = NULL;
+	return r;
 }
 
-static void release_vg_list(struct cmd_context *cmd, struct dm_list *vgl_list)
+/*
+* Special treatment is needed for unlocking orphan vgs. There are three orphan
+* vgs, and all three share one orphan clvm lock. We return 1 if the orphan VG
+* was in the list to be released.
+*/
+static int release_vg_list(struct cmd_context *cmd, struct dm_list *vgl_list)
 {
 	struct vg_list *vgl;
 
+	int r = 0;
+
 	dm_list_iterate_items(vgl, vgl_list)
-		release_vgl(cmd, vgl);
+		r += release_vgl(cmd, vgl);
+
+	return r;
 }
 
 static int read_vg_name_list(struct cmd_context *cmd, uint32_t flags,
@@ -2009,6 +2022,7 @@ int process_each_pv(struct cmd_context *cmd,
 	int include_other_devs = 0;
 	int ret_max = ECMD_PROCESSED;
 	int ret;
+	int unlock_orphans = 0;
 
 	/*
 	 * arg_tags, arg_pvnames are names specified in argv.
@@ -2104,7 +2118,8 @@ int process_each_pv(struct cmd_context *cmd,
 		if (ret > ret_max)
 			ret_max = ret;
 
-		release_vg_list(cmd, &all_vgs);
+		if (release_vg_list(cmd, &all_vgs))
+			unlock_orphans = 1;
 
 	} else if (flags & ENABLE_ALL_VGNAMES) {
 		/*
@@ -2134,15 +2149,8 @@ process:
 			ret_max = ret;
 	}
 out:
-	if (!vg)
-		release_vg_list(cmd, &use_vgs);
-
-	/*
-	 * This is needed because release_vg_list does not do any unlocks
-	 * for orphan vgs.  There are three orphan vgs, and all three share
-	 * this one orphan clvm lock.
-	 */
-	unlock_vg(cmd, VG_ORPHANS);
+	if (!vg && release_vg_list(cmd, &use_vgs) || unlock_orphans)
+		unlock_vg(cmd, VG_ORPHANS);
 
 	return ret_max;
 }
