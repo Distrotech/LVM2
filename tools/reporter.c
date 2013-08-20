@@ -124,11 +124,15 @@ static int _pvsegs_single(struct cmd_context *cmd, struct volume_group *vg,
 static int _pvs_single(struct cmd_context *cmd, struct volume_group *vg,
 		       struct physical_volume *pv, void *handle)
 {
-	struct label *label;
+	struct label *label = pv_label(pv);
+	struct label _dummy = { 0 };
 
-	label = pv_label(pv);
-	if (!label)
-		return_ECMD_FAILED;
+	/* FIXME workaround for pv_label going through cache; remove once struct
+	 * physical_volume gains a proper "label" pointer */
+	if (!label) {
+		_dummy.dev = pv->dev;
+		label = &_dummy;
+	}
 
 	if (!report_object(handle, vg, NULL, pv, NULL, NULL, label))
 		return_ECMD_FAILED;
