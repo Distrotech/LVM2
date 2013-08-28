@@ -1681,7 +1681,6 @@ int process_each_lv_in_vg(struct cmd_context *cmd,
 			  struct volume_group *vg,
 			  struct dm_list *arg_lvnames,
 			  const struct dm_list *tags_in,
-			  struct dm_list *failed_lvnames,
 			  void *handle,
 			  process_single_lv_fn_t process_single_lv)
 {
@@ -1952,7 +1951,7 @@ static int process_lv_vg_name_list(struct cmd_context *cmd, uint32_t flags,
 			continue;
 		}
 
-		ret = process_each_lv_in_vg(cmd, vg, &lvnames, tags_arg, NULL,
+		ret = process_each_lv_in_vg(cmd, vg, &lvnames, tags_arg,
 					    handle, process_single_lv);
 		unlock_and_release_vg(cmd, vg, vg_name);
 
