@@ -103,6 +103,7 @@ struct arg_value_group_list {
 #define CACHE_VGMETADATA	0x00000001
 #define PERMITTED_READ_ONLY 	0x00000002
 #define ENABLE_ALL_VGS		0x00000004 /* run cmd on all vgs if none are named */
+#define ENABLE_ALL_DEVS		0x00000008
 
 /* a register of the lvm commands */
 struct command {
