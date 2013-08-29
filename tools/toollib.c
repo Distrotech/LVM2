@@ -160,251 +160,6 @@ int process_each_segment_in_lv(struct cmd_context *cmd,
 	return ret_max;
 }
 
-int process_each_pv_in_vg(struct cmd_context *cmd, struct volume_group *vg,
-			  const struct dm_list *tags, void *handle,
-			  process_single_pv_fn_t process_single_pv)
-{
-	int ret_max = ECMD_PROCESSED;
-	int ret = 0;
-	struct pv_list *pvl;
-
-	dm_list_iterate_items(pvl, &vg->pvs) {
-		if (sigint_caught())
-			return_ECMD_FAILED;
-		if (tags && !dm_list_empty(tags) &&
-		    !str_list_match_list(tags, &pvl->pv->tags, NULL)) {
-			continue;
-		}
-		if ((ret = process_single_pv(cmd, vg, pvl->pv, handle)) > ret_max)
-			ret_max = ret;
-	}
-
-	return ret_max;
-}
-
-static int _process_all_devs(struct cmd_context *cmd, void *handle,
-			     process_single_pv_fn_t process_single_pv)
-{
-	struct pv_list *pvl;
-	struct dm_list *pvslist;
-	struct physical_volume *pv;
-	struct physical_volume pv_dummy;
-	struct dev_iter *iter;
-	struct device *dev;
-
-	int ret_max = ECMD_PROCESSED;
-	int ret;
-
-	lvmcache_seed_infos_from_lvmetad(cmd);
-	if (!(pvslist = get_pvs(cmd)))
-		return_ECMD_FAILED;
-
-	if (!(iter = dev_iter_create(cmd->filter, 1))) {
-		log_error("dev_iter creation failed");
-		return ECMD_FAILED;
-	}
-
-	while ((dev = dev_iter_get(iter)))
-	{
-		if (sigint_caught()) {
-			ret_max = ECMD_FAILED;
-			stack;
-			break;
-		}
-
-		memset(&pv_dummy, 0, sizeof(pv_dummy));
-		dm_list_init(&pv_dummy.tags);
-		dm_list_init(&pv_dummy.segments);
-		pv_dummy.dev = dev;
-		pv = &pv_dummy;
-
-		/* TODO use a device-indexed hash here */
-		dm_list_iterate_items(pvl, pvslist)
-			if (pvl->pv->dev == dev)
-				pv = pvl->pv;
-
-		ret = process_single_pv(cmd, NULL, pv, handle);
-
-		free_pv_fid(pv);
-
-		ret = process_single_pv(cmd, NULL, pv, handle);
-		if (ret > ret_max)
-			ret_max = ret;
-
-		free_pv_fid(pv);
-	}
-
-	dev_iter_destroy(iter);
-
-	return ret_max;
-}
-
-/*
- * If the lock_type is LCK_VG_READ (used only in reporting commands),
- * we lock VG_GLOBAL to enable use of metadata cache.
- * This can pause alongide pvscan or vgscan process for a while.
- */
-int process_each_pv(struct cmd_context *cmd, int argc, char **argv,
-		    struct volume_group *vg, uint32_t flags,
-		    int scan_label_only, void *handle,
-		    process_single_pv_fn_t process_single_pv)
-{
-	int opt = 0;
-	int ret_max = ECMD_PROCESSED;
-	int ret = 0;
-	int lock_global = !(flags & READ_WITHOUT_LOCK) && !(flags & READ_FOR_UPDATE) && !lvmetad_active();
-
-	struct pv_list *pvl;
-	struct physical_volume *pv;
-	struct dm_list *pvslist = NULL, *vgnames;
-	struct dm_list tags;
-	struct str_list *sll;
-	char *at_sign, *tagname;
-	struct device *dev;
-
-	dm_list_init(&tags);
-
-	if (lock_global && !lock_vol(cmd, VG_GLOBAL, LCK_VG_READ, NULL)) {
-		log_error("Unable to obtain global lock.");
-		return ECMD_FAILED;
-	}
-
-	if (argc) {
-		log_verbose("Using physical volume(s) on command line");
-		for (; opt < argc; opt++) {
-			if (sigint_caught()) {
-				ret_max = ECMD_FAILED;
-				goto_out;
-			}
-			dm_unescape_colons_and_at_signs(argv[opt], NULL, &at_sign);
-			if (at_sign && (at_sign == argv[opt])) {
-				tagname = at_sign + 1;
-
-				if (!validate_tag(tagname)) {
-					log_error("Skipping invalid tag %s",
-						  tagname);
-					if (ret_max < EINVALID_CMD_LINE)
-						ret_max = EINVALID_CMD_LINE;
-					continue;
-				}
-				if (!str_list_add(cmd->mem, &tags,
-						  dm_pool_strdup(cmd->mem,
-							      tagname))) {
-					log_error("strlist allocation failed");
-					goto bad;
-				}
-				continue;
-			}
-			if (vg) {
-				if (!(pvl = find_pv_in_vg(vg, argv[opt]))) {
-					log_error("Physical Volume \"%s\" not "
-						  "found in Volume Group "
-						  "\"%s\"", argv[opt],
-						  vg->name);
-					ret_max = ECMD_FAILED;
-					continue;
-				}
-				pv = pvl->pv;
-			} else {
-				if (!pvslist) {
-					lvmcache_seed_infos_from_lvmetad(cmd);
-					if (!(pvslist = get_pvs(cmd)))
-						goto bad;
-				}
-
-				if (!(dev = dev_cache_get(argv[opt], cmd->filter))) {
-					log_error("Failed to find device "
-						  "\"%s\"", argv[opt]);
-					ret_max = ECMD_FAILED;
-					continue;
-				}
-
-				pv = NULL;
-				dm_list_iterate_items(pvl, pvslist)
-					if (pvl->pv->dev == dev)
-						pv = pvl->pv;
-
-				if (!pv) {
-					log_error("Failed to find physical volume "
-						  "\"%s\"", argv[opt]);
-					ret_max = ECMD_FAILED;
-					continue;
-				}
-			}
-
-			ret = process_single_pv(cmd, vg, pv, handle);
-
-			if (ret > ret_max)
-				ret_max = ret;
-		}
-		if (!dm_list_empty(&tags) && (vgnames = get_vgnames(cmd, 1)) &&
-			   !dm_list_empty(vgnames)) {
-			dm_list_iterate_items(sll, vgnames) {
-				if (sigint_caught()) {
-					ret_max = ECMD_FAILED;
-					goto_out;
-				}
-				vg = vg_read(cmd, sll->str, NULL, flags);
-				if (vg_read_error(vg)) {
-					ret_max = ECMD_FAILED;
-					release_vg(vg);
-					stack;
-					continue;
-				}
-
-				ret = process_each_pv_in_vg(cmd, vg, &tags,
-							    handle,
-							    process_single_pv);
-				if (ret > ret_max)
-					ret_max = ret;
-
-				unlock_and_release_vg(cmd, vg, sll->str);
-			}
-		}
-	} else {
-		if (vg) {
-			log_verbose("Using all physical volume(s) in "
-				    "volume group");
-			ret_max = process_each_pv_in_vg(cmd, vg, NULL, handle,
-							process_single_pv);
-		} else if (arg_count(cmd, all_ARG)) {
-			ret_max = _process_all_devs(cmd, handle, process_single_pv);
-		} else {
-			log_verbose("Scanning for physical volume names");
-
-			lvmcache_seed_infos_from_lvmetad(cmd);
-			if (!(pvslist = get_pvs(cmd)))
-				goto bad;
-
-			dm_list_iterate_items(pvl, pvslist) {
-				if (sigint_caught()) {
-					ret_max = ECMD_FAILED;
-					goto_out;
-				}
-				ret = process_single_pv(cmd, NULL, pvl->pv,
-						     handle);
-				if (ret > ret_max)
-					ret_max = ret;
-
-				free_pv_fid(pvl->pv);
-			}
-		}
-	}
-out:
-	if (pvslist)
-		dm_list_iterate_items(pvl, pvslist)
-			free_pv_fid(pvl->pv);
-
-	if (lock_global)
-		unlock_vg(cmd, VG_GLOBAL);
-	return ret_max;
-bad:
-	if (lock_global)
-		unlock_vg(cmd, VG_GLOBAL);
-
-	return ECMD_FAILED;
-}
-
 /*
  * Determine volume group name from a logical volume name
  */
@@ -1354,7 +1109,8 @@ static int get_arg_vgnames(struct cmd_context *cmd,
  * duplicate vg names.)
  */
 
-static int get_all_vgnames(struct cmd_context *cmd, struct dm_list *all_vgnames)
+static int get_all_vgnames(struct cmd_context *cmd, struct dm_list *all_vgnames,
+			   int include_orphan)
 {
 	int ret_max = ECMD_PROCESSED;
 	struct name_id_list *nl;
@@ -1367,7 +1123,7 @@ static int get_all_vgnames(struct cmd_context *cmd, struct dm_list *all_vgnames)
 	if (!lvmetad_vg_list_to_lvmcache(cmd))
 		stack;
 
-	vgids = get_vgids(cmd, 0);
+	vgids = get_vgids(cmd, include_orphan);
 
 	if (!vgids || dm_list_empty(vgids))
 		goto out;
@@ -1504,7 +1260,7 @@ int process_each_vg(struct cmd_context *cmd,
 
 	if ((dm_list_empty(&arg_vgnames) && enable_all_vgs) ||
 	    !dm_list_empty(&arg_tags)) {
-		ret = get_all_vgnames(cmd, &all_vgnames);
+		ret = get_all_vgnames(cmd, &all_vgnames, 0);
 		if (ret != ECMD_PROCESSED)
 			return ret;
 	}
@@ -1530,7 +1286,7 @@ int process_each_vg(struct cmd_context *cmd,
 
 int process_each_lv_in_vg(struct cmd_context *cmd,
 			  struct volume_group *vg,
-			  const struct dm_list *arg_lvnames,
+			  struct dm_list *arg_lvnames,
 			  const struct dm_list *tags,
 			  void *handle,
 			  process_single_lv_fn_t process_single_lv)
@@ -1843,7 +1599,7 @@ int process_each_lv(struct cmd_context *cmd,
 
 	if ((dm_list_empty(&arg_vgnames) && enable_all_vgs) ||
 	    !dm_list_empty(&arg_tags)) {
-		ret = get_all_vgnames(cmd, &all_vgnames);
+		ret = get_all_vgnames(cmd, &all_vgnames, 0);
 		if (ret != ECMD_PROCESSED)
 			return ret;
 	}
@@ -1865,5 +1621,356 @@ int process_each_lv(struct cmd_context *cmd,
 				      &arg_vgnames, &arg_lvnames, &arg_tags,
 				      handle, process_single_lv);
 	return ret;
+}
+
+static int get_arg_pvnames(struct cmd_context *cmd,
+			   int argc, char **argv,
+			   struct dm_list *arg_pvnames,
+			   struct dm_list *arg_tags)
+{
+	int opt = 0;
+	char *at_sign, *tagname;
+	char *arg_name;
+	int ret_max = ECMD_PROCESSED;
+
+	log_verbose("Using physical volume(s) on command line");
+
+	for (; opt < argc; opt++) {
+		arg_name = argv[opt];
+
+		dm_unescape_colons_and_at_signs(arg_name, NULL, &at_sign);
+		if (at_sign && (at_sign == arg_name)) {
+			tagname = at_sign + 1;
+
+			if (!validate_tag(tagname)) {
+				log_error("Skipping invalid tag %s", tagname);
+				if (ret_max < EINVALID_CMD_LINE)
+					ret_max = EINVALID_CMD_LINE;
+				continue;
+			}
+			if (!str_list_add(cmd->mem, arg_tags,
+					  dm_pool_strdup(cmd->mem, tagname))) {
+				log_error("strlist allocation failed");
+				return ECMD_FAILED;
+			}
+			continue;
+		}
+
+		if (!str_list_add(cmd->mem, arg_pvnames,
+				  dm_pool_strdup(cmd->mem, arg_name))) {
+			log_error("strlist allocation failed");
+			return ECMD_FAILED;
+		}
+	}
+
+	return ret_max;
+}
+
+static int get_all_devs(struct cmd_context *cmd, struct dm_list *all_devs)
+{
+	struct dev_iter *iter;
+	struct device *dev;
+	struct device_list *devl;
+
+	log_debug("get_all_devs");
+
+	lvmcache_seed_infos_from_lvmetad(cmd);
+
+	if (!(iter = dev_iter_create(cmd->filter, 1))) {
+		log_error("dev_iter creation failed");
+		return ECMD_FAILED;
+	}
+
+	while ((dev = dev_iter_get(iter))) {
+		if (!(devl = dm_pool_alloc(cmd->mem, sizeof(*devl)))) {
+			log_error("device_list alloc failed");
+			return ECMD_FAILED;
+		}
+
+		devl->dev = dev;
+		dm_list_add(all_devs, &devl->list);
+	}
+
+	dev_iter_destroy(iter);
+
+	return ECMD_PROCESSED;
+}
+
+static void device_list_remove(struct dm_list *all_devs, struct device *dev)
+{
+	struct device_list *devl;
+
+	dm_list_iterate_items(devl, all_devs) {
+		if (devl->dev == dev) {
+			dm_list_del(&devl->list);
+			return;
+		}
+	}
+	/* internal error */
+	log_error("device_list_remove %s not found", dev_name(dev));
+}
+
+static int process_dev_list(struct cmd_context *cmd, struct dm_list *all_devs,
+			    void *handle, process_single_pv_fn_t process_single_pv)
+{
+	struct physical_volume pv_dummy;
+	struct physical_volume *pv;
+	struct device_list *devl;
+	int ret_max = ECMD_PROCESSED;
+	int ret = 0;
+
+	dm_list_iterate_items(devl, all_devs) {
+		memset(&pv_dummy, 0, sizeof(pv_dummy));
+		dm_list_init(&pv_dummy.tags);
+		dm_list_init(&pv_dummy.segments);
+		pv_dummy.dev = devl->dev;
+		pv = &pv_dummy;
+
+		log_debug("process_dev_list %s", dev_name(devl->dev));
+
+		ret = process_single_pv(cmd, NULL, pv, handle);
+
+		if (ret > ret_max)
+			ret_max = ret;
+		if (sigint_caught())
+			break;
+	}
+
+	return ECMD_PROCESSED;
+}
+
+static int process_pvs_in_vg(struct cmd_context *cmd,
+			     struct volume_group *vg,
+			     struct dm_list *all_devs,
+			     struct dm_list *arg_pvnames,
+			     struct dm_list *arg_tags,
+			     int process_all,
+			     void *handle,
+			     process_single_pv_fn_t process_single_pv)
+{
+	struct physical_volume *pv;
+	struct pv_list *pvl;
+	const char *pv_name;
+	int process_pv;
+	int ret_max = ECMD_PROCESSED;
+	int ret = 0;
+
+	dm_list_iterate_items(pvl, &vg->pvs) {
+		pv = pvl->pv;
+		pv_name = pv_dev_name(pv);
+
+		process_pv = 0;
+
+		/*
+		 * We cannot check for empty arg_tags and empty
+		 * arg_pvnames to determine process_all here because we
+		 * remove items from arg_pvnames as they are completed.
+		 */
+		if (process_all)
+			process_pv = 1;
+
+		if (!process_pv && !dm_list_empty(arg_pvnames) &&
+		    str_list_match_item(arg_pvnames, pv_name)) {
+			process_pv = 1;
+			str_list_del(arg_pvnames, pv_name);
+		}
+
+		if (!process_pv && !dm_list_empty(arg_tags) &&
+		    str_list_match_list(arg_tags, &pv->tags, NULL)) {
+			process_pv = 1;
+		}
+
+		if (process_pv) {
+			log_debug("process_pvs_in_vg vg %s pv %s",
+				  vg->name, pv_name);
+
+			if (all_devs)
+				device_list_remove(all_devs, pv->dev);
+
+			ret = process_single_pv(cmd, vg, pv, handle);
+
+			if (ret > ret_max)
+				ret_max = ret;
+		}
+
+		if (sigint_caught())
+			break;
+
+		/*
+		 * When processing only specific pv names, we can quit
+		 * once they've all been found.
+	 	 */
+		if (!process_all && dm_list_empty(arg_tags) && dm_list_empty(arg_pvnames))
+			break;
+	}
+
+	return ret_max;
+}
+
+/*
+ * Iterate through all pvs in each listed vg.  Process a pv if
+ * the name or tag matches arg_pvnames or arg_tags.  If both
+ * arg_pvnames and arg_tags are empty, then process all pvs.
+ *
+ * This removes items from arg_pvnames and all_devs when a pv
+ * is found.  Any names remaining in arg_pvnames were not found, and
+ * should produce an error.  Any devs remaining in all_devs were
+ * not found and should be processed by process_all_devs().
+ */
+
+static int process_pvs_in_vgs(struct cmd_context *cmd, uint32_t flags,
+			      struct dm_list *all_vgnames,
+			      struct dm_list *all_devs,
+			      struct dm_list *arg_pvnames,
+			      struct dm_list *arg_tags,
+			      int process_all,
+			      void *handle,
+			      process_single_pv_fn_t process_single_pv)
+{
+	struct volume_group *vg;
+	struct name_id_list *nl;
+	struct str_list *sl;
+	const char *vg_name;
+	const char *vg_uuid;
+	int ret_max = ECMD_PROCESSED;
+	int ret = 0;
+
+	dm_list_iterate_items(nl, all_vgnames) {
+		vg_name = nl->name;
+		vg_uuid = nl->uuid;
+
+		vg = vg_read(cmd, vg_name, vg_uuid, flags);
+		if (vg_read_error(vg)) {
+			if (!((flags & READ_ALLOW_INCONSISTENT) &&
+			    (vg_read_error(vg) == FAILED_INCONSISTENT))) {
+				ret_max = ECMD_FAILED;
+				release_vg(vg);
+				stack;
+				continue;
+			}
+		}
+
+		ret = process_pvs_in_vg(cmd, vg, all_devs, arg_pvnames, arg_tags,
+					process_all, handle, process_single_pv);
+
+		if (ret > ret_max)
+			ret_max = ret;
+
+		unlock_and_release_vg(cmd, vg, vg->name);
+
+		if (sigint_caught())
+			return ret_max;
+
+		/* quit early when possible */
+		if (!process_all && dm_list_empty(arg_tags) && dm_list_empty(arg_pvnames))
+			return ret_max;
+	}
+
+	/* command should return an error if a pvname arg was not found */
+
+	dm_list_iterate_items(sl, arg_pvnames) {
+		log_error("Failed to find physical volume \"%s\"", sl->str);
+		ret_max = ECMD_FAILED;
+	}
+
+	return ret_max;
+}
+
+int process_each_pv(struct cmd_context *cmd,
+		    int argc, char **argv,
+		    struct volume_group *vg,
+		    uint32_t flags,
+		    void *handle,
+		    process_single_pv_fn_t process_single_pv)
+{
+	struct dm_list arg_tags;    /* str_list */
+	struct dm_list arg_pvnames; /* str_list */
+	struct dm_list all_vgnames; /* name_id_list */
+	struct dm_list all_devs;    /* device_list */
+	int process_all_pvs;
+	int process_all_devs;
+	int ret_max = ECMD_PROCESSED;
+	int ret;
+
+	dm_list_init(&arg_tags);
+	dm_list_init(&arg_pvnames);
+	dm_list_init(&all_vgnames);
+	dm_list_init(&all_devs);
+
+	/*
+	 * Create two lists from argv:
+	 * arg_pvnames: pvs explicitly named in argv
+	 * arg_tags: tags explicitly named in argv
+	 */
+	ret = get_arg_pvnames(cmd, argc, argv, &arg_pvnames, &arg_tags);
+	if (ret != ECMD_PROCESSED)
+		return ret;
+
+	process_all_pvs = dm_list_empty(&arg_pvnames) && dm_list_empty(&arg_tags);
+
+	process_all_devs = process_all_pvs &&
+			   (cmd->command->flags & ENABLE_ALL_DEVS) &&
+			   arg_count(cmd, all_ARG);
+
+	/*
+	 * Caller has already selected, locked, and read one vg in which to
+	 * process pvs (all pvs, or named pvs, or pvs with matching tags).
+	 */
+	if (vg) {
+		return process_pvs_in_vg(cmd, vg, NULL,
+					 &arg_pvnames, &arg_tags, process_all_pvs,
+					 handle, process_single_pv);
+	}
+
+	/*
+	 * If the caller wants to process all devs (not only pvs), then all pvs
+	 * from all vgs are processed first, removing each from all_devs.  Then
+	 * any devs remaining in all_devs are processed.
+	 */
+	if (process_all_devs) {
+		ret = get_all_devs(cmd, &all_devs);
+		if (ret != ECMD_PROCESSED)
+			return ret;
+	}
+
+	ret = get_all_vgnames(cmd, &all_vgnames, 1);
+	if (ret != ECMD_PROCESSED)
+		return ret;
+
+	ret = process_pvs_in_vgs(cmd, flags, &all_vgnames,
+				 process_all_devs ? &all_devs : NULL,
+				 &arg_pvnames, &arg_tags, process_all_pvs,
+				 handle, process_single_pv);
+	if (ret > ret_max)
+		ret_max = ret;
+
+	if (sigint_caught())
+		goto out;
+
+	if (dm_list_empty(&all_devs))
+		goto out;
+
+	ret = process_dev_list(cmd, &all_devs, handle, process_single_pv);
+	if (ret > ret_max)
+		ret_max = ret;
+out:
+	return ret_max;
+}
+
+int process_each_pv_in_vg(struct cmd_context *cmd, struct volume_group *vg,
+			  void *handle, process_single_pv_fn_t process_single_pv)
+{
+	int ret_max = ECMD_PROCESSED;
+	int ret = 0;
+	struct pv_list *pvl;
+
+	dm_list_iterate_items(pvl, &vg->pvs) {
+		if (sigint_caught())
+			return_ECMD_FAILED;
+		if ((ret = process_single_pv(cmd, vg, pvl->pv, handle)) > ret_max)
+			ret_max = ret;
+	}
+
+	return ret_max;
 }
 
