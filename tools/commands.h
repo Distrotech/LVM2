@@ -672,7 +672,7 @@ xx(pvdata,
 
 xx(pvdisplay,
    "Display various attributes of physical volume(s)",
-   CACHE_VGMETADATA | PERMITTED_READ_ONLY,
+   CACHE_VGMETADATA | PERMITTED_READ_ONLY | ENABLE_ALL_DEVS,
    "pvdisplay\n"
    "\t[-c|--colon]\n"
    "\t[-d|--debug]\n"
@@ -754,7 +754,7 @@ xx(pvremove,
 
 xx(pvs,
    "Display information about physical volumes",
-   CACHE_VGMETADATA | PERMITTED_READ_ONLY | ENABLE_ALL_VGS,
+   CACHE_VGMETADATA | PERMITTED_READ_ONLY | ENABLE_ALL_VGS | ENABLE_ALL_DEVS,
    "pvs" "\n"
    "\t[-a|--all]\n"
    "\t[--aligned]\n"
