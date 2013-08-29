@@ -281,6 +281,36 @@ static int _loglv_disp(struct dm_report *rh, struct dm_pool *mem __attribute__((
 	return _field_set_value(field, "", NULL);
 }
 
+static int _vgname_disp(struct dm_report *rh, struct dm_pool *mem,
+			struct dm_report_field *field,
+			const void *data, void *private)
+{
+	const struct volume_group *vg = (const struct volume_group *) data;
+
+	if (!is_orphan_vg(vg->name))
+		return dm_report_field_string(rh, field, &vg->name);
+
+	return _field_set_value(field, "", NULL);
+}
+
+static int _vgsysid_disp(struct dm_report *rh, struct dm_pool *mem,
+			 struct dm_report_field *field,
+			 const void *data, void *private)
+{
+	const struct volume_group *vg = (const struct volume_group *) data;
+	const char *sysid;
+
+	if (!vg->system_id)
+		return _field_set_value(field, "", NULL);
+
+	if (!(sysid = dm_pool_strdup(mem, vg->system_id))) {
+		log_error("dm_pool_strdup failed");
+		return 0;
+	}
+
+	return dm_report_field_string(rh, field, &sysid);
+}
+
 static int _lvname_disp(struct dm_report *rh, struct dm_pool *mem,
 			struct dm_report_field *field,
 			const void *data, void *private __attribute__((unused)))
@@ -1148,7 +1178,10 @@ static void *_obj_get_vg(void *obj)
 {
 	struct volume_group *vg = ((struct lvm_report_object *)obj)->vg;
 
-	return vg ? vg : &_dummy_vg;
+	if (!vg || is_orphan_vg(vg->name))
+		return &_dummy_vg;
+
+	return vg;
 }
 
 static void *_obj_get_lv(void *obj)
@@ -1307,7 +1340,7 @@ int report_object(void *handle, struct volume_group *vg,
 	}
 
 	/* The two format fields might as well match. */
-	if (!vg && pv)
+	if ((!vg || is_orphan_vg(vg->name)) && pv)
 		_dummy_fid.fmt = pv->fmt;
 
 	return dm_report_object(handle, &obj);
