@@ -1542,8 +1542,8 @@ int process_each_lv_in_vg(struct cmd_context *cmd,
 	unsigned process_lv = 0;
 	unsigned tags_supplied = 0;
 	unsigned lvargs_supplied = 0;
-	unsigned lvargs_matched = 0;
 	struct lv_list *lvl;
+	struct str_list *sl;
 
 	if (!vg_check_status(vg, EXPORTED_VG))
 		return_ECMD_FAILED;
@@ -1563,6 +1563,9 @@ int process_each_lv_in_vg(struct cmd_context *cmd,
 	    str_list_match_list(tags, &vg->tags, NULL)) {
 		process_all = 1;
 	}
+
+	log_debug("process_each_lv_in_vg tags %d lvargs %d all %d",
+		  tags_supplied, lvargs_supplied, process_all);
 
 	/*
 	 * FIXME: In case of remove it goes through deleted entries,
@@ -1604,7 +1607,7 @@ int process_each_lv_in_vg(struct cmd_context *cmd,
 		if (lvargs_supplied &&
 		    str_list_match_item(arg_lvnames, lvl->lv->name)) {
 			process_lv = 1;
-			lvargs_matched++;
+			str_list_del(arg_lvnames, lvl->lv->name);
 		}
 
 		if (!process_lv)
@@ -1613,20 +1616,25 @@ int process_each_lv_in_vg(struct cmd_context *cmd,
 		if (sigint_caught())
 			return_ECMD_FAILED;
 
+		log_debug("process_each_lv_in_vg %s/%s", vg->name, lvl->lv->name);
+
 		ret = process_single_lv(cmd, lvl->lv, handle);
 
 		if (ret > ret_max)
 			ret_max = ret;
 	}
 
-	if (lvargs_supplied && lvargs_matched != dm_list_size(arg_lvnames)) {
+	if (lvargs_supplied) {
 		/*
 		 * FIXME: lvm supports removal of LV with all its dependencies
 		 * this leads to miscalculation that depends on the order of args.
 		 */
-		log_error("One or more specified logical volume(s) not found.");
-		if (ret_max < ECMD_FAILED)
-			ret_max = ECMD_FAILED;
+		dm_list_iterate_items(sl, arg_lvnames) {
+			log_error("Failed to find logical volume \"%s/%s\"",
+				  vg->name, sl->str);
+			if (ret_max < ECMD_FAILED)
+				ret_max = ECMD_FAILED;
+		}
 	}
 
 	return ret_max;
