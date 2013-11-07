@@ -239,6 +239,9 @@
 /* Define to 1 if libpcre is available. */
 #undef HAVE_PCRE
 
+/* Define to 1 if libpthread is available. */
+#undef HAVE_PTHREAD
+
 /* Define to 1 if you have the <pthread.h> header file. */
 #undef HAVE_PTHREAD_H
 
