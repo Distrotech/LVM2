@@ -1,0 +1,13 @@
+#!/bin/bash
+
+link_libs() {
+  rm ${3}/usr/${C_LIBDIRS}/${1}
+  ln -s ${1}.${2} ${3}/usr/${C_LIBDIRS}/${1}
+}
+
+for tofix in "libdevmapper-event.so 2.02" "libdevmapper.so 1.02" \
+             "libdevmapper-event.so 1.02" "liblvm2app.so 2.2" "liblvm2cmd.so 2.02" \
+             "libdevmapper-event-lvm2.so 2.02";do
+  link_libs ${tofix} ${3}
+done
+
