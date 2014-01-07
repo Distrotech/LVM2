@@ -72,4 +72,10 @@ progress_t poll_mirror_progress(struct cmd_context *cmd,
 				struct logical_volume *lv, const char *name,
 				struct daemon_parms *parms);
 
+void sleep_and_rescan_devices(struct daemon_parms *parms);
+
+int check_lv_status(struct cmd_context *cmd, struct volume_group *vg,
+		    struct logical_volume *lv, const char *name,
+		    struct daemon_parms *parms, int *finished);
+
 #endif

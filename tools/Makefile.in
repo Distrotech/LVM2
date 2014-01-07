@@ -38,6 +38,7 @@ SOURCES =\
 	pvcreate.c \
 	pvdisplay.c \
 	pvmove.c \
+	pvmove_core.c \
 	pvremove.c \
 	pvresize.c \
 	pvscan.c \
@@ -57,6 +58,7 @@ SOURCES =\
 	vgimport.c \
 	vgmerge.c \
 	vgmknodes.c \
+	vgpoll.c \
 	vgreduce.c \
 	vgremove.c \
 	vgrename.c \

@@ -890,6 +890,9 @@ static struct poll_functions _lvconvert_thin_merge_fns = {
 	.finish_copy = _finish_lvconvert_merge,
 };
 
+/*
+ * TODO: has to be part of lvmpolld interface
+ */
 int lvconvert_poll(struct cmd_context *cmd, struct logical_volume *lv,
 		   unsigned background)
 {

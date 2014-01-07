@@ -48,6 +48,8 @@ int become_daemon(struct cmd_context *cmd, int skip_lvm)
 
 	sigaction(SIGCHLD, &act, NULL);
 
+	/* okozina: hmm? */
+	/* reassure we have all /dev/ nodes ready w/ or w/0 udev */
 	if (!skip_lvm)
 		sync_local_dev_names(cmd); /* Flush ops and reset dm cookie */
 

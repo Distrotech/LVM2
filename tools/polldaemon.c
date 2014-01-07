@@ -49,7 +49,7 @@ progress_t poll_mirror_progress(struct cmd_context *cmd,
 	return PROGRESS_FINISHED_SEGMENT;
 }
 
-static int _check_lv_status(struct cmd_context *cmd,
+int check_lv_status(struct cmd_context *cmd,
 			    struct volume_group *vg,
 			    struct logical_volume *lv,
 			    const char *name, struct daemon_parms *parms,
@@ -105,7 +105,7 @@ static int _check_lv_status(struct cmd_context *cmd,
 	return 1;
 }
 
-static void _sleep_and_rescan_devices(struct daemon_parms *parms)
+void sleep_and_rescan_devices(struct daemon_parms *parms)
 {
 	/* FIXME Use alarm for regular intervals instead */
 	if (parms->interval && !parms->aborting) {
@@ -125,7 +125,7 @@ static int _wait_for_single_lv(struct cmd_context *cmd, const char *name, const 
 	/* Poll for completion */
 	while (!finished) {
 		if (parms->wait_before_testing)
-			_sleep_and_rescan_devices(parms);
+			sleep_and_rescan_devices(parms);
 
 		/* Locks the (possibly renamed) VG again */
 		vg = parms->poll_fns->get_copy_vg(cmd, name, uuid);
@@ -162,7 +162,7 @@ static int _wait_for_single_lv(struct cmd_context *cmd, const char *name, const 
 			return 1;
 		}
 
-		if (!_check_lv_status(cmd, vg, lv, name, parms, &finished)) {
+		if (!check_lv_status(cmd, vg, lv, name, parms, &finished)) {
 			unlock_and_release_vg(cmd, vg, vg->name);
 			return_0;
 		}
@@ -172,7 +172,7 @@ static int _wait_for_single_lv(struct cmd_context *cmd, const char *name, const 
 		/*
 		 * FIXME Sleeping after testing, while preferred, also works around
 		 * unreliable "finished" state checking in _percent_run.  If the
-		 * above _check_lv_status is deferred until after the first sleep it
+		 * above check_lv_status is deferred until after the first sleep it
 		 * may be that a polldaemon will run without ever completing.
 		 *
 		 * This happens when one snapshot-merge polldaemon is racing with
@@ -182,7 +182,7 @@ static int _wait_for_single_lv(struct cmd_context *cmd, const char *name, const 
 		 * continue polling an LV that doesn't have a "status".
 		 */
 		if (!parms->wait_before_testing)
-			_sleep_and_rescan_devices(parms);
+			sleep_and_rescan_devices(parms);
 	}
 
 	return 1;
@@ -217,7 +217,7 @@ static int _poll_vg(struct cmd_context *cmd, const char *vgname,
 			continue;
 		}
 
-		if (_check_lv_status(cmd, vg, lv, name, parms, &finished) &&
+		if (check_lv_status(cmd, vg, lv, name, parms, &finished) &&
 		    !finished)
 			parms->outstanding_count++;
 	}
@@ -315,4 +315,9 @@ int poll_daemon(struct cmd_context *cmd, const char *name, const char *uuid,
 	}
 
 	return ret;
+}
+
+inline int poll_vg(struct cmd_context *cmd, const char *vgname, struct volume_group *vg, void *handle)
+{
+	return _poll_vg(cmd, vgname, vg, handle);
 }
