@@ -678,6 +678,9 @@ static int _set_up_pvmove(struct cmd_context *cmd, const char *pv_name,
 			goto_out;
 	}
 
+	if (!(*vgid = id_format_and_copy(cmd->mem, &vg->id)))
+		goto out;
+
 	/* Lock lvs_changed and activate (with old metadata) */
 	if (!activate_lvs(cmd, lvs_changed, exclusive))
 		goto_out;

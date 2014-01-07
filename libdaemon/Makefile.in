@@ -19,7 +19,7 @@ top_builddir = @top_builddir@
 
 SUBDIRS += client
 
-ifeq ("@BUILD_LVMETAD@", "yes")
+ifeq ("yes", $(filter "yes","@BUILD_LVMETAD@" "@BUILD_LVMPOLLD@"))
   SUBDIRS += server
 server: client
 endif

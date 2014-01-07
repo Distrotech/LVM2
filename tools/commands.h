@@ -880,6 +880,21 @@ xx(pvmove,
    abort_ARG, alloc_ARG, atomic_ARG, autobackup_ARG, background_ARG,
    interval_ARG, name_ARG, noudevsync_ARG, test_ARG)
 
+xx(vgpoll,
+   "Poll operation initiated before by either pvmove or lvconvert",
+   ALL_VGS_IS_DEFAULT, /* same reason as above */
+   "\t[--abort]\n"
+   "\t[-d|--debug]\n "
+   "\t[-h|-?|--help]\n"
+   "\t[-i|--interval seconds]\n"
+   "\t[--noudevsync]\n"
+   "\t[-t|--test]\n "
+   "\t[-v|--verbose]\n "
+   "\t[--version]\n"
+   "\t[-u|--uuid VG uuid]\n",
+
+   abort_ARG, interval_ARG, noudevsync_ARG, test_ARG, uuid_ARG)
+
 xx(pvremove,
    "Remove LVM label(s) from physical volume(s)",
    0,

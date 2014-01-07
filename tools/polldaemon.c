@@ -168,7 +168,7 @@ int wait_for_single_lv(struct cmd_context *cmd, struct poll_operation_id *id,
 	/* Poll for completion */
 	while (!finished) {
 		if (parms->wait_before_testing)
-			_sleep_and_rescan_devices(parms);
+			sleep_and_rescan_devices(parms);
 
 		/* Locks the (possibly renamed) VG again */
 		vg = parms->poll_fns->get_copy_vg(cmd, id->vg_name, NULL, READ_FOR_UPDATE);
@@ -215,7 +215,7 @@ int wait_for_single_lv(struct cmd_context *cmd, struct poll_operation_id *id,
 		/*
 		 * FIXME Sleeping after testing, while preferred, also works around
 		 * unreliable "finished" state checking in _percent_run.  If the
-		 * above _check_lv_status is deferred until after the first sleep it
+		 * above check_lv_status is deferred until after the first sleep it
 		 * may be that a polldaemon will run without ever completing.
 		 *
 		 * This happens when one snapshot-merge polldaemon is racing with

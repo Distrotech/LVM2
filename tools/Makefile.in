@@ -59,6 +59,7 @@ SOURCES =\
 	vgimport.c \
 	vgmerge.c \
 	vgmknodes.c \
+	vgpoll.c \
 	vgreduce.c \
 	vgremove.c \
 	vgrename.c \
