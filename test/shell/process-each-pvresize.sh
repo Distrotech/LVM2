@@ -230,10 +230,10 @@ pvresize --setphysicalvolumesize $old_request $dev10 $dev2 $dev3 $dev4 $dev5 $de
 
 old_request="30.00m"
 old_reduced="28.00m"
-old_orphan="29.00m"
+old_orphan="30.00m"
 new_request="20.00m"
 new_reduced="16.00m"
-new_orphan="19.00m"
+new_orphan="20.00m"
 
 pvresize --setphysicalvolumesize $old_request $dev10 $dev2 $dev3 $dev4 $dev5 $dev6 $dev7 $dev8 $dev9
 pvresize --setphysicalvolumesize $old_request $dev11 $dev14
