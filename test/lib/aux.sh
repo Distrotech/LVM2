@@ -34,13 +34,23 @@ prepare_clvmd() {
 	# lvs is executed from clvmd - use our version
 	export LVM_BINARY=$(which lvm)
 
+	cp -R $LVM_SYSTEM_DIR $LVM_SYSTEM_DIR-x
+	lvmconf "log/file = \"debug-clvmd.txt\""
+	tail -F debug-clvmd.txt &
+	echo $! > CLVMD_TAIL
+
+	mv $LVM_SYSTEM_DIR $LVM_SYSTEM_DIR-clvmd
+	mv $LVM_SYSTEM_DIR-x $LVM_SYSTEM_DIR
+
+	export LVM_SYSTEM_DIR="$TESTDIR/etc-clvmd"
+
 	# skip if we singlenode is not compiled in
 	(clvmd --help 2>&1 | grep "Available cluster managers" | grep "singlenode") || skip
 
 #	lvmconf "activation/monitoring = 1"
 	local run_valgrind=
 	test -z "$LVM_VALGRIND_CLVMD" || run_valgrind="run_valgrind"
-	$run_valgrind lib/clvmd -Isinglenode -d 1 -f &
+	lib/clvmd -Isinglenode -d 1 -f &
 	local local_clvmd=$!
 	sleep .3
 	# extra sleep for slow valgrind
@@ -205,6 +215,7 @@ teardown() {
 		test -z "$LVM_VALGRIND_CLVMD" || sleep 1
 		sleep .1
 		kill -9 "$(cat LOCAL_CLVMD)" &>/dev/null || true
+		kill -9 "$(cat CLVMD_TAIL)" &>/dev/null || true
 	}
 
 	echo -n .
