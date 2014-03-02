@@ -44,6 +44,9 @@ prepare_clvmd() {
 
 	export LVM_SYSTEM_DIR="$TESTDIR/etc-clvmd"
 
+	find /dev
+	ls -hl /dev/mapper
+
 	# skip if we singlenode is not compiled in
 	(clvmd --help 2>&1 | grep "Available cluster managers" | grep "singlenode") || skip
 
@@ -415,6 +418,8 @@ disable_dev() {
 		notify_lvmetad --major "$maj" --minor "$min"
 	done
 	finish_udev_transaction
+	find /dev
+	ls -hl /dev/mapper
 }
 
 enable_dev() {
