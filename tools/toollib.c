@@ -1210,6 +1210,35 @@ struct name_id_list {
 	const char *uuid;
 };
 
+/*
+ * Find an item in the list that matches name and/or uuid.
+ * name or uuid may be NULL.  If both are provided, match both.
+ */
+
+static int name_id_list_match_item(const struct dm_list *nll,
+				   const char *name, const struct id *uuid)
+{
+	struct name_id_list *nl;
+
+	if (!name && !uuid)
+		return 0;
+
+	dm_list_iterate_items(nl, nll) {
+		if (nl->name && name && name[0]) {
+			if (strcmp(nl->name, name))
+				continue;
+		}
+
+		if (nl->uuid && uuid && uuid->uuid[0]) {
+			if (!id_equal((const struct id *)nl->uuid, uuid))
+				continue;
+		}
+
+		return 1;
+	}
+	return 0;
+}
+
 static int get_arg_vgnames(struct cmd_context *cmd,
 			   int argc, char **argv,
 			   struct dm_list *arg_vgnames,
@@ -1305,6 +1334,7 @@ out:
 static int process_vg_name_list(struct cmd_context *cmd, uint32_t flags,
 				struct dm_list *use_vgnames,
 				struct dm_list *arg_vgnames,
+				struct dm_list *arg_vguuids,
 				struct dm_list *arg_tags,
 				void *handle,
 				process_single_vg_fn_t process_single_vg)
@@ -1318,7 +1348,9 @@ static int process_vg_name_list(struct cmd_context *cmd, uint32_t flags,
 	int process_all = 0;
 	int process_vg;
 
-	if (dm_list_empty(arg_vgnames) && dm_list_empty(arg_tags))
+	if (dm_list_empty(arg_vgnames) &&
+	    dm_list_empty(arg_vguuids) &&
+	    dm_list_empty(arg_tags))
 		process_all = 1;
 
 	dm_list_iterate_items(nl, use_vgnames) {
@@ -1346,6 +1378,10 @@ static int process_vg_name_list(struct cmd_context *cmd, uint32_t flags,
 
 		if (!process_vg && !dm_list_empty(arg_tags) &&
 		    str_list_match_list(arg_tags, &vg->tags, NULL))
+			process_vg = 1;
+
+		if (!process_vg && !dm_list_empty(arg_vguuids) &&
+		    name_id_list_match_item(arg_vguuids, vg->name, &vg->id))
 			process_vg = 1;
 
 		if (process_vg)
@@ -1390,6 +1426,48 @@ static int copy_str_to_name_list(struct cmd_context *cmd,
 	return ECMD_PROCESSED;
 }
 
+/*
+ * If the vg name (from command args) is actually a vg uuid,
+ * then remove it from arg_vgnames, and add it to arg_vguuids.
+ *
+ * arg_vgnames is a str_list, arg_vguuids is a name_id_list
+ *
+ * The format of the uuid arg contains dashes, but internal
+ * uuid strings do not.
+ */
+
+static int get_arg_vguuids(struct cmd_context *cmd,
+			   struct dm_list *arg_vgnames,
+			   struct dm_list *arg_vguuids)
+{
+	const char *name;
+	struct str_list *sl, *sl_safe;
+	struct name_id_list *nl;
+	struct id uuid;
+
+	dm_list_iterate_items_safe(sl, sl_safe, arg_vgnames) {
+		name = sl->str;
+
+		/* does not copy "-" chars from name to uuid */
+		if (!id_test_format(&uuid, name))
+			continue;
+
+		dm_list_del(&sl->list);
+
+		nl = dm_pool_alloc(cmd->mem, sizeof(struct name_id_list));
+		if (!nl) {
+			log_error("name_id_list allocation failed");
+			return ECMD_FAILED;
+		}
+
+		nl->name = NULL;
+		nl->uuid = dm_pool_strdup(cmd->mem, (char *)uuid.uuid);
+
+		dm_list_add(arg_vguuids, &nl->list);
+	}
+	return ECMD_PROCESSED;
+}
+
 int process_each_vg(struct cmd_context *cmd,
 		    int argc, char **argv, uint32_t flags,
 		    void *handle,
@@ -1397,6 +1475,7 @@ int process_each_vg(struct cmd_context *cmd,
 {
 	struct dm_list arg_tags;    /* str_list */
 	struct dm_list arg_vgnames; /* str_list */
+	struct dm_list arg_vguuids; /* name_id_list */
 	struct dm_list all_vgnames; /* name_id_list */
 	struct dm_list use_vgnames; /* name_id_list */
 	int enable_all_vgs = (cmd->command->flags & ENABLE_ALL_VGS);
@@ -1404,6 +1483,7 @@ int process_each_vg(struct cmd_context *cmd,
 
 	dm_list_init(&arg_tags);
 	dm_list_init(&arg_vgnames);
+	dm_list_init(&arg_vguuids);
 	dm_list_init(&all_vgnames);
 	dm_list_init(&use_vgnames);
 
@@ -1411,8 +1491,23 @@ int process_each_vg(struct cmd_context *cmd,
 	if (ret != ECMD_PROCESSED)
 		return ret;
 
+	ret = get_arg_vguuids(cmd, &arg_vgnames, &arg_vguuids);
+	if (ret != ECMD_PROCESSED)
+		return ret;
+
+	/*
+	 * Cases were all vg names are needed:
+	 * - There are no vg names specified and the command
+	 *   wants to process all when none are named.
+	 * - There are tags specified, which means all vgs must
+	 *   be read and checked to see if they have a matching tag.
+	 * - There are vg uuids specified, which means all vgs must
+	 *   be read and checked to see if they have a matching uuid.
+	 */
+
 	if ((dm_list_empty(&arg_vgnames) && enable_all_vgs) ||
-	    !dm_list_empty(&arg_tags)) {
+	    !dm_list_empty(&arg_tags) ||
+	    !dm_list_empty(&arg_vguuids)) {
 		ret = get_all_vgnames(cmd, &all_vgnames, 0);
 		if (ret != ECMD_PROCESSED)
 			return ret;
@@ -1432,7 +1527,7 @@ int process_each_vg(struct cmd_context *cmd,
 	}
 
 	ret = process_vg_name_list(cmd, flags, &use_vgnames,
-				   &arg_vgnames, &arg_tags,
+				   &arg_vgnames, &arg_vguuids, &arg_tags,
 				   handle, process_single_vg);
 	return ret;
 }
