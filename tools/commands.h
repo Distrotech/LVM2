@@ -1024,7 +1024,7 @@ xx(vgextend,
 
 xx(vgimport,
    "Register exported volume group with system",
-   0,
+   ENABLE_ALL_VGS,
    "vgimport " "\n"
    "\t[-a|--all]\n"
    "\t[-d|--debug] " "\n"
