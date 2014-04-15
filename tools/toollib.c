@@ -1438,7 +1438,7 @@ int process_each_vg(struct cmd_context *cmd,
 int process_each_lv_in_vg(struct cmd_context *cmd,
 			  struct volume_group *vg,
 			  struct dm_list *arg_lvnames,
-			  const struct dm_list *tags,
+			  const struct dm_list *tags_in,
 			  void *handle,
 			  process_single_lv_fn_t process_single_lv)
 {
@@ -1454,7 +1454,7 @@ int process_each_lv_in_vg(struct cmd_context *cmd,
 	if (!vg_check_status(vg, EXPORTED_VG))
 		return_ECMD_FAILED;
 
-	if (tags && !dm_list_empty(tags))
+	if (tags_in && !dm_list_empty(tags_in))
 		tags_supplied = 1;
 
 	if (arg_lvnames && !dm_list_empty(arg_lvnames))
@@ -1466,7 +1466,7 @@ int process_each_lv_in_vg(struct cmd_context *cmd,
 
 	/* Or if VG tags match */
 	if (!process_lv && tags_supplied &&
-	    str_list_match_list(tags, &vg->tags, NULL)) {
+	    str_list_match_list(tags_in, &vg->tags, NULL)) {
 		process_all = 1;
 	}
 
@@ -1502,7 +1502,7 @@ int process_each_lv_in_vg(struct cmd_context *cmd,
 
 		/* LV tag match? */
 		if (!process_lv && tags_supplied &&
-		    str_list_match_list(tags, &lvl->lv->tags, NULL)) {
+		    str_list_match_list(tags_in, &lvl->lv->tags, NULL)) {
 			process_lv = 1;
 		}
 
