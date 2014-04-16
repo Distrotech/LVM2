@@ -710,8 +710,9 @@ xx(pvdisplay,
    options_ARG, separator_ARG, short_ARG, sort_ARG, unbuffered_ARG, units_ARG)
 
 /*
- * pvmove needs ALL_VGS_IS_DEFAULT because it calls polldaemon which
- * calls process_each_vg to find work.
+ * When pvmove is called with no PV arguments, the polldaemon uses
+ * process_each_vg to search all VGs for pvmoves still in progress.
+ * This search of all vgs requires ALL_VGS_IS_DEFAULT.
  */
 
 xx(pvmove,
