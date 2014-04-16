@@ -1397,7 +1397,7 @@ int process_each_vg(struct cmd_context *cmd,
 	struct dm_list arg_vgnames; /* str_list */
 	struct dm_list all_vgnames; /* name_id_list */
 	struct dm_list use_vgnames; /* name_id_list */
-	int enable_all_vgs = (cmd->command->flags & ENABLE_ALL_VGS);
+	int default_all_vgs = (cmd->command->flags & ALL_VGS_IS_DEFAULT);
 	int ret;
 
 	dm_list_init(&arg_tags);
@@ -1409,7 +1409,7 @@ int process_each_vg(struct cmd_context *cmd,
 	if (ret != ECMD_PROCESSED)
 		return ret;
 
-	if ((dm_list_empty(&arg_vgnames) && enable_all_vgs) ||
+	if ((dm_list_empty(&arg_vgnames) && default_all_vgs) ||
 	    !dm_list_empty(&arg_tags)) {
 		ret = get_all_vgnames(cmd, &all_vgnames, 0);
 		if (ret != ECMD_PROCESSED)
@@ -1733,7 +1733,7 @@ int process_each_lv(struct cmd_context *cmd,
 	struct dm_list arg_lvnames; /* str_list */
 	struct dm_list all_vgnames; /* name_id_list */
 	struct dm_list use_vgnames; /* name_id_list */
-	int enable_all_vgs = (cmd->command->flags & ENABLE_ALL_VGS);
+	int default_all_vgs = (cmd->command->flags & ALL_VGS_IS_DEFAULT);
 	int ret;
 
 	dm_list_init(&arg_tags);
@@ -1747,7 +1747,7 @@ int process_each_lv(struct cmd_context *cmd,
 	if (ret != ECMD_PROCESSED)
 		return ret;
 
-	if ((dm_list_empty(&arg_vgnames) && enable_all_vgs) ||
+	if ((dm_list_empty(&arg_vgnames) && default_all_vgs) ||
 	    !dm_list_empty(&arg_tags)) {
 		ret = get_all_vgnames(cmd, &all_vgnames, 0);
 		if (ret != ECMD_PROCESSED)
