@@ -324,7 +324,7 @@ xx(lvcreate,
 
 xx(lvdisplay,
    "Display information about a logical volume",
-   PERMITTED_READ_ONLY | ENABLE_ALL_VGS,
+   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT,
    "lvdisplay\n"
    "\t[-a|--all]\n"
    "\t[-c|--colon]\n"
@@ -525,7 +525,7 @@ xx(lvresize,
 
 xx(lvs,
    "Display information about logical volumes",
-   PERMITTED_READ_ONLY | ENABLE_ALL_VGS,
+   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT,
    "lvs" "\n"
    "\t[-a|--all]\n"
    "\t[--aligned]\n"
@@ -558,7 +558,7 @@ xx(lvs,
 
 xx(lvscan,
    "List all logical volumes in all volume groups",
-   PERMITTED_READ_ONLY | ENABLE_ALL_VGS,
+   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT,
    "lvscan " "\n"
    "\t[-a|--all]\n"
    "\t[-b|--blockdevice] " "\n"
@@ -710,13 +710,13 @@ xx(pvdisplay,
    options_ARG, separator_ARG, short_ARG, sort_ARG, unbuffered_ARG, units_ARG)
 
 /*
- * pvmove needs ENABLE_ALL_VGS because it calls polldaemon which
+ * pvmove needs ALL_VGS_IS_DEFAULT because it calls polldaemon which
  * calls process_each_vg to find work.
  */
 
 xx(pvmove,
    "Move extents from one physical volume to another",
-   ENABLE_ALL_VGS,
+   ALL_VGS_IS_DEFAULT,
    "pvmove " "\n"
    "\t[--abort]\n"
    "\t[-A|--autobackup {y|n}]\n"
@@ -754,7 +754,7 @@ xx(pvremove,
 
 xx(pvs,
    "Display information about physical volumes",
-   CACHE_VGMETADATA | PERMITTED_READ_ONLY | ENABLE_ALL_VGS | ENABLE_ALL_DEVS,
+   CACHE_VGMETADATA | PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT | ENABLE_ALL_DEVS,
    "pvs" "\n"
    "\t[-a|--all]\n"
    "\t[--aligned]\n"
@@ -816,7 +816,7 @@ xx(tags,
 
 xx(vgcfgbackup,
    "Backup volume group configuration(s)",
-   PERMITTED_READ_ONLY | ENABLE_ALL_VGS,
+   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT,
    "vgcfgbackup " "\n"
    "\t[-d|--debug] " "\n"
    "\t[-f|--file filename] " "\n"
@@ -848,7 +848,7 @@ xx(vgcfgrestore,
 
 xx(vgchange,
    "Change volume group attributes",
-   CACHE_VGMETADATA | PERMITTED_READ_ONLY | ENABLE_ALL_VGS,
+   CACHE_VGMETADATA | PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT,
    "vgchange" "\n"
    "\t[-A|--autobackup {y|n}] " "\n"
    "\t[--alloc AllocationPolicy] " "\n"
@@ -892,7 +892,7 @@ xx(vgchange,
 
 xx(vgck,
    "Check the consistency of volume group(s)",
-   ENABLE_ALL_VGS,
+   ALL_VGS_IS_DEFAULT,
    "vgck "
    "\t[-d|--debug]\n"
    "\t[-h|--help]\n"
@@ -950,7 +950,7 @@ xx(vgcreate,
 
 xx(vgdisplay,
    "Display volume group information",
-   PERMITTED_READ_ONLY | ENABLE_ALL_VGS,
+   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT,
    "vgdisplay " "\n"
    "\t[-A|--activevolumegroups]" "\n"
    "\t[-c|--colon | -s|--short | -v|--verbose]" "\n"
@@ -989,7 +989,7 @@ xx(vgdisplay,
 
 xx(vgexport,
    "Unregister volume group(s) from the system",
-   ENABLE_ALL_VGS,
+   ALL_VGS_IS_DEFAULT,
    "vgexport " "\n"
    "\t[-a|--all] " "\n"
    "\t[-d|--debug] " "\n"
@@ -1024,7 +1024,7 @@ xx(vgextend,
 
 xx(vgimport,
    "Register exported volume group with system",
-   ENABLE_ALL_VGS,
+   ALL_VGS_IS_DEFAULT,
    "vgimport " "\n"
    "\t[-a|--all]\n"
    "\t[-d|--debug] " "\n"
@@ -1054,7 +1054,7 @@ xx(vgmerge,
 
 xx(vgmknodes,
    "Create the special files for volume group devices in /dev",
-   ENABLE_ALL_VGS,
+   ALL_VGS_IS_DEFAULT,
    "vgmknodes\n"
    "\t[-d|--debug]\n"
    "\t[-h|--help]\n"
@@ -1118,7 +1118,7 @@ xx(vgrename,
 
 xx(vgs,
    "Display information about volume groups",
-   PERMITTED_READ_ONLY | ENABLE_ALL_VGS,
+   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT,
    "vgs" "\n"
    "\t[--aligned]\n"
    "\t[-a|--all]\n"
@@ -1150,7 +1150,7 @@ xx(vgs,
 
 xx(vgscan,
    "Search for all volume groups",
-   PERMITTED_READ_ONLY | ENABLE_ALL_VGS,
+   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT,
    "vgscan "
    "\t[--cache]\n"
    "\t[-d|--debug]\n"
