@@ -286,6 +286,18 @@ static int _loglv_disp(struct dm_report *rh, struct dm_pool *mem __attribute__((
 	return _field_set_value(field, "", NULL);
 }
 
+static int _vgname_disp(struct dm_report *rh, struct dm_pool *mem,
+			struct dm_report_field *field,
+			const void *data, void *private)
+{
+	const struct volume_group *vg = (const struct volume_group *) data;
+
+	if (!is_orphan_vg(vg->name))
+		return dm_report_field_string(rh, field, &vg->name);
+
+	return _field_set_value(field, "", NULL);
+}
+
 static int _lvname_disp(struct dm_report *rh, struct dm_pool *mem,
 			struct dm_report_field *field,
 			const void *data, void *private __attribute__((unused)))

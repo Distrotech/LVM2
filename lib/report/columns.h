@@ -88,7 +88,7 @@ FIELD(PVS, pv, NUM, "BA size", ba_size, 7, size64, pv_ba_size, "Size of PV Bootl
 
 FIELD(VGS, vg, STR, "Fmt", cmd, 3, vgfmt, vg_fmt, "Type of metadata.", 0)
 FIELD(VGS, vg, STR, "VG UUID", id, 38, uuid, vg_uuid, "Unique identifier.", 0)
-FIELD(VGS, vg, STR, "VG", name, 4, string, vg_name, "Name.", 0)
+FIELD(VGS, vg, STR, "VG", cmd, 4, vgname, vg_name, "Name.", 0)
 FIELD(VGS, vg, STR, "Attr", cmd, 5, vgstatus, vg_attr, "Various attributes - see man page.", 0)
 FIELD(VGS, vg, NUM, "VSize", cmd, 5, vgsize, vg_size, "Total size of VG in current units.", 0)
 FIELD(VGS, vg, NUM, "VFree", cmd, 5, vgfree, vg_free, "Total amount of free space in current units.", 0)
