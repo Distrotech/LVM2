@@ -2032,6 +2032,7 @@ int process_each_pv(struct cmd_context *cmd,
 	struct dm_list arg_pvnames; /* str_list */
 	struct dm_list all_vgnames; /* name_id_list */
 	struct dm_list all_devs;    /* device_list */
+	struct str_list *sl;
 	int process_all_pvs;
 	int process_all_devs;
 	int ret_max = ECMD_PROCESSED;
@@ -2062,9 +2063,16 @@ int process_each_pv(struct cmd_context *cmd,
 	 * process pvs (all pvs, or named pvs, or pvs with matching tags).
 	 */
 	if (vg) {
-		return process_pvs_in_vg(cmd, vg, NULL,
-					 &arg_pvnames, &arg_tags, process_all_pvs,
-					 handle, process_single_pv);
+		ret = process_pvs_in_vg(cmd, vg, NULL,
+					&arg_pvnames, &arg_tags, process_all_pvs,
+					handle, process_single_pv);
+
+		dm_list_iterate_items(sl, &arg_pvnames) {
+			log_error("Physical Volume \"%s\" not found in Volume Group \"%s\"",
+				  sl->str, vg->name);
+			ret = ECMD_FAILED;
+		}
+		return ret;
 	}
 
 	/*
