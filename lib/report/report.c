@@ -298,6 +298,24 @@ static int _vgname_disp(struct dm_report *rh, struct dm_pool *mem,
 	return _field_set_value(field, "", NULL);
 }
 
+static int _vgsysid_disp(struct dm_report *rh, struct dm_pool *mem,
+			 struct dm_report_field *field,
+			 const void *data, void *private)
+{
+	const struct volume_group *vg = (const struct volume_group *) data;
+	const char *sysid;
+
+	if (!vg->system_id)
+		return _field_set_value(field, "", NULL);
+
+	if (!(sysid = dm_pool_strdup(mem, vg->system_id))) {
+		log_error("dm_pool_strdup failed");
+		return 0;
+	}
+
+	return dm_report_field_string(rh, field, &sysid);
+}
+
 static int _lvname_disp(struct dm_report *rh, struct dm_pool *mem,
 			struct dm_report_field *field,
 			const void *data, void *private __attribute__((unused)))
