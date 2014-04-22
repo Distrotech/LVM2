@@ -1262,13 +1262,27 @@ static int get_arg_vgnames(struct cmd_context *cmd,
  */
 
 static int get_all_vgnames(struct cmd_context *cmd, struct dm_list *all_vgnames,
-			   int include_orphan)
+			   const char *one_vgname, int include_orphan)
 {
 	int ret_max = ECMD_PROCESSED;
 	struct name_id_list *nl;
 	struct dm_list *vgids;
 	struct dm_str_list *sl;
 	const char *vgid;
+
+	if (one_vgname) {
+		nl = dm_pool_alloc(cmd->mem, sizeof(struct name_id_list));
+		if (!nl) {
+			log_error("name_id_list allocation failed");
+			return ECMD_FAILED;
+		}
+
+		nl->name = dm_pool_strdup(cmd->mem, one_vgname);
+		nl->uuid = NULL;
+
+		dm_list_add(all_vgnames, &nl->list);
+		return ret_max;
+	}
 
 	log_verbose("Finding all volume groups");
 
@@ -1411,7 +1425,7 @@ int process_each_vg(struct cmd_context *cmd,
 
 	if ((dm_list_empty(&arg_vgnames) && enable_all_vgs) ||
 	    !dm_list_empty(&arg_tags)) {
-		ret = get_all_vgnames(cmd, &all_vgnames, 0);
+		ret = get_all_vgnames(cmd, &all_vgnames, NULL, 0);
 		if (ret != ECMD_PROCESSED)
 			return ret;
 	}
@@ -1749,7 +1763,7 @@ int process_each_lv(struct cmd_context *cmd,
 
 	if ((dm_list_empty(&arg_vgnames) && enable_all_vgs) ||
 	    !dm_list_empty(&arg_tags)) {
-		ret = get_all_vgnames(cmd, &all_vgnames, 0);
+		ret = get_all_vgnames(cmd, &all_vgnames, NULL, 0);
 		if (ret != ECMD_PROCESSED)
 			return ret;
 	}
@@ -2031,7 +2045,7 @@ static int process_pvs_in_vgs(struct cmd_context *cmd, uint32_t flags,
 
 int process_each_pv(struct cmd_context *cmd,
 		    int argc, char **argv,
-		    struct volume_group *vg,
+		    const char *vg_name,
 		    uint32_t flags,
 		    void *handle,
 		    process_single_pv_fn_t process_single_pv)
@@ -2040,7 +2054,6 @@ int process_each_pv(struct cmd_context *cmd,
 	struct dm_list arg_pvnames; /* str_list */
 	struct dm_list all_vgnames; /* name_id_list */
 	struct dm_list all_devs;    /* device_list */
-	struct dm_str_list *sl;
 	int process_all_pvs;
 	int process_all_devs;
 	int ret_max = ECMD_PROCESSED;
@@ -2067,23 +2080,6 @@ int process_each_pv(struct cmd_context *cmd,
 			   arg_count(cmd, all_ARG);
 
 	/*
-	 * Caller has already selected, locked, and read one vg in which to
-	 * process pvs (all pvs, or named pvs, or pvs with matching tags).
-	 */
-	if (vg) {
-		ret = process_pvs_in_vg(cmd, vg, NULL,
-					&arg_pvnames, &arg_tags, process_all_pvs,
-					handle, process_single_pv);
-
-		dm_list_iterate_items(sl, &arg_pvnames) {
-			log_error("Physical Volume \"%s\" not found in Volume Group \"%s\"",
-				  sl->str, vg->name);
-			ret = ECMD_FAILED;
-		}
-		return ret;
-	}
-
-	/*
 	 * If the caller wants to process all devs (not only pvs), then all pvs
 	 * from all vgs are processed first, removing each from all_devs.  Then
 	 * any devs remaining in all_devs are processed.
@@ -2094,7 +2090,7 @@ int process_each_pv(struct cmd_context *cmd,
 			return ret;
 	}
 
-	ret = get_all_vgnames(cmd, &all_vgnames, 1);
+	ret = get_all_vgnames(cmd, &all_vgnames, vg_name, 1);
 	if (ret != ECMD_PROCESSED)
 		return ret;
 
