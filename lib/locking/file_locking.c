@@ -273,7 +273,7 @@ static int _file_lock_resource(struct cmd_context *cmd, const char *resource,
 	switch (flags & LCK_SCOPE_MASK) {
 	case LCK_VG:
 		/* Skip cache refresh for VG_GLOBAL - the caller handles it */
-		if (strcmp(resource, VG_GLOBAL))
+		if (!is_orphan_vg(resource) && !is_global_vg(resource))
 			lvmcache_drop_metadata(resource, 0);
 
 		if (!strcmp(resource, VG_SYNC_NAMES))

@@ -2836,6 +2836,7 @@ static int _vg_read_orphan_pv(struct lvmcache_info *info, void *baton)
 }
 
 /* Make orphan PVs look like a VG. */
+/* For accurate results for PVs without mdas, always read all real VGs first. */
 static struct volume_group *_vg_read_orphans(struct cmd_context *cmd,
 					     uint32_t warn_flags,
 					     const char *orphan_vgname)
@@ -2848,6 +2849,8 @@ static struct volume_group *_vg_read_orphans(struct cmd_context *cmd,
 	struct pv_list head;
 
 	dm_list_init(&head.list);
+
+	/* If already scanned, assume all real VGs read and cache up-to-date. */
 	lvmcache_label_scan(cmd, 0);
 	lvmcache_seed_infos_from_lvmetad(cmd);
 
@@ -3085,7 +3088,7 @@ static struct volume_group *_vg_read(struct cmd_context *cmd,
 	/* Find the vgname in the cache */
 	/* If it's not there we must do full scan to be completely sure */
 	if (!(fmt = lvmcache_fmt_from_vgname(cmd, vgname, vgid, 1))) {
-		lvmcache_label_scan(cmd, 0);
+		lvmcache_label_scan(cmd, 1);
 		if (!(fmt = lvmcache_fmt_from_vgname(cmd, vgname, vgid, 1))) {
 			/* Independent MDAs aren't supported under low memory */
 			if (!cmd->independent_metadata_areas && critical_section())
@@ -3785,7 +3788,7 @@ static int _get_pvs(struct cmd_context *cmd, uint32_t warn_flags,
 	struct vg_list *vgl_item = NULL;
 	int have_pv = 0;
 
-	lvmcache_label_scan(cmd, 0);
+	lvmcache_label_scan(cmd, 1);
 
 	/* Get list of VGs */
 	if (!(vgids = get_vgids(cmd, 1))) {
@@ -4334,7 +4337,7 @@ uint32_t vg_lock_newname(struct cmd_context *cmd, const char *vgname)
 	/* Find the vgname in the cache */
 	/* If it's not there we must do full scan to be completely sure */
 	if (!lvmcache_fmt_from_vgname(cmd, vgname, NULL, 1)) {
-		lvmcache_label_scan(cmd, 0);
+		lvmcache_label_scan(cmd, 1);
 		if (!lvmcache_fmt_from_vgname(cmd, vgname, NULL, 1)) {
 			/* Independent MDAs aren't supported under low memory */
 			if (!cmd->independent_metadata_areas && critical_section()) {
