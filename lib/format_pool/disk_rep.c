@@ -360,7 +360,7 @@ int read_pool_pds(const struct format_type *fmt, const char *vg_name,
 			 * accept partial pool if we've done a full rescan of
 			 * the cache
 			 */
-			if (full_scan > 0)
+			if (full_scan > 1)
 				return 1;
 		}
 
@@ -368,7 +368,7 @@ int read_pool_pds(const struct format_type *fmt, const char *vg_name,
 		dm_list_init(pdhead);
 
 		full_scan++;
-		if (full_scan > 1) {
+		if (full_scan > 2) {
 			log_debug_metadata("No devices for vg %s found in cache",
 					   vg_name);
 			return 0;
