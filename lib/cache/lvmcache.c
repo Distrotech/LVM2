@@ -228,6 +228,10 @@ static void _update_cache_lock_state(const char *vgname, int locked)
 {
 	struct lvmcache_vginfo *vginfo;
 
+	/* Ignore pure orphan lock because it doesn't correspond to lvmcache VG names */
+	if (!strcmp(vgname, VG_ORPHANS))
+		return;
+
 	if (!(vginfo = lvmcache_vginfo_from_vgname(vgname, NULL)))
 		return;
 
@@ -688,7 +692,10 @@ int lvmcache_label_scan(struct cmd_context *cmd, int full_scan)
 		goto out;
 	}
 
-	if (_has_scanned && !full_scan) {
+	if (_has_scanned && !full_scan)
+		goto out;
+
+	if (_has_scanned && (full_scan == 1)) {
 		r = _scan_invalid();
 		goto out;
 	}
@@ -853,7 +860,7 @@ struct dm_list *lvmcache_get_vgids(struct cmd_context *cmd,
 	struct lvmcache_vginfo *vginfo;
 
 	// TODO plug into lvmetad here automagically?
-	lvmcache_label_scan(cmd, 0);
+	lvmcache_label_scan(cmd, 1);
 
 	if (!(vgids = str_list_create(cmd->mem))) {
 		log_error("vgids list allocation failed");
@@ -880,7 +887,7 @@ struct dm_list *lvmcache_get_vgnames(struct cmd_context *cmd,
 	struct dm_list *vgnames;
 	struct lvmcache_vginfo *vginfo;
 
-	lvmcache_label_scan(cmd, 0);
+	lvmcache_label_scan(cmd, 1);
 
 	if (!(vgnames = str_list_create(cmd->mem))) {
 		log_errno(ENOMEM, "vgnames list allocation failed");
@@ -962,7 +969,7 @@ struct device *lvmcache_device_from_pvid(struct cmd_context *cmd, const struct i
 	if (dev)
 		return dev;
 
-	lvmcache_label_scan(cmd, 0);
+	lvmcache_label_scan(cmd, 1);
 
 	/* Try again */
 	dev = _device_from_pvid(pvid, label_sector);
