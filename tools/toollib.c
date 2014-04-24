@@ -1906,6 +1906,7 @@ static int process_pvs_in_vg(struct cmd_context *cmd,
 			     struct dm_list *arg_pvnames,
 			     struct dm_list *arg_tags,
 			     int process_all,
+			     int skip,
 			     void *handle,
 			     process_single_pv_fn_t process_single_pv)
 {
@@ -1942,12 +1943,16 @@ static int process_pvs_in_vg(struct cmd_context *cmd,
 		}
 
 		if (process_pv) {
-			log_very_verbose("Processing PV %s in VG %s", pv_name, vg->name);
+			if (skip)
+				log_verbose("Skipping PV %s in VG %s", pv_name, vg->name);
+			else
+				log_very_verbose("Processing PV %s in VG %s", pv_name, vg->name);
 
 			if (all_devs)
 				device_list_remove(all_devs, pv->dev);
 
-			ret = process_single_pv(cmd, vg, pv, handle);
+			if (!skip)
+				ret = process_single_pv(cmd, vg, pv, handle);
 
 			if (ret > ret_max)
 				ret_max = ret;
@@ -1992,6 +1997,7 @@ static int process_pvs_in_vgs(struct cmd_context *cmd, uint32_t flags,
 	struct str_list *sl;
 	const char *vg_name;
 	const char *vg_uuid;
+	int skip;
 	int ret_max = ECMD_PROCESSED;
 	int ret;
 
@@ -1999,23 +2005,25 @@ static int process_pvs_in_vgs(struct cmd_context *cmd, uint32_t flags,
 		vg_name = nl->name;
 		vg_uuid = nl->uuid;
 		ret = 0;
+		skip = 0;
 
 		vg = vg_read(cmd, vg_name, vg_uuid, flags | READ_WARN_INCONSISTENT);
 		if (ignore_vg(vg, vg_name, flags & READ_ALLOW_INCONSISTENT, &ret)) {
 			if (ret > ret_max)
 				ret_max = ret;
-			release_vg(vg);
-			stack;
-			continue;
+			skip = 1;
 		}
 
 		ret = process_pvs_in_vg(cmd, vg, all_devs, arg_pvnames, arg_tags,
-					process_all, handle, process_single_pv);
+					process_all, skip, handle, process_single_pv);
 
 		if (ret > ret_max)
 			ret_max = ret;
 
-		unlock_and_release_vg(cmd, vg, vg->name);
+		if (skip)
+			release_vg(vg);
+		else
+			unlock_and_release_vg(cmd, vg, vg->name);
 
 		if (sigint_caught())
 			return ret_max;
