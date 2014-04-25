@@ -120,6 +120,7 @@ enum {
 	ADD_NODE_ON_RESUME_ARG,
 	CHECKS_ARG,
 	COLS_ARG,
+	CONDITION_ARG,
 	EXEC_ARG,
 	FORCE_ARG,
 	GID_ARG,
@@ -2932,6 +2933,12 @@ static int _report_init(const struct command *cmd)
 	if (field_prefixes)
 		dm_report_set_output_field_name_prefix(_report, "dm_");
 
+	if (_switches[CONDITION_ARG] &&
+	    !dm_report_set_output_condition(_report, _string_args[CONDITION_ARG])) {
+		err("Failed to set report output condition.");
+		goto out;
+	}
+
 	r = 1;
 
 out:
@@ -3102,7 +3109,7 @@ static void _usage(FILE *out)
 		"        [-r|--readonly] [--noopencount] [--nolockfs] [--inactive]\n"
 		"        [--udevcookie [cookie]] [--noudevrules] [--noudevsync] [--verifyudev]\n"
 		"        [-y|--yes] [--readahead [+]<sectors>|auto|none] [--retry]\n"
-		"        [-c|-C|--columns] [-o <fields>] [-O|--sort <sort_fields>]\n"
+		"        [-c|-C|--columns] [-o <fields>] [-O|--sort <sort_fields>] [--condition <condition>]\n"
 		"        [--nameprefixes] [--noheadings] [--separator <separator>]\n\n");
 	for (i = 0; _commands[i].name; i++)
 		fprintf(out, "\t%s %s\n", _commands[i].name, _commands[i].help);
@@ -3510,6 +3517,7 @@ static int _process_switches(int *argc, char ***argv, const char *dev_dir)
 		{"readonly", 0, &ind, READ_ONLY},
 		{"checks", 0, &ind, CHECKS_ARG},
 		{"columns", 0, &ind, COLS_ARG},
+		{"condition", 1, &ind, CONDITION_ARG},
 		{"exec", 1, &ind, EXEC_ARG},
 		{"force", 0, &ind, FORCE_ARG},
 		{"gid", 1, &ind, GID_ARG},
@@ -3655,6 +3663,10 @@ static int _process_switches(int *argc, char ***argv, const char *dev_dir)
 			_switches[ADD_NODE_ON_CREATE_ARG]++;
 		if (ind == CHECKS_ARG)
 			_switches[CHECKS_ARG]++;
+		if (ind == CONDITION_ARG) {
+			_switches[CONDITION_ARG]++;
+			_string_args[CONDITION_ARG] = optarg;
+		}
 		if (ind == UDEVCOOKIE_ARG) {
 			_switches[UDEVCOOKIE_ARG]++;
 			_udev_cookie = _get_cookie_value(optarg);
