@@ -68,6 +68,75 @@ struct field_properties {
 };
 
 /*
+ * Conditional reporting
+ */
+struct op_def {
+	const char *string;
+	uint32_t flags;
+	const char *desc;
+};
+
+#define FLD_CMP_MASK	0x000FF000
+#define FLD_CMP_EQUAL	0x00001000
+#define FLD_CMP_NOT	0x00002000
+#define FLD_CMP_GT	0x00004000
+#define FLD_CMP_LT	0x00008000
+#define FLD_CMP_REGEX	0x00010000
+
+static struct op_def _op_cmp[] = {
+	{ "==", FLD_CMP_EQUAL, "Equal to" },
+	{ "!=", FLD_CMP_NOT|FLD_CMP_EQUAL, "Not equal" },
+	{ ">=", FLD_CMP_GT|FLD_CMP_EQUAL, "Greater than or equal to" },
+	{ ">", FLD_CMP_GT, "Greater than" },
+	{ "<=", FLD_CMP_LT|FLD_CMP_EQUAL, "Lesser than or equal to" },
+	{ "<", FLD_CMP_LT, "Lesser than" },
+	{ "=~", FLD_CMP_REGEX, "Matching regular expression" },
+	{ "!~", FLD_CMP_REGEX|FLD_CMP_NOT, "Not matching regular expression" },
+	{ NULL, 0, NULL }
+};
+
+#define COND_MASK		0x00FF
+#define COND_ITEM		0x0001
+#define COND_AND		0x0002
+#define COND_OR			0x0004
+
+#define COND_MODIFIER_MASK	0x0F00
+#define COND_MODIFIER_NOT	0x0100
+
+#define COND_PRECEDENCE_MASK	0xF000
+#define COND_PRECEDENCE_PS	0x1000
+#define COND_PRECEDENCE_PE	0x2000
+
+static struct op_def _op_log[] = {
+        { "&&",  COND_AND, "Logical conjunction" },
+        { "||",  COND_OR,  "Logical disjunction" },
+        { "!",   COND_MODIFIER_NOT, "Logical negation" },
+        { "(",   COND_PRECEDENCE_PS,  "Left parenthesis" },
+        { ")",   COND_PRECEDENCE_PE,  "Right parenthesis" },
+        { NULL,  0, NULL},
+};
+
+struct field_condition {
+	struct field_properties *fp;
+	uint32_t flags;
+	union {
+		const char *s;
+		uint64_t i;
+		double d;
+		struct dm_regex *r;
+	} v;
+};
+
+struct condition_node {
+	struct dm_list list;
+	uint32_t type;
+	union {
+		struct field_condition *item;
+		struct dm_list set;
+	} condition;
+};
+
+/*
  * Report data field
  */
 struct dm_report_field {
