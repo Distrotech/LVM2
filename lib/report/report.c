@@ -1266,7 +1266,7 @@ void *report_init(struct cmd_context *cmd, const char *format, const char *keys,
 		if (field_prefixes)
 			dm_report_set_output_field_name_prefix(rh, "lvm2_");
 
-		if (condition && !dm_report_set_output_condition(rh, condition)) {
+		if (condition && !dm_report_set_output_condition(rh, report_type, condition)) {
 			dm_report_free(rh);
 			rh = NULL;
 		}

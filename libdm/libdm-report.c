@@ -1173,6 +1173,7 @@ static struct field_condition *_create_field_condition(struct dm_report *rh,
 	if (!found) {
 		if (!(found = _add_field(rh, field_num, FLD_HIDDEN)))
 			return NULL;
+		rh->report_types |= rh->fields[field_num].type;
 	}
 
 	/*
@@ -1490,7 +1491,8 @@ error:
 	return NULL;
 }
 
-int dm_report_set_output_condition(struct dm_report *rh, const char *condition)
+int dm_report_set_output_condition(struct dm_report *rh, uint32_t *report_types,
+				   const char *condition)
 {
 	struct condition_node *root = NULL;
 	const char *fin, *next;
@@ -1518,6 +1520,8 @@ int dm_report_set_output_condition(struct dm_report *rh, const char *condition)
 		goto error;
 	}
 
+	if (report_types)
+		*report_types = rh->report_types;
 	rh->condition_root = root;
 	return 1;
 error:

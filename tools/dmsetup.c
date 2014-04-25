@@ -2934,7 +2934,8 @@ static int _report_init(const struct command *cmd)
 		dm_report_set_output_field_name_prefix(_report, "dm_");
 
 	if (_switches[CONDITION_ARG] &&
-	    !dm_report_set_output_condition(_report, _string_args[CONDITION_ARG])) {
+	    !dm_report_set_output_condition(_report, &_report_type,
+					    _string_args[CONDITION_ARG])) {
 		err("Failed to set report output condition.");
 		goto out;
 	}
