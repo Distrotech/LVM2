@@ -1234,7 +1234,7 @@ static const struct dm_report_field_type _devtypes_fields[] = {
 void *report_init(struct cmd_context *cmd, const char *format, const char *keys,
 		  report_type_t *report_type, const char *separator,
 		  int aligned, int buffered, int headings, int field_prefixes,
-		  int quoted, int columns_as_rows)
+		  int quoted, int columns_as_rows, const char *condition)
 {
 	uint32_t report_flags = 0;
 	int devtypes_report = *report_type & DEVTYPES ? 1 : 0;
@@ -1262,8 +1262,15 @@ void *report_init(struct cmd_context *cmd, const char *format, const char *keys,
 			    devtypes_report ? _devtypes_fields : _fields, format,
 			    separator, report_flags, keys, cmd);
 
-	if (rh && field_prefixes)
-		dm_report_set_output_field_name_prefix(rh, "lvm2_");
+	if (rh) {
+		if (field_prefixes)
+			dm_report_set_output_field_name_prefix(rh, "lvm2_");
+
+		if (condition && !dm_report_set_output_condition(rh, condition)) {
+			dm_report_free(rh);
+			rh = NULL;
+		}
+	}
 
 	return rh;
 }

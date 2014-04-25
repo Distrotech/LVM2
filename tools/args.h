@@ -105,6 +105,7 @@ arg(mergedconfig_ARG, '\0', "mergedconfig", NULL, 0)
 arg(ignoreskippedcluster_ARG, '\0', "ignoreskippedcluster", NULL, 0)
 arg(splitsnapshot_ARG, '\0', "splitsnapshot", NULL, 0)
 arg(readonly_ARG, '\0', "readonly", NULL, 0)
+arg(condition_ARG, '\0', "condition", string_arg, 0)
 
 /* Allow some variations */
 arg(resizable_ARG, '\0', "resizable", yes_no_arg, 0)
