@@ -16,6 +16,8 @@
 #include "dmlib.h"
 
 #include <ctype.h>
+#include <math.h>  /* fabs() */
+#include <float.h> /* DBL_EPSILON */
 
 /*
  * Internal flags
@@ -761,6 +763,144 @@ static void *_report_get_field_data(struct dm_report *rh,
 		return NULL;
 
 	return (void *)(ret + rh->fields[fp->field_num].offset);
+}
+
+static inline int _cmp_field_int(uint64_t a, uint64_t b, uint32_t flags)
+{
+	switch(flags & FLD_CMP_MASK) {
+		case FLD_CMP_EQUAL:
+			return a == b;
+		case FLD_CMP_NOT|FLD_CMP_EQUAL:
+			return a != b;
+		case FLD_CMP_GT:
+			return a > b;
+		case FLD_CMP_GT|FLD_CMP_EQUAL:
+			return a >= b;
+		case FLD_CMP_LT:
+			return a < b;
+		case FLD_CMP_LT|FLD_CMP_EQUAL:
+			return a <= b;
+		default:
+			log_error("Unsupported comparison type for number");
+	}
+
+	return 0;
+}
+
+static int _close_enough(double d1, double d2)
+{
+	return fabs(d1 - d2) < DBL_EPSILON;
+}
+
+static inline int _cmp_field_float(double a, double b, uint32_t flags)
+{
+	switch(flags & FLD_CMP_MASK) {
+		case FLD_CMP_EQUAL:
+			return _close_enough(a, b);
+		case FLD_CMP_NOT|FLD_CMP_EQUAL:
+			return !_close_enough(a, b);
+		case FLD_CMP_GT:
+			return (a > b) && !_close_enough(a, b);
+		case FLD_CMP_GT|FLD_CMP_EQUAL:
+			return (a > b) || _close_enough(a, b);
+		case FLD_CMP_LT:
+			return (a < b) && !_close_enough(a, b);
+		case FLD_CMP_LT|FLD_CMP_EQUAL:
+			return a < b || _close_enough(a, b);
+		default:
+			log_error("Unsupported comparison type for number");
+	}
+
+	return 0;
+}
+
+static inline int _cmp_field_string(const char *a, const char *b, uint32_t flags)
+{
+	switch (flags & FLD_CMP_MASK) {
+		case FLD_CMP_EQUAL:
+			return !strcmp(a, b);
+		case FLD_CMP_NOT|FLD_CMP_EQUAL:
+			return strcmp(a, b);
+		default:
+			log_error("Unsupported comparison type for string");
+	}
+
+	return 0;
+}
+
+static inline int _cmp_field_regex(const char *s, struct dm_regex *r, uint32_t flags)
+{
+	return (dm_regex_match(r, s) >= 0) ^ (flags & FLD_CMP_NOT);
+}
+
+static int _compare_field(struct dm_report_field *f,
+			  struct field_condition *c)
+{
+	if (!f->sort_value) {
+		log_error("_compare_field: field without value :%d",
+			  f->props->field_num);
+		return 0;
+	}
+
+	if (c->flags & FLD_CMP_REGEX)
+		return _cmp_field_regex((const char *) f->sort_value, c->v.r, c->flags);
+
+	switch(f->props->flags & DM_REPORT_FIELD_TYPE_MASK) {
+		case DM_REPORT_FIELD_TYPE_NUMBER:
+			return _cmp_field_int(*(const uint64_t *) f->sort_value, c->v.i, c->flags);
+		case DM_REPORT_FIELD_TYPE_SIZE:
+			return _cmp_field_float(*(const uint64_t *) f->sort_value, c->v.d, c->flags);
+		case DM_REPORT_FIELD_TYPE_STRING:
+			return _cmp_field_string((const char *) f->sort_value, c->v.s, c->flags);
+		default:
+			log_error(INTERNAL_ERROR "_compare_field: unknown field type");
+	}
+
+	return 0;
+}
+
+static int _check_condition(struct condition_node *n, struct dm_list *fields)
+{
+	int r;
+	struct condition_node *iter_n;
+	struct dm_report_field *f;
+
+	switch (n->type & COND_MASK) {
+		case COND_ITEM:
+			r = 1;
+			dm_list_iterate_items(f, fields) {
+				if (n->condition.item->fp != f->props)
+					continue;
+				if (!_compare_field(f, n->condition.item))
+					r = 0;
+			}
+			break;
+		case COND_OR:
+			r = 0;
+			dm_list_iterate_items(iter_n, &n->condition.set)
+				if ((r |= _check_condition(iter_n, fields)))
+					break;
+			break;
+		case COND_AND:
+			r = 1;
+			dm_list_iterate_items(iter_n, &n->condition.set)
+				if (!(r &= _check_condition(iter_n, fields)))
+					break;
+			break;
+		default:
+			log_error("Unsupported condition type");
+			return 0;
+	}
+
+	return (n->type & COND_MODIFIER_NOT) ? !r : r;
+}
+
+static int _check_report_condition(struct dm_report *rh, struct dm_list *fields)
+{
+	if (!rh->condition_root)
+		return 1;
+
+	return _check_condition(rh->condition_root, fields);
 }
 
 int dm_report_object(struct dm_report *rh, void *object)
