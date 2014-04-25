@@ -831,6 +831,169 @@ int dm_report_object(struct dm_report *rh, void *object)
 }
 
 /*
+ * Condition parsing
+ */
+static const char * _skip_space(const char *s)
+{
+	while (*s && isspace(*s))
+		s++;
+	return s;
+}
+
+static int _tok_op(struct op_def *t, const char *s, const char **end,
+		   uint32_t expect)
+{
+	size_t len;
+
+	s = _skip_space(s);
+
+	for (; t->string; t++) {
+		if (expect && !(t->flags & expect))
+			continue;
+
+		len = strlen(t->string);
+		if (!strncmp(s, t->string, len)) {
+			*end = s + len;
+			return t->flags;
+		}
+	}
+
+	*end = s;
+	return 0;
+}
+
+static int _tok_op_log(const char *s, const char **end, uint32_t expect)
+{
+	return _tok_op(_op_log, s, end, expect);
+}
+
+static int _tok_op_cmp(const char *s, const char **end)
+{
+	return _tok_op(_op_cmp, s, end, 0);
+}
+
+/*
+ * Other tokens (FIELD, VALUE, STRING, NUMBER, REGEX)
+ *     FIELD := <strings of alphabet, number and '_'>
+ *     VALUE := NUMBER | STRING
+ *     REGEX := <strings quoted by any character>
+ *     NUMBER := <strings of [0-9]> (because sort_value is unsigned)
+ *     STRING := <strings quoted by '"' or '\''>
+ *
+ * _tok_* functions
+ *
+ *   Input:
+ *     s             - a pointer to the parsed string
+ *   Output:
+ *     begin         - a pointer to the beginning of the token
+ *     end           - a pointer to the end of the token + 1
+ *                     or undefined if return value is NULL
+ *     is_float      - set if the number is a floating point number
+ *     return value  - a starting point of the next parsing
+ *                     NULL if s doesn't match with token type
+ *                     (the parsing should be terminated)
+ */
+static const char *_tok_number(const char *s,
+				const char **begin, const char **end)
+
+{
+	int is_float = 0;
+
+	*begin = s;
+	while (*s && ((!is_float && *s=='.' && (is_float=1)) || isdigit(*s)))
+		s++;
+	*end = s;
+
+	return s;
+}
+
+static const char *_tok_string(const char *s,
+			        const char **begin, const char **end,
+			        const char endchar)
+{
+	*begin = s;
+	while (*s && *s != endchar)
+		s++;
+	*end = s;
+
+	return s;
+}
+
+static const char *_tok_regex(const char *s,
+			       const char **begin, const char **end,
+			       char *quote)
+{
+	s = _skip_space(s);
+
+	if (!*s) {
+		log_error("Regular expression expected");
+		return NULL;
+	}
+
+	switch (*s) {
+		case '(': *quote = ')'; break;
+		case '{': *quote = '}'; break;
+		case '[': *quote = ']'; break;
+		default:  *quote = *s;
+	}
+
+	s = _tok_string(s + 1, begin, end, *quote);
+	if (!*s) {
+		log_error("Missing end quote of regex");
+		return NULL;
+	}
+	s++;
+
+	return s;
+}
+
+static const char *_tok_value(const char *s,
+			       const char **begin, const char **end,
+			       char *quote)
+{
+	s = _skip_space(s);
+
+	if (*s == '"' || *s == '\'') { /* quoted string */
+		*quote = *s;
+		s = _tok_string(s + 1, begin, end, *quote);
+		if (!*s) {
+			log_error("Missing end quote of string");
+			return NULL;
+		}
+		s++;
+	} else { /* number */
+		*quote = 0;
+		s = _tok_number(s, begin, end);
+		if (*begin == *end) {
+			log_error("Empty value or unquoted string");
+			return NULL;
+		}
+	}
+
+	return s;
+}
+
+static const char *_tok_field_name(const char *s,
+				    const char **begin, const char **end)
+{
+	char c;
+	s = _skip_space(s);
+
+	*begin = s;
+	while ((c = *s) &&
+	       (isalnum(c) || c == '_' || c == '-'))
+		s++;
+	*end = s;
+
+	if (*begin == *end)
+		return NULL;
+
+	return s;
+}
+
+
+
+/*
  * Print row of headings
  */
 static int _report_headings(struct dm_report *rh)
