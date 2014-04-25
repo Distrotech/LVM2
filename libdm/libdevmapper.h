@@ -1638,6 +1638,7 @@ struct dm_report *dm_report_init(uint32_t *report_types,
 				 const char *sort_keys,
 				 void *private_data);
 int dm_report_object(struct dm_report *rh, void *object);
+int dm_report_set_output_condition(struct dm_report *rh, const char *condition);
 int dm_report_output(struct dm_report *rh);
 void dm_report_free(struct dm_report *rh);
 

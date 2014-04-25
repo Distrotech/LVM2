@@ -48,6 +48,8 @@ struct dm_report {
 
 	/* To store caller private data */
 	void *private;
+
+	struct condition_node *condition_root;
 };
 
 /*
@@ -991,7 +993,379 @@ static const char *_tok_field_name(const char *s,
 	return s;
 }
 
+static struct field_condition *_create_field_condition(struct dm_report *rh,
+						       uint32_t field_num,
+						       const char *v,
+						       size_t len,
+						       uint64_t factor,
+						       uint32_t flags)
+{
+	struct field_properties *fp, *found = NULL;
+	struct field_condition *fc;
+	char *s;
 
+	dm_list_iterate_items(fp, &rh->field_props) {
+		if (fp->field_num == field_num) {
+			found = fp;
+			break;
+		}
+	}
+
+	/* The field is neither used in display options nor sort keys. */
+	if (!found) {
+		if (!(found = _add_field(rh, field_num, FLD_HIDDEN)))
+			return NULL;
+	}
+
+	/*
+	 * If a condition with a field that is of 'size' type is specified
+	 * without any units, it is marked as being of type 'number' instead
+	 * of 'size'. Detect this and correct the type in-situ here.
+	 */
+	if ((flags & DM_REPORT_FIELD_TYPE_NUMBER) &&
+	    (found->flags & DM_REPORT_FIELD_TYPE_SIZE)) {
+		flags &= ~DM_REPORT_FIELD_TYPE_NUMBER;
+		flags |= DM_REPORT_FIELD_TYPE_SIZE;
+	}
+
+	if (!(found->flags & flags & DM_REPORT_FIELD_TYPE_MASK)) {
+		log_error("dm_report: Incompatible comparison type");
+		return NULL;
+	}
+
+	/* set up condition */
+	if (!(fc = dm_pool_zalloc(rh->mem, sizeof(struct field_condition)))) {
+		log_error("dm_report: struct field_condition allocation failed");
+		return NULL;
+	}
+	fc->fp = found;
+	fc->flags = flags;
+
+	/* store comparison operand */
+	if (flags & FLD_CMP_REGEX) {
+		/* REGEX */
+		if (!(s = dm_malloc(len + 1))) {
+			log_error("dm_report: dm_malloc failed");
+			goto error;
+		}
+		memcpy(s, v, len);
+		s[len] = '\0';
+
+		fc->v.r = dm_regex_create(rh->mem,
+						  (const char **) &s, 1);
+		dm_free(s);
+		if (!fc->v.r) {
+			log_error("dm_report: failed to create matcher");
+			goto error;
+		}
+	} else {
+		/* STRING, NUMBER or SIZE */
+		if (!(s = dm_pool_alloc(rh->mem, len + 1))) {
+			log_error("dm_report: dm_pool_alloc failed");
+			goto error;
+		}
+		memcpy(s, v, len);
+		s[len] = '\0';
+
+		switch (flags & DM_REPORT_FIELD_TYPE_MASK) {
+			case DM_REPORT_FIELD_TYPE_STRING:
+				fc->v.s = s;
+				break;
+			case DM_REPORT_FIELD_TYPE_NUMBER:
+				fc->v.i = strtoul(s, NULL, 10);
+				dm_pool_free(rh->mem, s);
+				break;
+			case DM_REPORT_FIELD_TYPE_SIZE:
+				fc->v.d = strtod(s, NULL);
+				if (factor)
+					fc->v.d *= factor;
+				fc->v.d /= 512; /* store size in sectors! */
+				dm_pool_free(rh->mem, s);
+				break;
+			default:
+				log_error(INTERNAL_ERROR "_create_field_condition: unknown field type");
+				goto error;
+		}
+	}
+
+	return fc;
+error:
+	dm_pool_free(rh->mem, fc);
+	return NULL;
+}
+
+static struct condition_node *_alloc_condition_node(struct dm_pool *mem, uint32_t type)
+{
+	struct condition_node *n;
+
+	if (!(n = dm_pool_zalloc(mem, sizeof(struct condition_node)))) {
+		log_error("dm_report: struct condition_node allocation failed");
+		return NULL;
+	}
+
+	dm_list_init(&n->list);
+	n->type = type;
+	if (!(type & COND_ITEM))
+		dm_list_init(&n->condition.set);
+
+	return n;
+}
+
+static char _cond_syntax_error_at_msg[] = "Condition syntax error at '%s'";
+
+/*
+ * Condition parser
+ *
+ * _parse_* functions
+ *
+ *   Input:
+ *     s             - a pointer to the parsed string
+ *   Output:
+ *     next          - a pointer used for next _parse_*'s input,
+ *                     next == s if return value is NULL
+ *     return value  - a filter node pointer,
+ *                     NULL if s doesn't match
+ */
+
+/*
+ * CONDITION := FIELD_NAME OP_CMP STRING |
+ *              FIELD_NAME OP_CMP NUMBER  |
+ *              FIELD_NAME OP_REGEX REGEX
+ */
+static struct condition_node *_parse_condition(struct dm_report *rh,
+					       const char *s,
+					       const char **next)
+{
+	struct field_condition *fc;
+	struct condition_node *n;
+	const char *ws, *we; /* field name */
+	const char *vs, *ve; /* value */
+	const char *last;
+	char *tmp;
+	uint32_t i, flags;
+	uint64_t factor; /* for size specified with units char */
+	char c; /* quote or unit char */
+
+	/* field name */
+	if (!(last = _tok_field_name(s, &ws, &we))) {
+		log_error("Expecting field name");
+		goto error;
+	}
+	if (!last) {
+		log_error("Missing operator after the field name");
+		goto error;
+	}
+
+	/* comparison operator */
+	if (!(flags = _tok_op_cmp(we, &last))) {
+		log_error("Unrecognized comparison operator: %s", s);
+		goto error;
+	}
+	if (!last) {
+		log_error("Missing value after operator");
+		goto error;
+	}
+
+	/* comparison value */
+	if (flags & FLD_CMP_REGEX) {
+		if (!(last = _tok_regex(last, &vs, &ve, &c)))
+			goto error;
+		flags |= DM_REPORT_FIELD_TYPE_STRING;
+	} else {
+		if (!(last = _tok_value(last, &vs, &ve, &c)))
+			goto error;
+
+		if (c) {
+			/* the token is string */
+			if (flags & DM_REPORT_FIELD_TYPE_NUMBER) {
+				log_error("The operator requires number");
+				goto error;
+			}
+			flags |= DM_REPORT_FIELD_TYPE_STRING;
+		} else {
+			/* the token is number */
+			if (flags & DM_REPORT_FIELD_TYPE_STRING) {
+				log_error("The operator requires string");
+				goto error;
+			}
+			if ((factor = dm_units_to_factor(last, &c, 0, &tmp))) {
+				flags |= DM_REPORT_FIELD_TYPE_SIZE;
+				last = (const char *) tmp;
+			}
+			else
+				flags |= DM_REPORT_FIELD_TYPE_NUMBER;
+		}
+	}
+	*next = _skip_space(last);
+
+	/* create condition */
+	for (i = 0; rh->fields[i].report_fn; i++)
+		if (_is_same_field(rh->fields[i].id, ws, (size_t) (we - ws), rh->field_prefix) &&
+		   (!(fc = _create_field_condition(rh, i, vs, (size_t) (ve - vs), factor, flags))))
+			return_NULL;
+
+	/* create condition node */
+	if (!(n = _alloc_condition_node(rh->mem, COND_ITEM)))
+		return_NULL;
+
+	/* add condition to condition node */
+	n->condition.item = fc;
+
+	return n;
+error:
+	log_error(_cond_syntax_error_at_msg, s);
+	*next = s;
+	return NULL;
+}
+
+static struct condition_node *_parse_or_ex(struct dm_report *rh,
+					   const char *s,
+					   const char **next,
+					   struct condition_node *or_n);
+
+static struct condition_node *_parse_ex(struct dm_report *rh,
+					const char *s,
+					const char **next)
+{
+	struct condition_node *n = NULL;
+	uint32_t t;
+	const char *tmp;
+
+	t = _tok_op_log(s, next, COND_MODIFIER_NOT | COND_PRECEDENCE_PS);
+	if (t == COND_MODIFIER_NOT) {
+		/* '!' '(' EXPRESSION ')' */
+		if (!_tok_op_log(*next, &tmp, COND_PRECEDENCE_PS)) {
+			log_error("Syntax error: '(' expected at \'%s\'", *next);
+			goto error;
+		}
+		if (!(n = _parse_or_ex(rh, tmp, next, NULL)))
+			goto error;
+		n->type |= COND_MODIFIER_NOT;
+		if (!_tok_op_log(*next, &tmp, COND_PRECEDENCE_PE)) {
+			log_error("Syntax error: ')' expected at \'%s\'", *next);
+			goto error;
+		}
+		*next = tmp;
+	} else if (t == COND_PRECEDENCE_PS) {
+		/* '(' EXPRESSION ')' */
+		if (!(n = _parse_or_ex(rh, *next, &tmp, NULL)))
+			goto error;
+		if (!_tok_op_log(tmp, next, COND_PRECEDENCE_PE)) {
+			log_error("Syntax error: ')' expected at \'%s\'", *next);
+			goto error;
+		}
+	} else if ((s = _skip_space(s))) {
+		/* CONDITION */
+		n = _parse_condition(rh, s, next);
+	} else {
+		n = NULL;
+		*next = s;
+	}
+
+	return n;
+error:
+	*next = s;
+	return NULL;
+}
+
+/* AND_EXPRESSION := EX (AND_OP AND_EXPRSSION) */
+static struct condition_node *_parse_and_ex(struct dm_report *rh,
+					    const char *s,
+					    const char **next,
+					    struct condition_node *and_n)
+{
+	struct condition_node *n;
+	const char *tmp;
+
+	n = _parse_ex(rh, s, next);
+	if (!n)
+		goto error;
+
+	if (!_tok_op_log(*next, &tmp, COND_AND)) {
+		if (!and_n)
+			return n;
+		dm_list_add(&and_n->condition.set, &n->list);
+		return and_n;
+	}
+
+	if (!and_n) {
+		if (!(and_n = _alloc_condition_node(rh->mem, COND_AND)))
+			goto error;
+	}
+	dm_list_add(&and_n->condition.set, &n->list);
+
+	return _parse_and_ex(rh, tmp, next, and_n);
+error:
+	*next = s;
+	return NULL;
+}
+
+/* OR_EXPRESSION := AND_EXPRESSION (OR_OP OR_EXPRESSION) */
+static struct condition_node *_parse_or_ex(struct dm_report *rh,
+					   const char *s,
+					   const char **next,
+					   struct condition_node *or_n)
+{
+	struct condition_node *n;
+	const char *tmp;
+
+	n = _parse_and_ex(rh, s, next, NULL);
+	if (!n)
+		goto error;
+
+	if (!_tok_op_log(*next, &tmp, COND_OR)) {
+		if (!or_n)
+			return n;
+		dm_list_add(&or_n->condition.set, &n->list);
+		return or_n;
+	}
+
+	if (!or_n) {
+		if (!(or_n = _alloc_condition_node(rh->mem, COND_OR)))
+			goto error;
+	}
+	dm_list_add(&or_n->condition.set, &n->list);
+
+	return _parse_or_ex(rh, tmp, next, or_n);
+error:
+	*next = s;
+	return NULL;
+}
+
+int dm_report_set_output_condition(struct dm_report *rh, const char *condition)
+{
+	struct condition_node *root = NULL;
+	const char *fin, *next;
+
+	if (rh->condition_root) {
+		// TODO: destroy old root and replace with new one instead!
+		return 1;
+	}
+
+	if (!condition || !condition[0]) {
+		rh->condition_root = NULL;
+		return 1;
+	}
+
+	if (!(root = _alloc_condition_node(rh->mem, COND_OR)))
+		return_0;
+
+	if (!_parse_or_ex(rh, condition, &fin, root))
+		goto error;
+
+	next = _skip_space(fin);
+	if (*next) {
+		log_error("Expecting logical operator");
+		log_error(_cond_syntax_error_at_msg, next);
+		goto error;
+	}
+
+	rh->condition_root = root;
+	return 1;
+error:
+	dm_pool_free(rh->mem, root);
+	return 0;
+}
 
 /*
  * Print row of headings
