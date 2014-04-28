@@ -937,18 +937,19 @@ static int _check_report_selection(struct dm_report *rh, struct dm_list *fields)
 int dm_report_object(struct dm_report *rh, void *object)
 {
 	struct field_properties *fp;
-	struct row *row;
+	struct row *row = NULL;
 	struct dm_report_field *field;
 	void *data = NULL;
+	int r = 0;
 
 	if (!rh) {
 		log_error(INTERNAL_ERROR "dm_report handler is NULL.");
-		return 0;
+		goto out;
 	}
 
 	if (!(row = dm_pool_zalloc(rh->mem, sizeof(*row)))) {
 		log_error("dm_report_object: struct row allocation failed");
-		return 0;
+		goto out;
 	}
 
 	row->rh = rh;
@@ -959,24 +960,27 @@ int dm_report_object(struct dm_report *rh, void *object)
 			       rh->keys_count))) {
 		log_error("dm_report_object: "
 			  "row sort value structure allocation failed");
-		return 0;
+		goto out;
 	}
 
 	dm_list_init(&row->fields);
-	dm_list_add(&rh->rows, &row->list);
 
 	/* For each field to be displayed, call its report_fn */
 	dm_list_iterate_items(fp, &rh->field_props) {
 		if (!(field = dm_pool_zalloc(rh->mem, sizeof(*field)))) {
 			log_error("dm_report_object: "
 				  "struct dm_report_field allocation failed");
-			return 0;
+			goto out;
 		}
 		field->props = fp;
 
 		data = _report_get_field_data(rh, fp, object);
-		if (!data)
-			return 0;
+		if (!data) {
+			log_error("dm_report_object: "
+				  "no data assigned to field %s",
+				  rh->fields[fp->field_num].id);
+			goto out;
+		}
 
 		if (!rh->fields[fp->field_num].report_fn(rh, rh->mem,
 							 field, data,
@@ -984,9 +988,20 @@ int dm_report_object(struct dm_report *rh, void *object)
 			log_error("dm_report_object: "
 				  "report function failed for field %s",
 				  rh->fields[fp->field_num].id);
-			return 0;
+			goto out;
 		}
 
+		dm_list_add(&row->fields, &field->list);
+	}
+
+	if (!_check_report_selection(rh, &row->fields)) {
+		r = 1;
+		goto out;
+	}
+
+	dm_list_add(&rh->rows, &row->list);
+
+	dm_list_iterate_items(field, &row->fields) {
 		if (((int) strlen(field->report_string) > field->props->width))
 			field->props->width = (int) strlen(field->report_string);
 
@@ -994,13 +1009,16 @@ int dm_report_object(struct dm_report *rh, void *object)
 		    (field->props->flags & FLD_SORT_KEY)) {
 			(*row->sort_fields)[field->props->sort_posn] = field;
 		}
-		dm_list_add(&row->fields, &field->list);
 	}
 
 	if (!(rh->flags & DM_REPORT_OUTPUT_BUFFERED))
 		return dm_report_output(rh);
 
-	return 1;
+	r = 1;
+out:
+	if (!r)
+		dm_pool_free(rh->mem, row);
+	return r;
 }
 
 /*
