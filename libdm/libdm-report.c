@@ -48,6 +48,8 @@ struct dm_report {
 
 	/* To store caller private data */
 	void *private;
+
+	struct selection_node *selection_root;
 };
 
 /*
@@ -485,6 +487,23 @@ static int _add_all_fields(struct dm_report *rh, uint32_t type)
 	return 1;
 }
 
+static int _get_field(struct dm_report *rh, const char *field, size_t flen, uint32_t *f_ret)
+{
+	uint32_t f;
+
+	if (!flen)
+		return 0;
+
+	for (f = 0; rh->fields[f].report_fn; f++) {
+		if (_is_same_field(rh->fields[f].id, field, flen, rh->field_prefix)) {
+			*f_ret = f;
+			return 1;
+		}
+	}
+
+	return 0;
+}
+
 static int _field_match(struct dm_report *rh, const char *field, size_t flen,
 			unsigned report_type_only)
 {
@@ -493,15 +512,13 @@ static int _field_match(struct dm_report *rh, const char *field, size_t flen,
 	if (!flen)
 		return 0;
 
-	for (f = 0; rh->fields[f].report_fn; f++)
-		if (_is_same_field(rh->fields[f].id, field, flen,
-				   rh->field_prefix)) {
-			if (report_type_only) {
-				rh->report_types |= rh->fields[f].type;
-				return 1;
-			} else
-				return _add_field(rh, f, 0) ? 1 : 0;
-		}
+	if ((_get_field(rh, field, flen, &f))) {
+		if (report_type_only) {
+			rh->report_types |= rh->fields[f].type;
+			return 1;
+		} else
+			return _add_field(rh, f, 0) ? 1 : 0;
+	}
 
 	if ((type = _all_match(rh, field, flen))) {
 		if (report_type_only) {
@@ -1040,7 +1057,373 @@ static const char *_tok_field_name(const char *s,
 	return s;
 }
 
+static struct field_selection *_create_field_selection(struct dm_report *rh,
+						       uint32_t field_num,
+						       const char *v,
+						       size_t len,
+						       uint64_t factor,
+						       uint32_t flags)
+{
+	struct field_properties *fp, *found = NULL;
+	struct field_selection *fs;
+	char *s;
 
+	dm_list_iterate_items(fp, &rh->field_props) {
+		if (fp->field_num == field_num) {
+			found = fp;
+			break;
+		}
+	}
+
+	/* The field is neither used in display options nor sort keys. */
+	if (!found) {
+		if (!(found = _add_field(rh, field_num, FLD_HIDDEN)))
+			return NULL;
+		rh->report_types |= rh->fields[field_num].type;
+	}
+
+	/*
+	 * If a selection with a field that is of 'size' type is specified
+	 * without any units, it is marked as being of type 'number' instead
+	 * of 'size'. Detect this and correct the type in-situ here.
+	 */
+	if ((flags & DM_REPORT_FIELD_TYPE_NUMBER) &&
+	    (found->flags & DM_REPORT_FIELD_TYPE_SIZE)) {
+		flags &= ~DM_REPORT_FIELD_TYPE_NUMBER;
+		flags |= DM_REPORT_FIELD_TYPE_SIZE;
+	}
+
+	if (!(found->flags & flags & DM_REPORT_FIELD_TYPE_MASK)) {
+		log_error("dm_report: Incompatible comparison type");
+		return NULL;
+	}
+
+	/* set up selection */
+	if (!(fs = dm_pool_zalloc(rh->mem, sizeof(struct field_selection)))) {
+		log_error("dm_report: struct field_selection allocation failed");
+		return NULL;
+	}
+	fs->fp = found;
+	fs->flags = flags;
+
+	/* store comparison operand */
+	if (flags & FLD_CMP_REGEX) {
+		/* REGEX */
+		if (!(s = dm_malloc(len + 1))) {
+			log_error("dm_report: dm_malloc failed");
+			goto error;
+		}
+		memcpy(s, v, len);
+		s[len] = '\0';
+
+		fs->v.r = dm_regex_create(rh->mem,
+						  (const char **) &s, 1);
+		dm_free(s);
+		if (!fs->v.r) {
+			log_error("dm_report: failed to create matcher");
+			goto error;
+		}
+	} else {
+		/* STRING, NUMBER or SIZE */
+		if (!(s = dm_pool_alloc(rh->mem, len + 1))) {
+			log_error("dm_report: dm_pool_alloc failed");
+			goto error;
+		}
+		memcpy(s, v, len);
+		s[len] = '\0';
+
+		switch (flags & DM_REPORT_FIELD_TYPE_MASK) {
+			case DM_REPORT_FIELD_TYPE_STRING:
+				fs->v.s = s;
+				break;
+			case DM_REPORT_FIELD_TYPE_NUMBER:
+				fs->v.i = strtoul(s, NULL, 10);
+				dm_pool_free(rh->mem, s);
+				break;
+			case DM_REPORT_FIELD_TYPE_SIZE:
+				fs->v.d = strtod(s, NULL);
+				if (factor)
+					fs->v.d *= factor;
+				fs->v.d /= 512; /* store size in sectors! */
+				dm_pool_free(rh->mem, s);
+				break;
+			default:
+				log_error(INTERNAL_ERROR "_create_field_selection: unknown field type");
+				goto error;
+		}
+	}
+
+	return fs;
+error:
+	dm_pool_free(rh->mem, fs);
+	return NULL;
+}
+
+static struct selection_node *_alloc_selection_node(struct dm_pool *mem, uint32_t type)
+{
+	struct selection_node *sn;
+
+	if (!(sn = dm_pool_zalloc(mem, sizeof(struct selection_node)))) {
+		log_error("dm_report: struct selection_node allocation failed");
+		return NULL;
+	}
+
+	dm_list_init(&sn->list);
+	sn->type = type;
+	if (!(type & SEL_ITEM))
+		dm_list_init(&sn->selection.set);
+
+	return sn;
+}
+
+static char _sel_syntax_error_at_msg[] = "Selection syntax error at '%s'";
+
+/*
+ * Selection parser
+ *
+ * _parse_* functions
+ *
+ *   Input:
+ *     s             - a pointer to the parsed string
+ *   Output:
+ *     next          - a pointer used for next _parse_*'s input,
+ *                     next == s if return value is NULL
+ *     return value  - a filter node pointer,
+ *                     NULL if s doesn't match
+ */
+
+/*
+ * SELECTION := FIELD_NAME OP_CMP STRING |
+ *              FIELD_NAME OP_CMP NUMBER  |
+ *              FIELD_NAME OP_REGEX REGEX
+ */
+static struct selection_node *_parse_selection(struct dm_report *rh,
+					       const char *s,
+					       const char **next)
+{
+	struct field_selection *fs;
+	struct selection_node *sn;
+	const char *ws, *we; /* field name */
+	const char *vs, *ve; /* value */
+	const char *last;
+	uint32_t flags, field;
+	uint64_t factor;
+	char *tmp;
+	char c;
+
+	/* field name */
+	if (!(last = _tok_field_name(s, &ws, &we))) {
+		log_error("Expecting field name");
+		goto bad;
+	}
+
+	/* check if the field with given name exists */
+	if (!_get_field(rh, ws, (size_t) (we - ws), &field)) {
+		c = we[0];
+		tmp = (char *) we;
+		tmp[0] = '\0';
+		log_error("Unrecognized selection field: %s", ws);
+		tmp[0] = c;
+		goto bad;
+	}
+
+	if (!last) {
+		log_error("Missing operator after the field name");
+		goto bad;
+	}
+
+	/* comparison operator */
+	if (!(flags = _tok_op_cmp(we, &last))) {
+		log_error("Unrecognized comparison operator: %s", s);
+		goto bad;
+	}
+	if (!last) {
+		log_error("Missing value after operator");
+		goto bad;
+	}
+
+	/* comparison value */
+	if (flags & FLD_CMP_REGEX) {
+		if (!(last = _tok_regex(last, &vs, &ve, &flags)))
+			goto_bad;
+	} else {
+		 if (!(last = _tok_value(rh->fields[field].flags & DM_REPORT_FIELD_TYPE_MASK,
+					 last, &vs, &ve, &factor, &flags)))
+			goto_bad;
+	}
+
+	*next = _skip_space(last);
+
+	/* create selection */
+	if (!(fs = _create_field_selection(rh, field, vs, (size_t) (ve - vs), factor, flags)))
+		return_NULL;
+
+	/* create selection node */
+	if (!(sn = _alloc_selection_node(rh->mem, SEL_ITEM)))
+		return_NULL;
+
+	/* add selection to selection node */
+	sn->selection.item = fs;
+
+	return sn;
+bad:
+	log_error(_sel_syntax_error_at_msg, s);
+	*next = s;
+	return NULL;
+}
+
+static struct selection_node *_parse_or_ex(struct dm_report *rh,
+					   const char *s,
+					   const char **next,
+					   struct selection_node *or_sn);
+
+static struct selection_node *_parse_ex(struct dm_report *rh,
+					const char *s,
+					const char **next)
+{
+	struct selection_node *sn = NULL;
+	uint32_t t;
+	const char *tmp;
+
+	t = _tok_op_log(s, next, SEL_MODIFIER_NOT | SEL_PRECEDENCE_PS);
+	if (t == SEL_MODIFIER_NOT) {
+		/* '!' '(' EXPRESSION ')' */
+		if (!_tok_op_log(*next, &tmp, SEL_PRECEDENCE_PS)) {
+			log_error("Syntax error: '(' expected at \'%s\'", *next);
+			goto error;
+		}
+		if (!(sn = _parse_or_ex(rh, tmp, next, NULL)))
+			goto error;
+		sn->type |= SEL_MODIFIER_NOT;
+		if (!_tok_op_log(*next, &tmp, SEL_PRECEDENCE_PE)) {
+			log_error("Syntax error: ')' expected at \'%s\'", *next);
+			goto error;
+		}
+		*next = tmp;
+	} else if (t == SEL_PRECEDENCE_PS) {
+		/* '(' EXPRESSION ')' */
+		if (!(sn = _parse_or_ex(rh, *next, &tmp, NULL)))
+			goto error;
+		if (!_tok_op_log(tmp, next, SEL_PRECEDENCE_PE)) {
+			log_error("Syntax error: ')' expected at \'%s\'", *next);
+			goto error;
+		}
+	} else if ((s = _skip_space(s))) {
+		/* SELECTION */
+		sn = _parse_selection(rh, s, next);
+	} else {
+		sn = NULL;
+		*next = s;
+	}
+
+	return sn;
+error:
+	*next = s;
+	return NULL;
+}
+
+/* AND_EXPRESSION := EX (AND_OP AND_EXPRSSION) */
+static struct selection_node *_parse_and_ex(struct dm_report *rh,
+					    const char *s,
+					    const char **next,
+					    struct selection_node *and_sn)
+{
+	struct selection_node *n;
+	const char *tmp;
+
+	n = _parse_ex(rh, s, next);
+	if (!n)
+		goto error;
+
+	if (!_tok_op_log(*next, &tmp, SEL_AND)) {
+		if (!and_sn)
+			return n;
+		dm_list_add(&and_sn->selection.set, &n->list);
+		return and_sn;
+	}
+
+	if (!and_sn) {
+		if (!(and_sn = _alloc_selection_node(rh->mem, SEL_AND)))
+			goto error;
+	}
+	dm_list_add(&and_sn->selection.set, &n->list);
+
+	return _parse_and_ex(rh, tmp, next, and_sn);
+error:
+	*next = s;
+	return NULL;
+}
+
+/* OR_EXPRESSION := AND_EXPRESSION (OR_OP OR_EXPRESSION) */
+static struct selection_node *_parse_or_ex(struct dm_report *rh,
+					   const char *s,
+					   const char **next,
+					   struct selection_node *or_sn)
+{
+	struct selection_node *n;
+	const char *tmp;
+
+	n = _parse_and_ex(rh, s, next, NULL);
+	if (!n)
+		goto error;
+
+	if (!_tok_op_log(*next, &tmp, SEL_OR)) {
+		if (!or_sn)
+			return n;
+		dm_list_add(&or_sn->selection.set, &n->list);
+		return or_sn;
+	}
+
+	if (!or_sn) {
+		if (!(or_sn = _alloc_selection_node(rh->mem, SEL_OR)))
+			goto error;
+	}
+	dm_list_add(&or_sn->selection.set, &n->list);
+
+	return _parse_or_ex(rh, tmp, next, or_sn);
+error:
+	*next = s;
+	return NULL;
+}
+
+int dm_report_set_output_selection(struct dm_report *rh, uint32_t *report_types,
+				   const char *selection)
+{
+	struct selection_node *root = NULL;
+	const char *fin, *next;
+
+	if (rh->selection_root) {
+		// TODO: destroy old root and replace with new one instead!
+		return 1;
+	}
+
+	if (!selection || !selection[0]) {
+		rh->selection_root = NULL;
+		return 1;
+	}
+
+	if (!(root = _alloc_selection_node(rh->mem, SEL_OR)))
+		return_0;
+
+	if (!_parse_or_ex(rh, selection, &fin, root))
+		goto error;
+
+	next = _skip_space(fin);
+	if (*next) {
+		log_error("Expecting logical operator");
+		log_error(_sel_syntax_error_at_msg, next);
+		goto error;
+	}
+
+	if (report_types)
+		*report_types = rh->report_types;
+
+	rh->selection_root = root;
+	return 1;
+error:
+	dm_pool_free(rh->mem, root);
+	return 0;
+}
 
 /*
  * Print row of headings
