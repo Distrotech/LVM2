@@ -834,6 +834,215 @@ int dm_report_object(struct dm_report *rh, void *object)
 }
 
 /*
+ * Selection parsing
+ */
+static const char * _skip_space(const char *s)
+{
+	while (*s && isspace(*s))
+		s++;
+	return s;
+}
+
+static int _tok_op(struct op_def *t, const char *s, const char **end,
+		   uint32_t expect)
+{
+	size_t len;
+
+	s = _skip_space(s);
+
+	for (; t->string; t++) {
+		if (expect && !(t->flags & expect))
+			continue;
+
+		len = strlen(t->string);
+		if (!strncmp(s, t->string, len)) {
+			*end = s + len;
+			return t->flags;
+		}
+	}
+
+	*end = s;
+	return 0;
+}
+
+static int _tok_op_log(const char *s, const char **end, uint32_t expect)
+{
+	return _tok_op(_op_log, s, end, expect);
+}
+
+static int _tok_op_cmp(const char *s, const char **end)
+{
+	return _tok_op(_op_cmp, s, end, 0);
+}
+
+/*
+ * Other tokens (FIELD, VALUE, STRING, NUMBER, REGEX)
+ *     FIELD := <strings of alphabet, number and '_'>
+ *     VALUE := NUMBER | STRING
+ *     REGEX := <strings quoted by any character>
+ *     NUMBER := <strings of [0-9]> (because sort_value is unsigned)
+ *     STRING := <strings quoted by '"' or '\''>
+ *
+ * _tok_* functions
+ *
+ *   Input:
+ *     s             - a pointer to the parsed string
+ *   Output:
+ *     begin         - a pointer to the beginning of the token
+ *     end           - a pointer to the end of the token + 1
+ *                     or undefined if return value is NULL
+ *     is_float      - set if the number is a floating point number
+ *     return value  - a starting point of the next parsing
+ *                     NULL if s doesn't match with token type
+ *                     (the parsing should be terminated)
+ */
+static const char *_tok_number(const char *s,
+				const char **begin, const char **end)
+
+{
+	int is_float = 0;
+
+	*begin = s;
+	while (*s && ((!is_float && *s=='.' && (is_float=1)) || isdigit(*s)))
+		s++;
+	*end = s;
+
+	return s;
+}
+
+static const char *_tok_string(const char *s,
+			       const char **begin, const char **end,
+			       const char endchar)
+{
+	*begin = s;
+
+	if (endchar)
+		while (*s && *s != endchar)
+			s++;
+	else
+		/*
+		 * If endchar not defined then endchar is AND/OR operator
+		 * or space char. This is in case the string is not quoted.
+		 */
+		while (*s) {
+			if (!strncmp(s, SEL_AND_OP_STR, strlen(SEL_AND_OP_STR)) ||
+			    !strncmp(s, SEL_OR_OP_STR, strlen(SEL_OR_OP_STR)) ||
+			    (*s == ' '))
+				break;
+			s++;
+		}
+
+	*end = s;
+	return s;
+}
+
+static const char *_tok_regex(const char *s,
+			       const char **begin, const char **end,
+			       uint32_t *flags)
+{
+	char c;
+
+	s = _skip_space(s);
+
+	if (!*s) {
+		log_error("Regular expression expected");
+		return NULL;
+	}
+
+	switch (*s) {
+		case '(': c = ')'; break;
+		case '{': c = '}'; break;
+		case '[': c = ']'; break;
+		default:  c = *s;
+	}
+
+	s = _tok_string(s + 1, begin, end, c);
+	if (!*s) {
+		log_error("Missing end quote of regex");
+		return NULL;
+	}
+	s++;
+
+	*flags |= DM_REPORT_FIELD_TYPE_STRING;
+
+	return s;
+}
+
+static const char *_tok_value(uint32_t expected_type, const char *s,
+			      const char **begin, const char **end,
+			      uint64_t *factor, uint32_t *flags)
+{
+	char c;
+	char *tmp;
+
+	s = _skip_space(s);
+
+	switch (expected_type) {
+
+		case DM_REPORT_FIELD_TYPE_STRING:
+			if (*s == '"' || *s == '\'') {
+				c = *s;
+				s++;
+			} else
+				c = 0;
+			s = _tok_string(s, begin, end, c);
+			if (c && !*s) {
+				log_error("Failed to parse string value.");
+				return NULL;
+			}
+			if (*flags & DM_REPORT_FIELD_TYPE_NUMBER) {
+				log_error("The operator requires number value.");
+				return NULL;
+			}
+			if (c)
+				s++;
+			*flags |= DM_REPORT_FIELD_TYPE_STRING;
+			break;
+
+		case DM_REPORT_FIELD_TYPE_NUMBER:
+		case DM_REPORT_FIELD_TYPE_SIZE:
+			c = 0;
+			s = _tok_number(s, begin, end);
+			if (*begin == *end) {
+				log_error("Failed to parse number value.");
+				return NULL;
+			}
+			if (*flags & DM_REPORT_FIELD_TYPE_STRING) {
+				log_error("The operator requires string value.");
+				return NULL;
+			}
+			if ((*factor = dm_units_to_factor(s, &c, 0, &tmp))) {
+				*flags |= DM_REPORT_FIELD_TYPE_SIZE;
+				s = (const char *) tmp;
+			}
+			else
+				*flags |= DM_REPORT_FIELD_TYPE_NUMBER;
+	}
+
+	return s;
+}
+
+static const char *_tok_field_name(const char *s,
+				    const char **begin, const char **end)
+{
+	char c;
+	s = _skip_space(s);
+
+	*begin = s;
+	while ((c = *s) &&
+	       (isalnum(c) || c == '_' || c == '-'))
+		s++;
+	*end = s;
+
+	if (*begin == *end)
+		return NULL;
+
+	return s;
+}
+
+
+
+/*
  * Print row of headings
  */
 static int _report_headings(struct dm_report *rh)
