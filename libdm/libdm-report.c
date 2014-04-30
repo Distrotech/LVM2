@@ -87,15 +87,20 @@ struct op_def {
 #define FLD_CMP_LT	0x00008000
 #define FLD_CMP_REGEX	0x00010000
 
+/*
+ * When defining operators, always define longer one before
+ * shorter one if one is a prefix of another!
+ * (e.g. =~ comes before =)
+ */
 static struct op_def _op_cmp[] = {
+	{ "=~", FLD_CMP_REGEX, "Matching regular expression" },
+	{ "!~", FLD_CMP_REGEX|FLD_CMP_NOT, "Not matching regular expression" },
 	{ "=", FLD_CMP_EQUAL, "Equal to" },
 	{ "!=", FLD_CMP_NOT|FLD_CMP_EQUAL, "Not equal" },
 	{ ">=", FLD_CMP_GT|FLD_CMP_EQUAL, "Greater than or equal to" },
 	{ ">", FLD_CMP_GT, "Greater than" },
 	{ "<=", FLD_CMP_LT|FLD_CMP_EQUAL, "Lesser than or equal to" },
 	{ "<", FLD_CMP_LT, "Lesser than" },
-	{ "=~", FLD_CMP_REGEX, "Matching regular expression" },
-	{ "!~", FLD_CMP_REGEX|FLD_CMP_NOT, "Not matching regular expression" },
 	{ NULL, 0, NULL }
 };
 
@@ -1141,15 +1146,18 @@ static const char *_tok_regex(const char *s,
 		case '(': c = ')'; break;
 		case '{': c = '}'; break;
 		case '[': c = ']'; break;
-		default:  c = *s;
+		default:  c = 0;
 	}
 
 	s = _tok_string(s + 1, begin, end, c);
-	if (!*s) {
-		log_error("Missing end quote of regex");
-		return NULL;
+	if ((c = *s)) {
+		if (c && (c != ')') && (c != '}') && (c != ']'))
+		{
+			log_error("Missing end quote of regex");
+			return NULL;
+		}
+		s++;
 	}
-	s++;
 
 	*flags |= DM_REPORT_FIELD_TYPE_STRING;
 
