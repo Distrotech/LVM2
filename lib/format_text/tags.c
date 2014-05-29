@@ -16,12 +16,11 @@
 #include "lib.h"
 #include "metadata.h"
 #include "import-export.h"
-#include "str_list.h"
 #include "lvm-string.h"
 
 char *alloc_printed_tags(struct dm_list *tagsl)
 {
-	struct str_list *sl;
+	struct dm_str_list *sl;
 	int first = 1;
 	size_t size = 0;
 	char *buffer, *buf;
@@ -72,7 +71,7 @@ int read_tags(struct dm_pool *mem, struct dm_list *tagsl, const struct dm_config
 			return 0;
 		}
 
-		if (!str_list_add(mem, tagsl, dm_pool_strdup(mem, cv->v.str)))
+		if (!dm_str_list_add(mem, tagsl, dm_pool_strdup(mem, cv->v.str)))
 			return_0;
 
 		cv = cv->next;

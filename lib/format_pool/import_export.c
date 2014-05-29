@@ -20,7 +20,6 @@
 #include "sptype_names.h"
 #include "lv_alloc.h"
 #include "pv_alloc.h"
-#include "str_list.h"
 #include "display.h"
 #include "segtype.h"
 #include "toolcontext.h"
@@ -205,7 +204,7 @@ static int _add_stripe_seg(struct dm_pool *mem,
 			return_0;
 
 	/* add the subpool type to the segment tag list */
-	if (!str_list_add(mem, &seg->tags, _cvt_sptype(usp->type))) {
+	if (!dm_str_list_add(mem, &seg->tags, _cvt_sptype(usp->type))) {
 		log_error("Allocation failed for str_list.");
 		return 0;
 	}
@@ -242,7 +241,7 @@ static int _add_linear_seg(struct dm_pool *mem,
 		}
 
 		/* add the subpool type to the segment tag list */
-		if (!str_list_add(mem, &seg->tags, _cvt_sptype(usp->type))) {
+		if (!dm_str_list_add(mem, &seg->tags, _cvt_sptype(usp->type))) {
 			log_error("Allocation failed for str_list.");
 			return 0;
 		}

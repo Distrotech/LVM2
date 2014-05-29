@@ -22,7 +22,6 @@
 #include "activate.h"
 #include "lv_alloc.h"
 #include "lvm-string.h"
-#include "str_list.h"
 #include "locking.h"	/* FIXME Should not be used in this file */
 
 #include "defaults.h" /* FIXME: should this be defaults.h? */
@@ -281,7 +280,7 @@ static int _init_mirror_log(struct cmd_context *cmd,
 			    struct logical_volume *log_lv, int in_sync,
 			    struct dm_list *tagsl, int remove_on_failure)
 {
-	struct str_list *sl;
+	struct dm_str_list *sl;
 	uint64_t orig_status = log_lv->status;
 	int was_active = 0;
 
@@ -316,7 +315,7 @@ static int _init_mirror_log(struct cmd_context *cmd,
 
 	/* Temporary tag mirror log for activation */
 	dm_list_iterate_items(sl, tagsl)
-		if (!str_list_add(cmd->mem, &log_lv->tags, sl->str)) {
+		if (!dm_str_list_add(cmd->mem, &log_lv->tags, sl->str)) {
 			log_error("Aborting. Unable to tag mirror log.");
 			goto activate_lv;
 		}
@@ -337,7 +336,7 @@ static int _init_mirror_log(struct cmd_context *cmd,
 
 	/* Remove the temporary tags */
 	dm_list_iterate_items(sl, tagsl)
-		str_list_del(&log_lv->tags, sl->str);
+		dm_str_list_del(&log_lv->tags, sl->str);
 
 	if (activation()) {
 		if (!wipe_lv(log_lv, (struct wipe_params)
@@ -377,7 +376,7 @@ revert_new_lv:
 	log_lv->status = orig_status;
 
 	dm_list_iterate_items(sl, tagsl)
-		str_list_del(&log_lv->tags, sl->str);
+		dm_str_list_del(&log_lv->tags, sl->str);
 
 	if (remove_on_failure && !lv_remove(log_lv)) {
 		log_error("Manual intervention may be required to remove "
@@ -420,12 +419,12 @@ static int _activate_lv_like_model(struct logical_volume *model,
 static int _delete_lv(struct logical_volume *mirror_lv, struct logical_volume *lv)
 {
 	struct cmd_context *cmd = mirror_lv->vg->cmd;
-	struct str_list *sl;
+	struct dm_str_list *sl;
 
 	/* Inherit tags - maybe needed for activation */
-	if (!str_list_match_list(&mirror_lv->tags, &lv->tags, NULL)) {
+	if (!dm_str_list_match_list(&mirror_lv->tags, &lv->tags, NULL)) {
 		dm_list_iterate_items(sl, &mirror_lv->tags)
-			if (!str_list_add(cmd->mem, &lv->tags, sl->str)) {
+			if (!dm_str_list_add(cmd->mem, &lv->tags, sl->str)) {
 				log_error("Aborting. Unable to tag.");
 				return 0;
 			}

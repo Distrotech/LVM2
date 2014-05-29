@@ -25,7 +25,6 @@
 #include "format-text.h"
 #include "display.h"
 #include "memlock.h"
-#include "str_list.h"
 #include "segtype.h"
 #include "lvmcache.h"
 #include "lvmetad.h"
@@ -474,7 +473,7 @@ static int _set_tag(struct cmd_context *cmd, const char *tag)
 {
 	log_very_verbose("Setting host tag: %s", dm_pool_strdup(cmd->libmem, tag));
 
-	if (!str_list_add(cmd->libmem, &cmd->tags, tag)) {
+	if (!dm_str_list_add(cmd->libmem, &cmd->tags, tag)) {
 		log_error("_set_tag: str_list_add %s failed", tag);
 		return 0;
 	}
@@ -615,7 +614,7 @@ static int _init_lvm_conf(struct cmd_context *cmd)
 /* Read any additional config files */
 static int _init_tag_configs(struct cmd_context *cmd)
 {
-	struct str_list *sl;
+	struct dm_str_list *sl;
 
 	/* Tag list may grow while inside this loop */
 	dm_list_iterate_items(sl, &cmd->tags) {

@@ -54,7 +54,6 @@ SOURCES =\
 	commands/toolcontext.c \
 	config/config.c \
 	datastruct/btree.c \
-	datastruct/str_list.c \
 	device/dev-cache.c \
 	device/dev-io.c \
 	device/dev-md.c \

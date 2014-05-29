@@ -18,7 +18,6 @@
 #include "text_export.h"
 #include "text_import.h"
 #include "config.h"
-#include "str_list.h"
 #include "targets.h"
 #include "lvm-string.h"
 #include "activate.h"
@@ -359,7 +358,7 @@ static int _raid_modules_needed(struct dm_pool *mem,
 				const struct lv_segment *seg __attribute__((unused)),
 				struct dm_list *modules)
 {
-	if (!str_list_add(mem, modules, "raid")) {
+	if (!dm_str_list_add(mem, modules, "raid")) {
 		log_error("raid module string list allocation failed");
 		return 0;
 	}

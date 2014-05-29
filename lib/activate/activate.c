@@ -24,7 +24,6 @@
 #include "lvm-string.h"
 #include "toolcontext.h"
 #include "dev_manager.h"
-#include "str_list.h"
 #include "config.h"
 #include "segtype.h"
 #include "sharedlib.h"
@@ -147,16 +146,16 @@ static int _lv_passes_volumes_filter(struct cmd_context *cmd, struct logical_vol
 			}
 			/* If any host tag matches any LV or VG tag, activate */
 			if (!strcmp(str, "*")) {
-				if (str_list_match_list(&cmd->tags, &lv->tags, NULL)
-				    || str_list_match_list(&cmd->tags,
+				if (dm_str_list_match_list(&cmd->tags, &lv->tags, NULL)
+				    || dm_str_list_match_list(&cmd->tags,
 							   &lv->vg->tags, NULL))
 					    return 1;
 				else
 					continue;
 			}
 			/* If supplied tag matches LV or VG tag, activate */
-			if (str_list_match_item(&lv->tags, str) ||
-			    str_list_match_item(&lv->vg->tags, str))
+			if (dm_str_list_match_item(&lv->tags, str) ||
+			    dm_str_list_match_item(&lv->vg->tags, str))
 				return 1;
 			else
 				continue;
@@ -472,8 +471,8 @@ static int _passes_activation_filter(struct cmd_context *cmd,
 			return 1;
 
 		/* If any host tag matches any LV or VG tag, activate */
-		if (str_list_match_list(&cmd->tags, &lv->tags, NULL) ||
-		    str_list_match_list(&cmd->tags, &lv->vg->tags, NULL))
+		if (dm_str_list_match_list(&cmd->tags, &lv->tags, NULL) ||
+		    dm_str_list_match_list(&cmd->tags, &lv->vg->tags, NULL))
 			return 1;
 
 		log_verbose("No host tag matches %s/%s",

@@ -20,7 +20,6 @@
 #include "text_export.h"
 #include "text_import.h"
 #include "config.h"
-#include "str_list.h"
 #include "targets.h"
 #include "lvm-string.h"
 #include "activate.h"
@@ -134,7 +133,7 @@ static int _striped_segments_compatible(struct lv_segment *first,
 			return 0;
 	}
 
-	if (!str_list_lists_equal(&first->tags, &second->tags))
+	if (!dm_str_list_lists_equal(&first->tags, &second->tags))
 		return 0;
 
 	return 1;

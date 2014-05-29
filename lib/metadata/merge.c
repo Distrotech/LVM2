@@ -17,7 +17,6 @@
 #include "metadata.h"
 #include "lv_alloc.h"
 #include "pv_alloc.h"
-#include "str_list.h"
 #include "segtype.h"
 
 /*
@@ -492,7 +491,7 @@ static int _lv_split_segment(struct logical_volume *lv, struct lv_segment *seg,
 		return 0;
 	}
 
-	if (!str_list_dup(lv->vg->vgmem, &split_seg->tags, &seg->tags)) {
+	if (!dm_str_list_dup(lv->vg->vgmem, &split_seg->tags, &seg->tags)) {
 		log_error("LV segment tags duplication failed");
 		return 0;
 	}

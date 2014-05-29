@@ -17,9 +17,7 @@
 #include "segtype.h"
 #include "display.h"
 #include "config.h"
-#include "str_list.h"
 #include "activate.h"
-#include "str_list.h"
 
 static const char *_errseg_name(const struct lv_segment *seg)
 {
@@ -68,7 +66,7 @@ static int _errseg_modules_needed(struct dm_pool *mem,
 				  const struct lv_segment *seg __attribute__((unused)),
 				  struct dm_list *modules)
 {
-	if (!str_list_add(mem, modules, "error")) {
+	if (!dm_str_list_add(mem, modules, "error")) {
 		log_error("error module string list allocation failed");
 		return 0;
 	}

@@ -16,7 +16,6 @@
 #include "segtype.h"
 #include "display.h"
 #include "config.h"
-#include "str_list.h"
 #include "activate.h"
 
 static const char *_zero_name(const struct lv_segment *seg)
@@ -64,7 +63,7 @@ static int _zero_modules_needed(struct dm_pool *mem,
 				const struct lv_segment *seg __attribute__((unused)),
 				struct dm_list *modules)
 {
-	if (!str_list_add(mem, modules, "zero")) {
+	if (!dm_str_list_add(mem, modules, "zero")) {
 		log_error("zero module string list allocation failed");
 		return 0;
 	}

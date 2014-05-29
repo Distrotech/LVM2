@@ -20,6 +20,7 @@ SOURCES =\
 	datastruct/bitset.c \
 	datastruct/hash.c \
 	datastruct/list.c \
+	datastruct/str_list.c \
 	libdm-common.c \
 	libdm-file.c \
 	libdm-deptree.c \

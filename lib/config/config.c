@@ -19,7 +19,6 @@
 #include "config.h"
 #include "crc.h"
 #include "device.h"
-#include "str_list.h"
 #include "toolcontext.h"
 #include "lvm-file.h"
 #include "memlock.h"
@@ -1357,7 +1356,7 @@ static int _match_host_tags(struct dm_list *tags, const struct dm_config_node *t
 			str++;
 		if (!*str)
 			continue;
-		if (str_list_match_item(tags, str))
+		if (dm_str_list_match_item(tags, str))
 			return 1;
 	}
 

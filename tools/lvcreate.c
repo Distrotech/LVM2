@@ -1096,7 +1096,7 @@ static int _lvcreate_params(struct lvcreate_params *lp,
 			return 0;
 		}
 
-		if (!str_list_add(cmd->mem, &lp->tags, tag)) {
+		if (!dm_str_list_add(cmd->mem, &lp->tags, tag)) {
 			log_error("Unable to allocate memory for tag %s", tag);
 			return 0;
 		}

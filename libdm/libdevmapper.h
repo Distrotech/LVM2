@@ -1360,6 +1360,23 @@ struct dm_list *dm_list_next(const struct dm_list *head, const struct dm_list *e
  */
 unsigned int dm_list_size(const struct dm_list *head);
 
+/*
+ * String list.
+ */
+struct dm_str_list {
+	struct dm_list list;
+	const char *str;
+};
+
+struct dm_list *dm_str_list_create(struct dm_pool *mem);
+int dm_str_list_add(struct dm_pool *mem, struct dm_list *sll, const char *str);
+void dm_str_list_del(struct dm_list *sll, const char *str);
+int dm_str_list_dup(struct dm_pool *mem, struct dm_list *sllnew, const struct dm_list *sllold);
+int dm_str_list_order(struct dm_pool *mem, struct dm_list *sll);
+int dm_str_list_match_item(const struct dm_list *sll, const char *str);
+int dm_str_list_match_list(const struct dm_list *sll, const struct dm_list *sll2, const char **str_matched);
+int dm_str_list_lists_equal(const struct dm_list *sll, const struct dm_list *sll2);
+
 /*********
  * selinux
  *********/

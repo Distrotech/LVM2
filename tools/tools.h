@@ -23,7 +23,6 @@
 #include <assert.h>
 #include "libdevmapper.h"
 
-#include "lvm-types.h"
 #include "lvm-logging.h"
 #include "activate.h"
 #include "archiver.h"
@@ -43,7 +42,6 @@
 #include "lvm-signal.h"
 #include "lvm-string.h"
 #include "segtype.h"
-#include "str_list.h"
 #include "toolcontext.h"
 #include "toollib.h"
 

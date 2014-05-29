@@ -18,7 +18,6 @@
 #include "segtype.h"
 #include "text_export.h"
 #include "activate.h"
-#include "str_list.h"
 #ifdef DMEVENTD
 #  include "libdevmapper-event.h"
 #endif

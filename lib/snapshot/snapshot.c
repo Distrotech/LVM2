@@ -19,7 +19,6 @@
 #include "text_export.h"
 #include "config.h"
 #include "activate.h"
-#include "str_list.h"
 
 #define SEG_LOG_ERROR(t, p...) \
 	log_error(t " segment %s of logical volume %s.", ## p, \
@@ -218,7 +217,7 @@ static int _snap_modules_needed(struct dm_pool *mem,
 				const struct lv_segment *seg __attribute__((unused)),
 				struct dm_list *modules)
 {
-	if (!str_list_add(mem, modules, "snapshot")) {
+	if (!dm_str_list_add(mem, modules, "snapshot")) {
 		log_error("snapshot string list allocation failed");
 		return 0;
 	}

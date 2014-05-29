@@ -20,7 +20,6 @@
 #include "locking.h"
 #include "metadata.h"
 #include "memlock.h"
-#include "str_list.h"
 #include "format-text.h"
 #include "format_pool.h"
 #include "format1.h"
@@ -855,7 +854,7 @@ struct dm_list *lvmcache_get_vgids(struct cmd_context *cmd,
 	// TODO plug into lvmetad here automagically?
 	lvmcache_label_scan(cmd, 0);
 
-	if (!(vgids = str_list_create(cmd->mem))) {
+	if (!(vgids = dm_str_list_create(cmd->mem))) {
 		log_error("vgids list allocation failed");
 		return NULL;
 	}
@@ -864,8 +863,8 @@ struct dm_list *lvmcache_get_vgids(struct cmd_context *cmd,
 		if (!include_internal && is_orphan_vg(vginfo->vgname))
 			continue;
 
-		if (!str_list_add(cmd->mem, vgids,
-				  dm_pool_strdup(cmd->mem, vginfo->vgid))) {
+		if (!dm_str_list_add(cmd->mem, vgids,
+				     dm_pool_strdup(cmd->mem, vginfo->vgid))) {
 			log_error("strlist allocation failed");
 			return NULL;
 		}
@@ -882,7 +881,7 @@ struct dm_list *lvmcache_get_vgnames(struct cmd_context *cmd,
 
 	lvmcache_label_scan(cmd, 0);
 
-	if (!(vgnames = str_list_create(cmd->mem))) {
+	if (!(vgnames = dm_str_list_create(cmd->mem))) {
 		log_errno(ENOMEM, "vgnames list allocation failed");
 		return NULL;
 	}
@@ -891,8 +890,8 @@ struct dm_list *lvmcache_get_vgnames(struct cmd_context *cmd,
 		if (!include_internal && is_orphan_vg(vginfo->vgname))
 			continue;
 
-		if (!str_list_add(cmd->mem, vgnames,
-				  dm_pool_strdup(cmd->mem, vginfo->vgname))) {
+		if (!dm_str_list_add(cmd->mem, vgnames,
+				     dm_pool_strdup(cmd->mem, vginfo->vgname))) {
 			log_errno(ENOMEM, "strlist allocation failed");
 			return NULL;
 		}
@@ -908,7 +907,7 @@ struct dm_list *lvmcache_get_pvids(struct cmd_context *cmd, const char *vgname,
 	struct lvmcache_vginfo *vginfo;
 	struct lvmcache_info *info;
 
-	if (!(pvids = str_list_create(cmd->mem))) {
+	if (!(pvids = dm_str_list_create(cmd->mem))) {
 		log_error("pvids list allocation failed");
 		return NULL;
 	}
@@ -917,8 +916,8 @@ struct dm_list *lvmcache_get_pvids(struct cmd_context *cmd, const char *vgname,
 		return pvids;
 
 	dm_list_iterate_items(info, &vginfo->infos) {
-		if (!str_list_add(cmd->mem, pvids,
-				  dm_pool_strdup(cmd->mem, info->dev->pvid))) {
+		if (!dm_str_list_add(cmd->mem, pvids,
+				     dm_pool_strdup(cmd->mem, info->dev->pvid))) {
 			log_error("strlist allocation failed");
 			return NULL;
 		}

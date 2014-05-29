@@ -25,7 +25,6 @@
 #include "segtype.h"
 #include "archiver.h"
 #include "activate.h"
-#include "str_list.h"
 #include "defaults.h"
 #include "lvm-exec.h"
 #include "lvm-signal.h"
@@ -1674,7 +1673,7 @@ static int _pvs_have_matching_tag(const struct dm_config_node *cling_tag_list_cn
 
 		/* Wildcard matches any tag against any tag. */
 		if (!strcmp(str, "*")) {
-			if (!str_list_match_list(&pv1->tags, &pv2->tags, &tag_matched))
+			if (!dm_str_list_match_list(&pv1->tags, &pv2->tags, &tag_matched))
 				continue;
 			else {
 				log_debug_alloc("Matched allocation PV tag %s on existing %s with free space on %s.",
@@ -1683,8 +1682,8 @@ static int _pvs_have_matching_tag(const struct dm_config_node *cling_tag_list_cn
 			}
 		}
 
-		if (!str_list_match_item(&pv1->tags, str) ||
-		    !str_list_match_item(&pv2->tags, str))
+		if (!dm_str_list_match_item(&pv1->tags, str) ||
+		    !dm_str_list_match_item(&pv2->tags, str))
 			continue;
 		else {
 			log_debug_alloc("Matched allocation PV tag %s on existing %s with free space on %s.",
@@ -5281,7 +5280,7 @@ struct logical_volume *insert_layer_for_lv(struct cmd_context *cmd,
 	int r;
 	char *name;
 	size_t len;
-	struct str_list *sl;
+	struct dm_str_list *sl;
 	struct logical_volume *layer_lv;
 	struct segment_type *segtype;
 	struct lv_segment *mapseg;
@@ -5323,7 +5322,7 @@ struct logical_volume *insert_layer_for_lv(struct cmd_context *cmd,
 
 		/* Temporary tags for activation of the transient LV */
 		dm_list_iterate_items(sl, &lv_where->tags)
-			if (!str_list_add(cmd->mem, &layer_lv->tags, sl->str)) {
+			if (!dm_str_list_add(cmd->mem, &layer_lv->tags, sl->str)) {
 				log_error("Aborting.  Unable to tag"
 					  " transient mirror layer.");
 				return NULL;
@@ -5354,7 +5353,7 @@ struct logical_volume *insert_layer_for_lv(struct cmd_context *cmd,
 
 		/* Remove the temporary tags */
 		dm_list_iterate_items(sl, &lv_where->tags)
-			str_list_del(&layer_lv->tags, sl->str);
+			dm_str_list_del(&layer_lv->tags, sl->str);
 
 	}
 

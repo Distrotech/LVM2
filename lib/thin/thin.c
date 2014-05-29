@@ -19,7 +19,6 @@
 #include "text_export.h"
 #include "config.h"
 #include "activate.h"
-#include "str_list.h"
 
 /* Dm kernel module name for thin provisiong */
 static const char _thin_pool_module[] = "thin-pool";
@@ -231,7 +230,7 @@ static int _thin_pool_modules_needed(struct dm_pool *mem,
 				     const struct lv_segment *seg __attribute__((unused)),
 				     struct dm_list *modules)
 {
-	if (!str_list_add(mem, modules, _thin_pool_module)) {
+	if (!dm_str_list_add(mem, modules, _thin_pool_module)) {
 		log_error("String list allocation failed for thin_pool.");
 		return 0;
 	}
@@ -246,7 +245,7 @@ static int _thin_modules_needed(struct dm_pool *mem,
 	if (!_thin_pool_modules_needed(mem, seg, modules))
 		return_0;
 
-	if (!str_list_add(mem, modules, _thin_module)) {
+	if (!dm_str_list_add(mem, modules, _thin_module)) {
 		log_error("String list allocation failed for thin.");
 		return 0;
 	}

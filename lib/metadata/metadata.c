@@ -23,7 +23,6 @@
 #include "lvmcache.h"
 #include "lvmetad.h"
 #include "memlock.h"
-#include "str_list.h"
 #include "pv_alloc.h"
 #include "segtype.h"
 #include "activate.h"
@@ -299,7 +298,7 @@ static int _copy_pv(struct dm_pool *pvmem,
 	if (!(pv_to->vg_name = dm_pool_strdup(pvmem, pv_from->vg_name)))
 		return_0;
 
-	if (!str_list_dup(pvmem, &pv_to->tags, &pv_from->tags))
+	if (!dm_str_list_dup(pvmem, &pv_to->tags, &pv_from->tags))
 		return_0;
 
 	if (!peg_dup(pvmem, &pv_to->segments, &pv_from->segments))
@@ -790,13 +789,13 @@ int lv_change_tag(struct logical_volume *lv, const char *tag, int add_tag)
 				  tag, lv->vg->name, lv->name);
 			return 0;
 		}
-		if (!str_list_add(lv->vg->vgmem, &lv->tags, tag_new)) {
+		if (!dm_str_list_add(lv->vg->vgmem, &lv->tags, tag_new)) {
 			log_error("Failed to add tag %s to %s/%s",
 				  tag, lv->vg->name, lv->name);
 			return 0;
 		}
 	} else
-		str_list_del(&lv->tags, tag);
+		dm_str_list_del(&lv->tags, tag);
 
 	return 1;
 }
@@ -816,13 +815,13 @@ int vg_change_tag(struct volume_group *vg, const char *tag, int add_tag)
 				  tag, vg->name);
 			return 0;
 		}
-		if (!str_list_add(vg->vgmem, &vg->tags, tag_new)) {
+		if (!dm_str_list_add(vg->vgmem, &vg->tags, tag_new)) {
 			log_error("Failed to add tag %s to volume group %s",
 				  tag, vg->name);
 			return 0;
 		}
 	} else
-		str_list_del(&vg->tags, tag);
+		dm_str_list_del(&vg->tags, tag);
 
 	return 1;
 }
@@ -2322,7 +2321,7 @@ int vg_validate(struct volume_group *vg)
 	struct pv_list *pvl;
 	struct lv_list *lvl;
 	struct lv_segment *seg;
-	struct str_list *sl;
+	struct dm_str_list *sl;
 	char uuid[64] __attribute__((aligned(8)));
 	int r = 1;
 	unsigned hidden_lv_count = 0, lv_count = 0, lv_visible_count = 0;
@@ -3203,7 +3202,7 @@ static struct volume_group *_vg_read(struct cmd_context *cmd,
 					break;
 				}
 
-				if (str_list_match_item(pvids, pvl->pv->dev->pvid))
+				if (dm_str_list_match_item(pvids, pvl->pv->dev->pvid))
 					continue;
 
 				/*
@@ -3268,7 +3267,7 @@ static struct volume_group *_vg_read(struct cmd_context *cmd,
 		} else dm_list_iterate_items(pvl, &correct_vg->pvs) {
 			if (is_missing_pv(pvl->pv))
 				continue;
-			if (!str_list_match_item(pvids, pvl->pv->dev->pvid)) {
+			if (!dm_str_list_match_item(pvids, pvl->pv->dev->pvid)) {
 				log_debug_metadata("Cached VG %s had incorrect PV list",
 						   vgname);
 				release_vg(correct_vg);
@@ -3562,7 +3561,7 @@ static struct volume_group *_vg_read_by_vgid(struct cmd_context *cmd,
 	const char *vgname;
 	struct dm_list *vgnames;
 	struct volume_group *vg;
-	struct str_list *strl;
+	struct dm_str_list *strl;
 	int consistent = 0;
 
 	/* Is corresponding vgname already cached? */
@@ -3793,7 +3792,7 @@ struct dm_list *get_vgids(struct cmd_context *cmd, int include_internal)
 static int _get_pvs(struct cmd_context *cmd, int warnings,
 		struct dm_list *pvslist, struct dm_list *vgslist)
 {
-	struct str_list *strl;
+	struct dm_str_list *strl;
 	const char *vgname, *vgid;
 	struct pv_list *pvl, *pvl_copy;
 	struct dm_list *vgids;
@@ -4703,7 +4702,7 @@ int pv_change_metadataignore(struct physical_volume *pv, uint32_t mda_ignored)
 
 char *tags_format_and_copy(struct dm_pool *mem, const struct dm_list *tagsl)
 {
-	struct str_list *sl;
+	struct dm_str_list *sl;
 
 	if (!dm_pool_begin_object(mem, 256)) {
 		log_error("dm_pool_begin_object failed");

@@ -213,7 +213,7 @@ int process_each_lv_in_vg(struct cmd_context *cmd,
 		process_all = 1;
 	/* Or if VG tags match */
 	else if (tags_supplied &&
-		 str_list_match_list(tagsl, &vg->tags, NULL))
+		 dm_str_list_match_list(tagsl, &vg->tags, NULL))
 		process_all = 1;
 
 	/*
@@ -242,13 +242,13 @@ int process_each_lv_in_vg(struct cmd_context *cmd,
 
 		/* LV name match? */
 		if (lvargs_supplied &&
-		    str_list_match_item(arg_lvnames, lvl->lv->name))
+		    dm_str_list_match_item(arg_lvnames, lvl->lv->name))
 			/* Check even when process_all for counter */
 			lvargs_matched++;
 		/* LV tag match?   skip test, when process_all */
 		else if (!process_all &&
 			 (!tags_supplied ||
-			  !str_list_match_list(tagsl, &lvl->lv->tags, NULL)))
+			  !dm_str_list_match_list(tagsl, &lvl->lv->tags, NULL)))
 			continue;
 
 		if (sigint_caught())
@@ -259,7 +259,7 @@ int process_each_lv_in_vg(struct cmd_context *cmd,
 		if (ret != ECMD_PROCESSED && failed_lvnames) {
 			lv_name = dm_pool_strdup(cmd->mem, lvl->lv->name);
 			if (!lv_name ||
-			    !str_list_add(cmd->mem, failed_lvnames, lv_name)) {
+			    !dm_str_list_add(cmd->mem, failed_lvnames, lv_name)) {
 				log_error("Allocation failed for str_list.");
 				return ECMD_FAILED;
 			}
@@ -293,7 +293,7 @@ int process_each_lv(struct cmd_context *cmd, int argc, char **argv,
 
 	struct dm_list *tags_arg;
 	struct dm_list *vgnames;	/* VGs to process */
-	struct str_list *sll, *strl;
+	struct dm_str_list *sll, *strl;
 	struct cmd_vg *cvl_vg;
 	struct dm_list cmd_vgs;
 	struct dm_list failed_lvnames;
@@ -328,7 +328,7 @@ int process_each_lv(struct cmd_context *cmd, int argc, char **argv,
 						  vgname);
 					continue;
 				}
-				if (!str_list_add(cmd->mem, &tagsl,
+				if (!dm_str_list_add(cmd->mem, &tagsl,
 						  dm_pool_strdup(cmd->mem,
 							      vgname + 1))) {
 					log_error("strlist allocation failed");
@@ -366,14 +366,14 @@ int process_each_lv(struct cmd_context *cmd, int argc, char **argv,
 			} else
 				lv_name = NULL;
 
-			if (!str_list_add(cmd->mem, &arg_vgnames,
+			if (!dm_str_list_add(cmd->mem, &arg_vgnames,
 					  dm_pool_strdup(cmd->mem, vgname))) {
 				log_error("strlist allocation failed");
 				return ECMD_FAILED;
 			}
 
 			if (!lv_name) {
-				if (!str_list_add(cmd->mem, &arg_lvnames,
+				if (!dm_str_list_add(cmd->mem, &arg_lvnames,
 						  dm_pool_strdup(cmd->mem,
 							      vgname))) {
 					log_error("strlist allocation failed");
@@ -387,7 +387,7 @@ int process_each_lv(struct cmd_context *cmd, int argc, char **argv,
 					log_error("vg/lv string alloc failed");
 					return ECMD_FAILED;
 				}
-				if (!str_list_add(cmd->mem, &arg_lvnames, vglv)) {
+				if (!dm_str_list_add(cmd->mem, &arg_lvnames, vglv)) {
 					log_error("strlist allocation failed");
 					return ECMD_FAILED;
 				}
@@ -434,7 +434,7 @@ int process_each_lv(struct cmd_context *cmd, int argc, char **argv,
 				break;
 			} else if (!strncmp(vg_name, vgname, strlen(vgname)) && lv_name &&
 				   strlen(vgname) == (size_t) (lv_name - vg_name)) {
-				if (!str_list_add(cmd->mem, &lvnames,
+				if (!dm_str_list_add(cmd->mem, &lvnames,
 						  dm_pool_strdup(cmd->mem,
 								 lv_name + 1))) {
 					log_error("strlist allocation failed");
@@ -594,8 +594,8 @@ static int _process_one_vg(struct cmd_context *cmd, const char *vg_name,
 
 		if (!dm_list_empty(tagsl) &&
 		    /* Only process if a tag matches or it's on arg_vgnames */
-		    !str_list_match_item(arg_vgnames, vg_name) &&
-		    !str_list_match_list(tagsl, &cvl_vg->vg->tags, NULL))
+		    !dm_str_list_match_item(arg_vgnames, vg_name) &&
+		    !dm_str_list_match_list(tagsl, &cvl_vg->vg->tags, NULL))
 			break;
 
 		ret = process_single_vg(cmd, vg_name, cvl_vg->vg, handle);
@@ -621,7 +621,7 @@ int process_each_vg(struct cmd_context *cmd, int argc, char **argv,
 	int opt = 0;
 	int ret_max = ECMD_PROCESSED;
 
-	struct str_list *sl;
+	struct dm_str_list *sl;
 	struct dm_list *vgnames, *vgids;
 	struct dm_list arg_vgnames, tagsl;
 
@@ -643,7 +643,7 @@ int process_each_vg(struct cmd_context *cmd, int argc, char **argv,
 						ret_max = EINVALID_CMD_LINE;
 					continue;
 				}
-				if (!str_list_add(cmd->mem, &tagsl,
+				if (!dm_str_list_add(cmd->mem, &tagsl,
 						  dm_pool_strdup(cmd->mem,
 							      vg_name + 1))) {
 					log_error("strlist allocation failed");
@@ -660,7 +660,7 @@ int process_each_vg(struct cmd_context *cmd, int argc, char **argv,
 					ret_max = EINVALID_CMD_LINE;
 				continue;
 			}
-			if (!str_list_add(cmd->mem, &arg_vgnames,
+			if (!dm_str_list_add(cmd->mem, &arg_vgnames,
 					  dm_pool_strdup(cmd->mem, vg_name))) {
 				log_error("strlist allocation failed");
 				return ECMD_FAILED;
@@ -718,7 +718,7 @@ int process_each_pv_in_vg(struct cmd_context *cmd, struct volume_group *vg,
 		if (sigint_caught())
 			return_ECMD_FAILED;
 		if (tagsl && !dm_list_empty(tagsl) &&
-		    !str_list_match_list(tagsl, &pvl->pv->tags, NULL)) {
+		    !dm_str_list_match_list(tagsl, &pvl->pv->tags, NULL)) {
 			continue;
 		}
 		if ((ret = process_single_pv(cmd, vg, pvl->pv, handle)) > ret_max)
@@ -803,7 +803,7 @@ int process_each_pv(struct cmd_context *cmd, int argc, char **argv,
 	struct physical_volume *pv;
 	struct dm_list *pvslist = NULL, *vgnames;
 	struct dm_list tagsl;
-	struct str_list *sll;
+	struct dm_str_list *sll;
 	char *at_sign, *tagname;
 	struct device *dev;
 
@@ -832,7 +832,7 @@ int process_each_pv(struct cmd_context *cmd, int argc, char **argv,
 						ret_max = EINVALID_CMD_LINE;
 					continue;
 				}
-				if (!str_list_add(cmd->mem, &tagsl,
+				if (!dm_str_list_add(cmd->mem, &tagsl,
 						  dm_pool_strdup(cmd->mem,
 							      tagname))) {
 					log_error("strlist allocation failed");
@@ -1241,7 +1241,7 @@ struct dm_list *create_pv_list(struct dm_pool *mem, struct volume_group *vg, int
 				continue;
 			}
 			dm_list_iterate_items(pvl, &vg->pvs) {
-				if (str_list_match_item(&pvl->pv->tags,
+				if (dm_str_list_match_item(&pvl->pv->tags,
 							tagname)) {
 					if (!_create_pv_entry(mem, pvl, NULL,
 							      allocatable_only,
@@ -1786,13 +1786,13 @@ int get_stripe_params(struct cmd_context *cmd, uint32_t *stripes, uint32_t *stri
 static int _pv_change_tag(struct physical_volume *pv, const char *tag, int addtag)
 {
 	if (addtag) {
-		if (!str_list_add(pv->fmt->cmd->mem, &pv->tags, tag)) {
+		if (!dm_str_list_add(pv->fmt->cmd->mem, &pv->tags, tag)) {
 			log_error("Failed to add tag %s to physical volume %s",
 				  tag, pv_dev_name(pv));
 			return 0;
 		}
 	} else
-		str_list_del(&pv->tags, tag);
+		dm_str_list_del(&pv->tags, tag);
 
 	return 1;
 }

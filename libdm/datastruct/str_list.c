@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2003-2004 Sistina Software, Inc. All rights reserved.
- * Copyright (C) 2004-2012 Red Hat, Inc. All rights reserved.
+ * Copyright (C) 2004-2014 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
  *
@@ -13,10 +13,9 @@
  * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
-#include "lib.h"
-#include "str_list.h"
+#include "dmlib.h"
 
-struct dm_list *str_list_create(struct dm_pool *mem)
+struct dm_list *dm_str_list_create(struct dm_pool *mem)
 {
 	struct dm_list *sl;
 
@@ -30,15 +29,15 @@ struct dm_list *str_list_create(struct dm_pool *mem)
 	return sl;
 }
 
-int str_list_add(struct dm_pool *mem, struct dm_list *sll, const char *str)
+int dm_str_list_add(struct dm_pool *mem, struct dm_list *sll, const char *str)
 {
-	struct str_list *sln;
+	struct dm_str_list *sln;
 
 	if (!str)
 		return_0;
 
 	/* Already in list? */
-	if (str_list_match_item(sll, str))
+	if (dm_str_list_match_item(sll, str))
 		return 1;
 
 	if (!(sln = dm_pool_alloc(mem, sizeof(*sln))))
@@ -50,24 +49,24 @@ int str_list_add(struct dm_pool *mem, struct dm_list *sll, const char *str)
 	return 1;
 }
 
-void str_list_del(struct dm_list *sll, const char *str)
+void dm_str_list_del(struct dm_list *sll, const char *str)
 {
 	struct dm_list *slh, *slht;
 
 	dm_list_iterate_safe(slh, slht, sll)
-		if (!strcmp(str, dm_list_item(slh, struct str_list)->str))
+		if (!strcmp(str, dm_list_item(slh, struct dm_str_list)->str))
 			 dm_list_del(slh);
 }
 
-int str_list_dup(struct dm_pool *mem, struct dm_list *sllnew,
+int dm_str_list_dup(struct dm_pool *mem, struct dm_list *sllnew,
 		 const struct dm_list *sllold)
 {
-	struct str_list *sl;
+	struct dm_str_list *sl;
 
 	dm_list_init(sllnew);
 
 	dm_list_iterate_items(sl, sllold) {
-		if (!str_list_add(mem, sllnew, dm_pool_strdup(mem, sl->str)))
+		if (!dm_str_list_add(mem, sllnew, dm_pool_strdup(mem, sl->str)))
 			return_0;
 	}
 
@@ -77,9 +76,9 @@ int str_list_dup(struct dm_pool *mem, struct dm_list *sllnew,
 /*
  * Is item on list?
  */
-int str_list_match_item(const struct dm_list *sll, const char *str)
+int dm_str_list_match_item(const struct dm_list *sll, const char *str)
 {
-	struct str_list *sl;
+	struct dm_str_list *sl;
 
 	dm_list_iterate_items(sl, sll)
 	    if (!strcmp(str, sl->str))
@@ -90,16 +89,16 @@ int str_list_match_item(const struct dm_list *sll, const char *str)
 
 /*
  * Is at least one item on both lists?
- * If tag_matched is non-NULL, it is set to the tag that matched.
+ * If str_matched is non-NULL, it is set to the tag that matched.
  */
-int str_list_match_list(const struct dm_list *sll, const struct dm_list *sll2, const char **tag_matched)
+int dm_str_list_match_list(const struct dm_list *sll, const struct dm_list *sll2, const char **str_matched)
 {
-	struct str_list *sl;
+	struct dm_str_list *sl;
 
 	dm_list_iterate_items(sl, sll)
-		if (str_list_match_item(sll2, sl->str)) {
-			if (tag_matched)
-				*tag_matched = sl->str;
+		if (dm_str_list_match_item(sll2, sl->str)) {
+			if (str_matched)
+				*str_matched = sl->str;
 			return 1;
 		}
 
@@ -109,15 +108,15 @@ int str_list_match_list(const struct dm_list *sll, const struct dm_list *sll2, c
 /*
  * Do both lists contain the same set of items?
  */
-int str_list_lists_equal(const struct dm_list *sll, const struct dm_list *sll2)
+int dm_str_list_lists_equal(const struct dm_list *sll, const struct dm_list *sll2)
 {
-	struct str_list *sl;
+	struct dm_str_list *sl;
 
 	if (dm_list_size(sll) != dm_list_size(sll2))
 		return 0;
 
 	dm_list_iterate_items(sl, sll)
-	    if (!str_list_match_item(sll2, sl->str))
+	    if (!dm_str_list_match_item(sll2, sl->str))
 		return 0;
 
 	return 1;

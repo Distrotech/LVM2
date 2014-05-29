@@ -24,7 +24,6 @@
 #include "lvm-string.h"
 #include "targets.h"
 #include "activate.h"
-#include "str_list.h"
 
 #include <sys/utsname.h>
 
@@ -572,12 +571,12 @@ static int _mirrored_modules_needed(struct dm_pool *mem,
 		return_0;
 
 	if (vg_is_clustered(seg->lv->vg) &&
-	    !str_list_add(mem, modules, "clog")) {
+	    !dm_str_list_add(mem, modules, "clog")) {
 		log_error("cluster log string list allocation failed");
 		return 0;
 	}
 
-	if (!str_list_add(mem, modules, "mirror")) {
+	if (!dm_str_list_add(mem, modules, "mirror")) {
 		log_error("mirror string list allocation failed");
 		return 0;
 	}
