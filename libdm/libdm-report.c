@@ -1813,6 +1813,34 @@ static struct selection_node *_alloc_selection_node(struct dm_pool *mem, uint32_
 	return sn;
 }
 
+static void _display_selection_help(struct dm_report *rh)
+{
+	struct op_def *t;
+
+	log_warn("Selection operands");
+	log_warn("------------------");
+	log_warn("  fields              - reporting fields");
+	log_warn("  numbers	        - integer or floating point, non-negative");
+	log_warn("  strings	        - characters quoted by \' or \" or unquoted");
+	log_warn("  string lists	- strings enclosed by [ ] and elements delimited by logical");
+	log_warn("                        conjunction (meaning \"all items must match\") or logical");
+	log_warn("                        disjunction operator (meaning \"at least one item must match\")");
+	log_warn("  regular expression  - characters quoted by \' or \" or unquoted");
+	log_warn(" ");
+	log_warn("Selection operators");
+	log_warn("-------------------");
+	log_warn("  Comparison operators:");
+	t = _op_cmp;
+	for (; t->string; t++)
+		log_warn("    %4s  - %s", t->string, t->desc);
+	log_warn(" ");
+	log_warn("  Logical and grouping operators:");
+	t = _op_log;
+	for (; t->string; t++)
+		log_warn("    %4s  - %s", t->string, t->desc);
+	log_warn(" ");
+}
+
 static char _sel_syntax_error_at_msg[] = "Selection syntax error at '%s'";
 
 /*
@@ -1862,6 +1890,8 @@ static struct selection_node *_parse_selection(struct dm_report *rh,
 		c = we[0];
 		tmp = (char *) we;
 		tmp[0] = '\0';
+		_display_fields(rh);
+		log_warn(" ");
 		log_error("Unrecognised selection field: %s", ws);
 		tmp[0] = c;
 		goto bad;
@@ -1871,10 +1901,12 @@ static struct selection_node *_parse_selection(struct dm_report *rh,
 
 	/* comparison operator */
 	if (!(flags = _tok_op_cmp(we, &last))) {
+		_display_selection_help(rh);
 		log_error("Unrecognised comparison operator: %s", we);
 		goto bad;
 	}
 	if (!last) {
+		_display_selection_help(rh);
 		log_error("Missing value after operator");
 		goto bad;
 	}
@@ -1883,6 +1915,7 @@ static struct selection_node *_parse_selection(struct dm_report *rh,
 	if ((flags & FLD_CMP_NUMBER) &&
 	    (ft->flags != DM_REPORT_FIELD_TYPE_NUMBER) &&
 	    (ft->flags != DM_REPORT_FIELD_TYPE_SIZE)) {
+		_display_selection_help(rh);
 		log_error("Operator can be used only with numeric or size fields: %s", ws);
 		goto bad;
 	}
@@ -2052,6 +2085,14 @@ int dm_report_set_output_selection(struct dm_report *rh, uint32_t *report_types,
 	if (!selection || !selection[0]) {
 		rh->selection_root = NULL;
 		return 1;
+	}
+
+	if (!strcasecmp(selection, DM_REPORT_FIELD_RESERVED_NAME_HELP) ||
+	    !strcmp(selection, DM_REPORT_FIELD_RESERVED_NAME_HELP_ALT)) {
+		_display_fields(rh);
+		log_warn(" ");
+		_display_selection_help(rh);
+		return_0;
 	}
 
 	if (!(root = _alloc_selection_node(rh->mem, SEL_OR)))
