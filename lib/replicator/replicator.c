@@ -394,10 +394,10 @@ static int _replicator_modules_needed(struct dm_pool *mem,
 				      const struct lv_segment *seg __attribute__((unused)),
 				      struct dm_list *modules)
 {
-	if (!str_list_add(mem, modules, REPLICATOR_MODULE))
+	if (!dm_str_list_add(mem, modules, REPLICATOR_MODULE))
 		return_0;
 
-	if (!str_list_add(mem, modules, REPLICATOR_DEV_MODULE))
+	if (!dm_str_list_add(mem, modules, REPLICATOR_DEV_MODULE))
 		return_0;
 
 	return 1;
