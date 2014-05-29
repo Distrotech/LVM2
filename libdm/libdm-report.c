@@ -1643,7 +1643,7 @@ static const char *_tok_value(const struct dm_report_field_type *ft,
 			*factor = dm_units_to_factor(s, &c, 0, &tmp);
 
 			if (expected_type == DM_REPORT_FIELD_TYPE_NUMBER) {
-				if (factor) {
+				if (*factor) {
 					log_error("Found size unit specifier but "
 						  "only numeric value expected for "
 						  "selection field %s.",ft->id);
@@ -1925,7 +1925,8 @@ static struct selection_node *_parse_selection(struct dm_report *rh,
 		if (!(last = _tok_value_regex(ft, last, &vs, &ve, &flags)))
 			goto_bad;
 	} else {
-		if (ft->flags == DM_REPORT_FIELD_TYPE_SIZE)
+		if (ft->flags == DM_REPORT_FIELD_TYPE_SIZE ||
+		    ft->flags == DM_REPORT_FIELD_TYPE_NUMBER)
 			custom = &factor;
 		else if (ft->flags == DM_REPORT_FIELD_TYPE_STRING_LIST)
 			custom = &str_list;
