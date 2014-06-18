@@ -1858,17 +1858,17 @@ static int get_all_devs(struct cmd_context *cmd, struct dm_list *all_devs)
 	return ECMD_PROCESSED;
 }
 
-static void device_list_remove(struct dm_list *all_devs, struct device *dev)
+static int device_list_remove(struct dm_list *all_devs, struct device *dev)
 {
 	struct device_list *devl;
 
 	dm_list_iterate_items(devl, all_devs) {
 		if (devl->dev == dev) {
 			dm_list_del(&devl->list);
-			return;
+			return 1;
 		}
 	}
-	log_error(INTERNAL_ERROR "device_list_remove %s not found", dev_name(dev));
+	return 0;
 }
 
 static int process_dev_list(struct cmd_context *cmd, struct dm_list *all_devs,
@@ -1914,6 +1914,7 @@ static int process_pvs_in_vg(struct cmd_context *cmd,
 	struct pv_list *pvl;
 	const char *pv_name;
 	int process_pv;
+	int found;
 	int ret_max = ECMD_PROCESSED;
 	int ret = 0;
 
@@ -1949,7 +1950,18 @@ static int process_pvs_in_vg(struct cmd_context *cmd,
 				log_very_verbose("Processing PV %s in VG %s", pv_name, vg->name);
 
 			if (all_devs)
-				device_list_remove(all_devs, pv->dev);
+				found = device_list_remove(all_devs, pv->dev);
+
+			if (all_devs && !found) {
+				/*
+				 * There's a bug somewhere that can cause pvs with no mdas
+				 * to appear in both their real vg and the orphan vg,
+				 * which triggers this condition when not using lvmetad.
+				 */
+				log_verbose("Skipping VG %s PV %s not found in device list",
+					    vg->name, pv_name);
+				continue;
+			}
 
 			if (!skip)
 				ret = process_single_pv(cmd, vg, pv, handle);
