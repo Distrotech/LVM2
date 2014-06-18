@@ -1852,17 +1852,17 @@ static int get_all_devs(struct cmd_context *cmd, struct dm_list *all_devs)
 	return ECMD_PROCESSED;
 }
 
-static void device_list_remove(struct dm_list *all_devs, struct device *dev)
+static int device_list_remove(struct dm_list *all_devs, struct device *dev)
 {
 	struct device_list *devl;
 
 	dm_list_iterate_items(devl, all_devs) {
 		if (devl->dev == dev) {
 			dm_list_del(&devl->list);
-			return;
+			return 1;
 		}
 	}
-	log_error(INTERNAL_ERROR "device_list_remove %s not found", dev_name(dev));
+	return 0;
 }
 
 static int process_dev_list(struct cmd_context *cmd, struct dm_list *all_devs,
@@ -1908,6 +1908,7 @@ static int process_pvs_in_vg(struct cmd_context *cmd,
 	struct pv_list *pvl;
 	const char *pv_name;
 	int process_pv;
+	int dev_found;
 	int ret_max = ECMD_PROCESSED;
 	int ret = 0;
 
@@ -1942,8 +1943,23 @@ static int process_pvs_in_vg(struct cmd_context *cmd,
 			else
 				log_very_verbose("Processing PV %s in VG %s", pv_name, vg->name);
 
-			if (all_devs)
-				device_list_remove(all_devs, pv->dev);
+			dev_found = device_list_remove(all_devs, pv->dev);
+
+			/*
+			 * There's a bug somewhere that can cause pvs with no mdas
+			 * to appear in both their real vg and the orphan vg when
+			 * not using lvmetad.
+			 *
+			 * These pvs are not missing and they will not be found in
+			 * all_devs the second time they are encountered here.
+			 *
+			 * Missing pvs will also not be found in all_devs, but we
+			 * do want to process missing pvs.
+			 */
+			if (!dev_found && !is_missing_pv(pv)) {
+				log_verbose("Skipping PV %s in VG %s not in device list", pv_name, vg->name);
+				continue;
+			}
 
 			if (!skip)
 				ret = process_single_pv(cmd, vg, pv, handle);
@@ -2078,18 +2094,15 @@ int process_each_pv(struct cmd_context *cmd,
 	 * from all vgs are processed first, removing each from all_devs.  Then
 	 * any devs remaining in all_devs are processed.
 	 */
-	if (process_all_devs) {
-		ret = get_all_devs(cmd, &all_devs);
-		if (ret != ECMD_PROCESSED)
-			return ret;
-	}
+	ret = get_all_devs(cmd, &all_devs);
+	if (ret != ECMD_PROCESSED)
+		return ret;
 
 	ret = get_all_vgnames(cmd, &all_vgnames, vg_name, 1);
 	if (ret != ECMD_PROCESSED)
 		return ret;
 
-	ret = process_pvs_in_vgs(cmd, flags, &all_vgnames,
-				 process_all_devs ? &all_devs : NULL,
+	ret = process_pvs_in_vgs(cmd, flags, &all_vgnames, &all_devs,
 				 &arg_pvnames, &arg_tags, process_all_pvs,
 				 handle, process_single_pv);
 	if (ret > ret_max)
@@ -2098,7 +2111,7 @@ int process_each_pv(struct cmd_context *cmd,
 	if (sigint_caught())
 		goto out;
 
-	if (dm_list_empty(&all_devs))
+	if (!process_all_devs)
 		goto out;
 
 	ret = process_dev_list(cmd, &all_devs, handle, process_single_pv);
