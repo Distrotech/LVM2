@@ -966,17 +966,20 @@ if test "$PROFILING" = yes; then
   COPTIMISE_FLAG="$COPTIMISE_FLAG -fprofile-arcs -ftest-coverage"
   AC_PATH_TOOL(LCOV, lcov)
   AC_PATH_TOOL(GENHTML, genhtml)
-  test -z "$LCOV" -o -z "$GENHTML" && AC_MSG_ERROR([lcov and genhtml are required for profiling])
-  AC_PATH_TOOL(GENPNG, genpng)
-  if test -n "$GENPNG"; then
-    AC_MSG_CHECKING([whether $GENPNG has all required modules])
-    if "$GENPNG" --help > /dev/null 2>&1 ; then
-      AC_MSG_RESULT(ok)
-      GENHTML="$GENHTML --frames"
-    else
-      AC_MSG_RESULT([not supported])
-      AC_MSG_WARN([GD.pm perl module is not installed])
-      GENPNG=
+  if test -z "$LCOV" -o -z "$GENHTML"; then
+    AC_MSG_WARN([lcov and genhtml are required for profiling])
+  else
+    AC_PATH_TOOL(GENPNG, genpng)
+    if test -n "$GENPNG"; then
+      AC_MSG_CHECKING([whether $GENPNG has all required modules])
+      if "$GENPNG" --help > /dev/null 2>&1 ; then
+        AC_MSG_RESULT(ok)
+        GENHTML="$GENHTML --frames"
+      else
+        AC_MSG_RESULT([not supported])
+        AC_MSG_WARN([GD.pm perl module is not installed])
+        GENPNG=
+      fi
     fi
   fi
 fi
