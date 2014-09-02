@@ -2867,6 +2867,18 @@ static int _lvconvert_pool(struct cmd_context *cmd,
 			return 0;
 		}
 
+		if (arg_str_value(cmd, cachepool_ARG, NULL) && lv_is_thin_pool(pool_lv)) {
+			log_error("--cachepool requires a cache pool.  %s is a thin pool",
+				  display_lvname(pool_lv));
+			return 0;
+		}
+
+		if (arg_str_value(cmd, thinpool_ARG, NULL) && lv_is_cache_pool(pool_lv)) {
+			log_error("--thinpool requires a thin pool.  %s is a cache pool",
+				  display_lvname(pool_lv));
+			return 0;
+		}
+
 		/* FIXME cache pool */
 		if (lv_is_thin_pool(pool_lv) && pool_is_active(pool_lv)) {
 			/* If any volume referencing pool active - abort here */
