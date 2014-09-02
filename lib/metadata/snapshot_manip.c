@@ -129,6 +129,11 @@ int lv_is_visible(const struct logical_volume *lv)
 	return lv->status & VISIBLE_LV ? 1 : 0;
 }
 
+int lv_is_not_visible(const struct logical_volume *lv)
+{
+	return !lv_is_visible(lv);
+}
+
 int lv_is_virtual_origin(const struct logical_volume *lv)
 {
 	return (lv->status & VIRTUAL_ORIGIN) ? 1 : 0;

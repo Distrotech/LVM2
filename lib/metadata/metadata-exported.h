@@ -180,6 +180,13 @@
 #define lv_is_raid_metadata(lv)	(((lv)->status & (RAID_META)) ? 1 : 0)
 #define lv_is_raid_type(lv)	(((lv)->status & (RAID | RAID_IMAGE | RAID_META)) ? 1 : 0)
 
+/*
+ * Unfortunately, raid1 and raid10 end up being reported as MIRRORED,
+ * so lv_is_mirror_type() is true for them... add this test until that
+ * can be untangled.
+ */
+#define lv_is_really_mirror_type(lv) (lv_is_mirror_type((lv)) && !lv_is_raid((lv)))
+
 #define lv_is_cache(lv)		(((lv)->status & (CACHE)) ? 1 : 0)
 #define lv_is_cache_pool(lv)	(((lv)->status & (CACHE_POOL)) ? 1 : 0)
 #define lv_is_cache_pool_data(lv)	(((lv)->status & (CACHE_POOL_DATA)) ? 1 : 0)
@@ -927,6 +934,7 @@ int lv_is_cow_covering_origin(const struct logical_volume *lv);
 
 /* Test if given LV is visible from user's perspective */
 int lv_is_visible(const struct logical_volume *lv);
+int lv_is_not_visible(const struct logical_volume *lv);
 
 int pv_is_in_vg(struct volume_group *vg, struct physical_volume *pv);
 
