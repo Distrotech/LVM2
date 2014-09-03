@@ -304,6 +304,26 @@ static int _vgchange_clustered(struct cmd_context *cmd,
 			       struct volume_group *vg)
 {
 	int clustered = !strcmp(arg_str_value(cmd, clustered_ARG, "n"), "y");
+	struct lv_list *lvl;
+	struct logical_volume *lv;
+
+	if (clustered) {
+		dm_list_iterate_items(lvl, &vg->lvs) {
+			lv = lvl->lv;
+
+			if (lv_is_cache_type(lv)) {
+				log_error("Clustered VG is not supported with cache type LV %s",
+					  display_lvname(lv));
+				return 0;
+			}
+
+			if (lv_is_thin_type(lv)) {
+				log_error("Clustered VG is not supported with thin type LV %s",
+					  display_lvname(lv));
+				return 0;
+			}
+		}
+	}
 
 	if (clustered && (vg_is_clustered(vg))) {
 		log_error("Volume group \"%s\" is already clustered",
