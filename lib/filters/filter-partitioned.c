@@ -15,6 +15,9 @@
 
 #include "lib.h"
 #include "filter.h"
+#ifdef UDEV_SYNC_SUPPORT
+#include <libudev.h>
+#endif
 
 static int _passes_partitioned_filter(struct dev_filter *f, struct device *dev)
 {
@@ -22,34 +25,41 @@ static int _passes_partitioned_filter(struct dev_filter *f, struct device *dev)
 	const char *name = dev_name(dev);
 	int ret = 0;
 	uint64_t size;
+	int native = dev_aux_status_use_native(&dev->aux_status, dev_name(dev));
 
-	/* Check it's accessible */
-	if (!dev_open_readonly_quiet(dev)) {
-		log_debug_devs("%s: Skipping: open failed", name);
-		return 0;
-	}
+	if (native) {
 
-	/* Check it's not too small */
-	if (!dev_get_size(dev, &size)) {
-		log_debug_devs("%s: Skipping: dev_get_size failed", name);
-		goto out;
-	}
+		/* Some sanity checks done before calling native partition recognition. */
 
-	if (size < pv_min_size()) {
-		log_debug_devs("%s: Skipping: Too small to hold a PV", name);
-		goto out;
+		/* Check it's accessible */
+		if (!dev_open_readonly_quiet(dev)) {
+			log_debug_devs("%s: Skipping: open failed", name);
+			return 0;
+		}
+
+		/* Check it's not too small */
+		if (!dev_get_size(dev, &size)) {
+			log_debug_devs("%s: Skipping: dev_get_size failed", name);
+			goto out;
+		}
+
+		if (size < pv_min_size()) {
+			log_debug_devs("%s: Skipping: Too small to hold a PV", name);
+			goto out;
+		}
 	}
 
 	if (dev_is_partitioned(dt, dev)) {
-		log_debug_devs("%s: Skipping: Partition table signature found",
-			       name);
+		log_debug_devs("%s: Skipping: Partition table signature found [aux:%s/%p]",
+			       name, dev_aux_status_source_name_used(&dev->aux_status),
+			       dev->aux_status.handle);
 		goto out;
 	}
 
 	ret = 1;
 
       out:
-	if (!dev_close(dev))
+	if (native && !dev_close(dev))
 		stack;
 
 	return ret;

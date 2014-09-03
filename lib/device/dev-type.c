@@ -314,12 +314,47 @@ static int _has_partition_table(struct device *dev)
 	return ret;
 }
 
-int dev_is_partitioned(struct dev_types *dt, struct device *dev)
+#ifdef UDEV_SYNC_SUPPORT
+static int _udev_dev_is_partitioned(struct device *dev)
+{
+	const char *value;
+
+	if (!(value = udev_device_get_property_value((struct udev_device *)dev->aux_status.handle, "ID_PART_TABLE_TYPE")))
+		return 0;
+
+	if ((value = udev_device_get_property_value((struct udev_device *)dev->aux_status.handle, "ID_PART_ENTRY_DISK")))
+		return 0;
+
+	return 1;
+}
+#else
+static int _udev_dev_is_partitioned(struct device *dev)
+{
+	return 0;
+}
+#endif
+
+static int _native_dev_is_partitioned(struct dev_types *dt, struct device *dev)
 {
 	if (!_is_partitionable(dt, dev))
 		return 0;
 
 	return _has_partition_table(dev);
+}
+
+int dev_is_partitioned(struct dev_types *dt, struct device *dev)
+{
+	if (dev_aux_status_use_native(&dev->aux_status, dev_name(dev)))
+		return _native_dev_is_partitioned(dt, dev);
+
+	if (dev->aux_status.source == DEV_AUX_STATUS_SRC_UDEV)
+		return _udev_dev_is_partitioned(dev);
+
+	log_error(INTERNAL_ERROR "Missing hook for partition table recognition "
+		  "using auxiliary device status source %s",
+		  dev_aux_status_source_name(dev->aux_status.source));
+
+	return 0;
 }
 
 /*
