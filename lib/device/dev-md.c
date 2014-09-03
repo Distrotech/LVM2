@@ -17,6 +17,9 @@
 #include "dev-type.h"
 #include "metadata.h"
 #include "xlate.h"
+#ifdef UDEV_SYNC_SUPPORT
+#include <libudev.h> /* for MD detection using udev db records */
+#endif
 
 #ifdef __linux__
 
@@ -82,10 +85,27 @@ static uint64_t _v1_sb_offset(uint64_t size, md_minor_version_t minor_version)
 	return sb_offset;
 }
 
+#ifdef UDEV_SYNC_SUPPORT
+static int _udev_dev_is_md(struct device *dev)
+{
+	const char *value;
+
+	if (!(value = udev_device_get_property_value((struct udev_device *)dev->aux_status.handle, "ID_FS_TYPE")))
+		return 0;
+
+	return !strcmp(value, "linux_raid_member");
+}
+#else
+static int _udev_dev_is_md(struct device *dev)
+{
+	return 0;
+}
+#endif
+
 /*
  * Returns -1 on error
  */
-int dev_is_md(struct device *dev, uint64_t *offset_found)
+static int _native_dev_is_md(struct device *dev, uint64_t *offset_found)
 {
 	int ret = 1;
 	md_minor_version_t minor;
@@ -128,6 +148,28 @@ out:
 		*offset_found = sb_offset;
 
 	return ret;
+}
+
+int dev_is_md(struct device *dev, uint64_t *offset_found)
+{
+
+	/*
+	 * If non-native device status source is selected, use it
+	 * only if offset_found is not requested as this
+	 * information is not in udev db.
+	 */
+	if (dev_aux_status_use_native(&dev->aux_status, dev_name(dev)) || offset_found)
+		return _native_dev_is_md(dev, offset_found);
+
+	if (dev->aux_status.source == DEV_AUX_STATUS_SRC_UDEV)
+		return _udev_dev_is_md(dev);
+
+	log_error(INTERNAL_ERROR "Missing hook for MD device recognition "
+		  "using auxiliary device status source %s",
+		  dev_aux_status_source_name(dev->aux_status.source));
+
+	return -1;
+
 }
 
 static int _md_sysfs_attribute_snprintf(char *path, size_t size,
