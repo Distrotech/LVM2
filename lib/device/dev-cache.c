@@ -53,7 +53,15 @@ static struct {
 #define _strdup(x) dm_pool_strdup(_cache.mem, (x))
 
 static int _insert(const char *path, const struct stat *info,
-		   int rec, int check_with_udev_db);
+		   int rec, int check_with_udev_db,
+		   void *dev_aux_status_handle);
+
+static int _get_dev_aux_status(const dev_t devno, const char *path,
+			       struct dev_aux_status *dev_aux_status);
+static void _cleanup_dev_aux_status(struct dev_aux_status *dev_aux_status,
+				    const char *path);
+
+static struct device *_iter_next(struct dev_iter *iter);
 
 /* Setup non-zero members of passed zeroed 'struct device' */
 static void _dev_init(struct device *dev, int max_error_count)
@@ -346,7 +354,8 @@ static int _add_alias(struct device *dev, const char *path)
  * Either creates a new dev, or adds an alias to
  * an existing dev.
  */
-static int _insert_dev(const char *path, dev_t d)
+static int _insert_dev(const char *path, dev_t d,
+		       struct dev_aux_status *dev_aux_status)
 {
 	struct device *dev;
 	static dev_t loopfile_count = 0;
@@ -364,18 +373,37 @@ static int _insert_dev(const char *path, dev_t d)
 	/* is this device already registered ? */
 	if (!(dev = (struct device *) btree_lookup(_cache.devices,
 						   (uint32_t) d))) {
-		/* create new device */
 		if (loopfile) {
 			if (!(dev = dev_create_file(path, NULL, NULL, 0)))
 				return_0;
 		} else if (!(dev = _dev_create(d)))
 			return_0;
 
+		if (!_get_dev_aux_status(d, path, dev_aux_status)) {
+			log_error("Failed to acquire auxiliary device status for %s.", path);
+			return 0;
+		}
+
+		/*
+		 * Attach new auxiliary device status.
+		 * Make sure any old one is cleaned up.
+		 **/
+		_cleanup_dev_aux_status(&dev->aux_status, path);
+		dev->aux_status.source = dev_aux_status->source;
+		if (dev_aux_status->handle) {
+			log_debug_devs("%s: Attaching auxiliary device status [aux:%s/%p]",
+					path, dev_aux_status_source_name(dev_aux_status->source),
+					dev_aux_status->handle);
+			dev->aux_status.handle = dev_aux_status->handle;
+		}
+
 		if (!(btree_insert(_cache.devices, (uint32_t) d, dev))) {
 			log_error("Couldn't insert device into binary tree.");
+			_cleanup_dev_aux_status(dev_aux_status, path);
 			_free(dev);
 			return 0;
 		}
+
 	}
 
 	if (!(path_copy = dm_pool_strdup(_cache.mem, path))) {
@@ -446,7 +474,7 @@ static int _insert_dir(const char *dir)
 				return_0;
 
 			_collapse_slashes(path);
-			r &= _insert(path, NULL, 1, 0);
+			r &= _insert(path, NULL, 1, 0, NULL);
 			dm_free(path);
 
 			free(dirent[n]);
@@ -471,7 +499,7 @@ static int _insert_file(const char *path)
 		return 0;
 	}
 
-	if (!_insert_dev(path, 0))
+	if (!_insert_dev(path, 0, NULL))
 		return_0;
 
 	return 1;
@@ -479,16 +507,33 @@ static int _insert_file(const char *path)
 
 #ifdef UDEV_SYNC_SUPPORT
 
-static int _device_in_udev_db(const dev_t d)
+static struct udev_device *_get_udev_device(const dev_t d, void *dev_aux_status_handle)
 {
 	struct udev *udev;
-	struct udev_device *udev_device;
+
+	if (dev_aux_status_handle)
+		return udev_device_ref((struct udev_device *) dev_aux_status_handle);
 
 	if (!(udev = udev_get_library_context()))
-		return_0;
+		return_NULL;
 
-	if ((udev_device = udev_device_new_from_devnum(udev, 'b', d))) {
-		udev_device_unref(udev_device);
+	return udev_device_new_from_devnum(udev, 'b', d);
+}
+
+static int _device_in_udev_db(const dev_t d, void **dev_aux_status_handle)
+{
+	struct udev_device *udev_device;
+
+	if ((udev_device = _get_udev_device(d, NULL))) {
+		if (dev_aux_status_handle)
+			/*
+			 * if we're interested in using udev_device further,
+			 * keep it assigned in dev_aux_status_handle
+			 */
+			*dev_aux_status_handle = udev_device;
+		else
+			/* ...otherwise, clean the handle now */
+			udev_device_unref(udev_device);
 		return 1;
 	}
 
@@ -532,14 +577,14 @@ static int _insert_udev_dir(struct udev *udev, const char *dir)
 			log_very_verbose("udev failed to return a device node for entry %s.",
 					 entry_name);
 		else
-			r &= _insert(node_name, NULL, 0, 0);
+			r &= _insert(node_name, NULL, 0, 0, device);
 
 		udev_list_entry_foreach(symlink_entry, udev_device_get_devlinks_list_entry(device)) {
 			if (!(symlink_name = udev_list_entry_get_name(symlink_entry)))
 				log_very_verbose("udev failed to return a symlink name for entry %s.",
 						 entry_name);
 			else
-				r &= _insert(symlink_name, NULL, 0, 0);
+				r &= _insert(symlink_name, NULL, 0, 0, device);
 		}
 
 		udev_device_unref(device);
@@ -576,9 +621,19 @@ static void _insert_dirs(struct dm_list *dirs)
 	}
 }
 
+static void _udev_device_unref(void *handle)
+{
+	udev_device_unref((struct udev_device *) handle);
+}
+
 #else	/* UDEV_SYNC_SUPPORT */
 
-static int _device_in_udev_db(const dev_t d)
+static void *_get_udev_device(const dev_t d, void *dev_aux_status_handle)
+{
+	return dev_aux_status_handle ? : NULL;
+}
+
+static int _device_in_udev_db(const dev_t d, void **dev_aux_status_handle)
 {
 	return 0;
 }
@@ -591,51 +646,171 @@ static void _insert_dirs(struct dm_list *dirs)
 		_insert_dir(dl->dir);
 }
 
+static void _udev_device_unref(void *handle)
+{
+}
+
 #endif	/* UDEV_SYNC_SUPPORT */
 
+static const char *_dev_aux_status_source_names[] =
+{
+	[DEV_AUX_STATUS_SRC_NATIVE] =	"native",
+	[DEV_AUX_STATUS_SRC_UDEV] =	"udev"
+};
+
+const char *dev_aux_status_source_name(dev_aux_status_source_t source)
+{
+	return _dev_aux_status_source_names[source];
+}
+
+const char *dev_aux_status_source_name_used(struct dev_aux_status *status)
+{
+	if (!status->handle)
+		return _dev_aux_status_source_names[DEV_AUX_STATUS_SRC_NATIVE];
+
+	return _dev_aux_status_source_names[status->source];
+}
+
+int dev_aux_status_use_native(struct dev_aux_status *status, const char *dev_name)
+{
+	if (status->source == DEV_AUX_STATUS_SRC_NATIVE)
+		return 1;
+
+	if (!status->handle) {
+		log_debug_devs("%s: device has %s auxiliary status source set, "
+			       "but no external handle is attached. "
+			       "Using %s source instead.",
+				dev_name ? : "unknown device name",
+				_dev_aux_status_source_names[status->source],
+				_dev_aux_status_source_names[DEV_AUX_STATUS_SRC_NATIVE]);
+		return 1;
+	}
+
+	return 0;
+}
+
+static void _cleanup_dev_aux_status(struct dev_aux_status *dev_aux_status,
+				    const char *path)
+{
+	if (!dev_aux_status->handle)
+		return;
+
+	switch (dev_aux_status->source) {
+		case DEV_AUX_STATUS_SRC_NATIVE:
+			/* nothing to do */
+			return;
+		case DEV_AUX_STATUS_SRC_UDEV:
+			_udev_device_unref(dev_aux_status->handle);
+			break;
+
+		default:
+			log_error(INTERNAL_ERROR "_cleanup_dev_aux_status: %s: "
+				  "unknown device source type", path);
+			return;
+	}
+
+	log_debug_devs("%s: Auxiliary device status cleaned up [aux:%s/%p]",
+		       path, dev_aux_status_source_name(dev_aux_status->source),
+		       dev_aux_status->handle);
+
+	dev_aux_status->source = DEV_AUX_STATUS_SRC_NATIVE;
+	dev_aux_status->handle = NULL;
+}
+
+static int _get_dev_aux_status(const dev_t devno, const char *path,
+			       struct dev_aux_status *dev_aux_status)
+{
+	void *handle = NULL;
+
+	switch (dev_aux_status_source()) {
+		case DEV_AUX_STATUS_SRC_NATIVE:
+			dev_aux_status->source = DEV_AUX_STATUS_SRC_NATIVE;
+			break;
+
+		case DEV_AUX_STATUS_SRC_UDEV:
+			if (!(handle = _get_udev_device(devno, dev_aux_status->handle))) {
+				log_error("%s: device not found in udev db", path);
+				return 0;
+			}
+			dev_aux_status->source = DEV_AUX_STATUS_SRC_UDEV;
+			break;
+
+		default:
+			log_error(INTERNAL_ERROR "_get_dev_aux_status: %s: "
+				  "unknown device source type", path);
+			return 0;
+	}
+
+	dev_aux_status->handle = handle;
+	return 1;
+}
+
 static int _insert(const char *path, const struct stat *info,
-		   int rec, int check_with_udev_db)
+		   int rec, int check_dev_aux_source,
+		   void *dev_aux_status_handle)
 {
 	struct stat tinfo;
+	struct dev_aux_status dev_aux_status = {0, NULL};
+	int r = 0;
 
 	if (!info) {
 		if (stat(path, &tinfo) < 0) {
 			log_sys_very_verbose("stat", path);
-			return 0;
+			goto out;
 		}
 		info = &tinfo;
 	}
 
-	if (check_with_udev_db && !_device_in_udev_db(info->st_rdev)) {
-		log_very_verbose("%s: Not in udev db", path);
-		return 0;
+	if (check_dev_aux_source) {
+		/*
+		 * If we obtained device list from udev, check the item is still valid.
+		 * For this check, we need to instantiate udev device handle.
+		 * However, if we're using udev as auxiliary device status source in
+		 * adition to that, don't clean this handle immediately as we can reuse
+		 * it for the dev->aux_status.handle - this is just an optimization
+		 * to avoid instantiating the same udev handle more than necessary
+		 * which could consume resource uselessly.
+		 */
+		if (obtain_device_list_from_udev() &&
+		    !_device_in_udev_db(info->st_rdev, dev_aux_status_source() == DEV_AUX_STATUS_SRC_UDEV ?
+								     &dev_aux_status.handle : NULL)) {
+			log_error("%s: Device not found in udev db", path);
+			return 0;
+		}
 	}
 
 	if (S_ISDIR(info->st_mode)) {	/* add a directory */
 		/* check it's not a symbolic link */
 		if (lstat(path, &tinfo) < 0) {
 			log_sys_very_verbose("lstat", path);
-			return 0;
+			goto out;
 		}
 
 		if (S_ISLNK(tinfo.st_mode)) {
 			log_debug_devs("%s: Symbolic link to directory", path);
-			return 1;
+			r = 1;
+			goto out;
 		}
 
 		if (rec && !_insert_dir(path))
-			return_0;
+			goto_out;
 	} else {		/* add a device */
 		if (!S_ISBLK(info->st_mode)) {
 			log_debug_devs("%s: Not a block device", path);
-			return 1;
+			r = 1;
+			goto out;
 		}
 
-		if (!_insert_dev(path, info->st_rdev))
-			return_0;
-	}
+		dev_aux_status.handle = dev_aux_status_handle;
 
-	return 1;
+		if (!_insert_dev(path, info->st_rdev, &dev_aux_status))
+			goto_out;
+
+		return 1;
+	}
+out:
+	_cleanup_dev_aux_status(&dev_aux_status, path);
+	return r;
 }
 
 static void _full_scan(int dev_scan)
@@ -795,6 +970,18 @@ int dev_cache_check_for_open_devices(void)
 
 int dev_cache_exit(void)
 {
+	struct device *dev;
+	struct dev_iter iter;
+
+	if (_cache.devices) {
+		iter.filter = NULL;
+		iter.current = btree_first(_cache.devices);
+		while (iter.current) {
+			dev = _iter_next(&iter);
+			_cleanup_dev_aux_status(&dev->aux_status, dev_name(dev));
+		}
+	}
+
 	int num_open = 0;
 
 	if (_cache.names)
@@ -914,7 +1101,7 @@ const char *dev_name_confirmed(struct device *dev, int quiet)
 		if (dm_list_size(&dev->aliases) > 1) {
 			dm_list_del(dev->aliases.n);
 			if (!r)
-				_insert(name, &buf, 0, obtain_device_list_from_udev());
+				_insert(name, &buf, 0, 1, NULL);
 			continue;
 		}
 
@@ -949,7 +1136,7 @@ struct device *dev_cache_get(const char *name, struct dev_filter *f)
 	}
 
 	if (!d) {
-		_insert(name, &buf, 0, obtain_device_list_from_udev());
+		_insert(name, &buf, 0, 1, NULL);
 		d = (struct device *) dm_hash_lookup(_cache.names, name);
 		if (!d) {
 			_full_scan(0);

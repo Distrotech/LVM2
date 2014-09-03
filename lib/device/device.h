@@ -16,9 +16,13 @@
 #ifndef _LVM_DEVICE_H
 #define _LVM_DEVICE_H
 
+#include "dev-aux-status.h"
 #include "uuid.h"
 
 #include <fcntl.h>
+#ifdef UDEV_SYNC_SUPPORT
+#include <libudev.h>
+#endif
 
 #define DEV_ACCESSED_W		0x00000001	/* Device written to? */
 #define DEV_REGULAR		0x00000002	/* Regular file? */
@@ -50,6 +54,8 @@ struct device {
 
 	char pvid[ID_LEN + 1];
 	char _padding[7];
+
+	struct dev_aux_status aux_status;
 };
 
 struct device_list {

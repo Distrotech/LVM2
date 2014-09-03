@@ -20,6 +20,8 @@
 #define SECURITY_LEVEL 0
 #define PV_MIN_SIZE_KB 512
 
+#include "dev-aux-status.h"
+
 void init_verbose(int level);
 void init_silent(int silent);
 void init_test(int level);
@@ -27,6 +29,7 @@ void init_md_filtering(int level);
 void init_pvmove(int level);
 void init_full_scan_done(int level);
 void init_obtain_device_list_from_udev(int device_list_from_udev);
+void init_dev_aux_status_source(dev_aux_status_source_t dev_aux_status_source);
 void init_trust_cache(int trustcache);
 void init_debug(int level);
 void init_debug_classes_logged(int classes);
@@ -56,6 +59,7 @@ int md_filtering(void);
 int pvmove_mode(void);
 int full_scan_done(void);
 int obtain_device_list_from_udev(void);
+dev_aux_status_source_t dev_aux_status_source(void);
 int trust_cache(void);
 int verbose_level(void);
 int silent_mode(void);

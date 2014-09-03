@@ -49,6 +49,23 @@ devices {
     # udev directory will be ignored with this setting on.
     obtain_device_list_from_udev = 1
 
+    # Select auxiliary source of information for device status that is used
+    # for further and more detailed device determination. This is used,
+    # for example, to drive multipath component detection, MD component detection
+    # or any other additional device detection needed during its processing.
+    # The amount of information that can be acquired depends on the source.
+    # LVM tries to use as much information as possible to avoid rescanning
+    # and reevaluating the device.
+    # Possible options are:
+    # "native"         - Use native LVM code to acquire additional
+    #                    device status. This is used by default.
+    #
+    # "udev"           - Reuse existing udev database records to acquire
+    #                    additional device status. Applicable only if
+    #                    LVM is compiled with udev support.
+    #
+    # auxiliary_device_status_source = "native"
+
     # If several entries in the scanned directories correspond to the
     # same block device and the tools need to display a name for device,
     # all the pathnames are matched against each item in the following

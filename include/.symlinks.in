@@ -12,6 +12,7 @@
 @top_srcdir@/lib/config/defaults.h
 @top_srcdir@/lib/datastruct/btree.h
 @top_srcdir@/lib/datastruct/str_list.h
+@top_srcdir@/lib/device/dev-aux-status.h
 @top_srcdir@/lib/device/dev-cache.h
 @top_srcdir@/lib/device/dev-type.h
 @top_srcdir@/lib/device/device.h

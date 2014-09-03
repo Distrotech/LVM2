@@ -748,6 +748,8 @@ static int _init_dev_cache(struct cmd_context *cmd)
 	size_t len, udev_dir_len = strlen(DM_UDEV_DEV_DIR);
 	int len_diff;
 	int device_list_from_udev;
+	const char *dev_aux_status_src_str;
+	dev_aux_status_source_t dev_aux_status_src;
 
 	init_dev_disable_after_error_count(
 		find_config_tree_int(cmd, devices_disable_after_error_count_CFG, NULL));
@@ -767,6 +769,20 @@ static int _init_dev_cache(struct cmd_context *cmd)
 			find_config_tree_bool(cmd, devices_obtain_device_list_from_udev_CFG, NULL) : 0;
 
 	init_obtain_device_list_from_udev(device_list_from_udev);
+
+	if ((dev_aux_status_src_str = find_config_tree_str(cmd, devices_auxiliary_device_status_source_CFG, NULL))) {
+		if (!strcmp(dev_aux_status_src_str, "native"))
+			dev_aux_status_src = DEV_AUX_STATUS_SRC_NATIVE;
+		else if (!strcmp(dev_aux_status_src_str, "udev"))
+			dev_aux_status_src = DEV_AUX_STATUS_SRC_UDEV;
+		else {
+			log_error("Auxiliary device status source \"%s\" is unrecognised.",
+				   dev_aux_status_src_str);
+			return 0;
+		}
+	}
+
+	init_dev_aux_status_source(dev_aux_status_src);
 
 	if (!(cn = find_config_tree_node(cmd, devices_scan_CFG, NULL))) {
 		if (!dev_cache_add_dir("/dev")) {
