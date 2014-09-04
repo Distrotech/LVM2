@@ -283,19 +283,6 @@ static int _report(struct cmd_context *cmd, int argc, char **argv,
 	if (args_are_pvs && argc)
 		cmd->filter->wipe(cmd->filter);
 
-	/*
-	 * This moved here as part of factoring it out of process_each_pv.
-	 * We lock VG_GLOBAL to enable use of metadata cache.
-	 * This can pause alongide pvscan or vgscan process for a while.
-	 */
-	if ((report_type == PVS || report_type == PVSEGS) && !lvmetad_active()) {
-		lock_global = 1;
-		if (!lock_vol(cmd, VG_GLOBAL, LCK_VG_READ, NULL)) {
-			log_error("Unable to obtain global lock.");
-			return ECMD_FAILED;
-		}
-	}
-
 	switch (report_type) {
 	case DEVTYPES:
 		keys = find_config_tree_str(cmd, report_devtypes_sort_CFG, NULL);
@@ -422,6 +409,19 @@ static int _report(struct cmd_context *cmd, int argc, char **argv,
 		report_type = LVSINFO;
 	else if (report_type & LVS)
 		report_type = LVS;
+
+	/*
+	 * This moved here as part of factoring it out of process_each_pv.
+	 * We lock VG_GLOBAL to enable use of metadata cache.
+	 * This can pause alongide pvscan or vgscan process for a while.
+	 */
+	if ((report_type == PVS || report_type == PVSEGS) && !lvmetad_active()) {
+		lock_global = 1;
+		if (!lock_vol(cmd, VG_GLOBAL, LCK_VG_READ, NULL)) {
+			log_error("Unable to obtain global lock.");
+			return ECMD_FAILED;
+		}
+	}
 
 	switch (report_type) {
 	case DEVTYPES:
