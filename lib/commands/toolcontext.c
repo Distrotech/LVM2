@@ -851,7 +851,7 @@ static int _init_dev_cache(struct cmd_context *cmd)
 	return 1;
 }
 
-#define MAX_FILTERS 7
+#define MAX_FILTERS 8
 
 static struct dev_filter *_init_lvmetad_filter_chain(struct cmd_context *cmd)
 {
@@ -921,6 +921,13 @@ static struct dev_filter *_init_lvmetad_filter_chain(struct cmd_context *cmd)
 			nr_filt++;
 	}
 
+	/* firmware raid filter. Optional, non-critical. */
+	if (find_config_tree_bool(cmd, devices_fw_raid_component_detection_CFG, NULL)) {
+		init_fwraid_filtering(1);
+		if ((filters[nr_filt] = fwraid_filter_create(cmd->dev_types)))
+			nr_filt++;
+	}
+
 	if (!(composite = composite_filter_create(nr_filt, filters)))
 		goto_bad;
 
@@ -942,7 +949,7 @@ bad:
  *     sysfs filter -> global regex filter -> type filter ->
  *     usable device filter(FILTER_MODE_PRE_LVMETAD) ->
  *     mpath component filter -> partitioned filter ->
- *     md component filter
+ *     md component filter -> fw raid filter
  *
  *   - the filter chain used for lvmetad responses:
  *     persistent filter -> usable device filter(FILTER_MODE_POST_LVMETAD) ->
@@ -955,7 +962,7 @@ bad:
  *     global regex filter -> type filter ->
  *     usable device filter(FILTER_MODE_NO_LVMETAD) ->
  *     mpath component filter -> partitioned filter ->
- *     md component filter
+ *     md component filter -> fw raid filter
  *
  */
 static int _init_filters(struct cmd_context *cmd, unsigned load_persistent_cache)
