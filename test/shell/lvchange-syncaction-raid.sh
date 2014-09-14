@@ -49,7 +49,7 @@ dmsetup info -c
 # For now it fails with:
 # device-mapper: message ioctl on  failed: Device or resource busy
 #
-lvchange --syncaction check $vg/$lv1
+should lvchange --syncaction check $vg/$lv1
 
 aux enable_dev "$dev2"
 lvs -o+raid_mismatch_count -a $vg
