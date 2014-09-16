@@ -24,6 +24,7 @@
 #include "clvmd.h"
 #include "lvm-functions.h"
 #include "lvm-version.h"
+#include "lvm-wrappers.h"
 #include "refresh_clvmd.h"
 
 #ifdef HAVE_COROSYNC_CONFDB_H
@@ -88,7 +89,7 @@ static debug_t debug = DEBUG_OFF;
 static int foreground_mode = 0;
 static pthread_t lvm_thread;
 /* Stack size 128KiB for thread, must be bigger then DEFAULT_RESERVED_STACK */
-static const size_t STACK_SIZE = 128 * 1024;
+static const size_t MIN_STACK_SIZE = 128 * 1024;
 static pthread_attr_t stack_attr;
 static int lvm_thread_exit = 0;
 static pthread_mutex_t lvm_thread_mutex;
@@ -358,6 +359,7 @@ int main(int argc, char *argv[])
 	int clusterwide_opt = 0;
 	mode_t old_mask;
 	int ret = 1;
+	size_t stack_size;
 
 	struct option longopts[] = {
 		{ "help", 0, 0, 'h' },
@@ -514,8 +516,10 @@ int main(int argc, char *argv[])
 
 	/* Initialise the LVM thread variables */
 	dm_list_init(&lvm_cmd_head);
+	stack_size = 3 * lvm_getpagesize();
+	stack_size = stack_size < MIN_STACK_SIZE ? MIN_STACK_SIZE : stack_size;
 	if (pthread_attr_init(&stack_attr) ||
-	    pthread_attr_setstacksize(&stack_attr, STACK_SIZE)) {
+	    pthread_attr_setstacksize(&stack_attr, stack_size)) {
 		log_sys_error("pthread_attr_init", "");
 		exit(1);
 	}
