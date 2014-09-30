@@ -25,6 +25,7 @@
 #include <sys/mman.h>
 #include <sys/time.h>
 #include <sys/resource.h>
+#include <malloc.h>
 
 #ifndef DEVMAPPER_SUPPORT
 
@@ -132,10 +133,16 @@ static void _touch_memory(void *mem, size_t size)
 
 static void _allocate_memory(void)
 {
-#ifndef VALGRIND_POOL
-	/* With Valgrind don't waste time in with preallocating memory */
 	void *stack_mem, *temp_malloc_mem;
 	struct rlimit limit;
+	int i, area = 0, missing = _size_malloc_tmp, max_areas = 32, hblks;
+	char *areas[max_areas];
+
+#ifdef HAVE_VALGRIND
+	/* With Valgrind don't waste time in with preallocating memory */
+	if (RUNNING_ON_VALGRIND)
+		return;
+#endif
 
 	/* Check if we could preallocate requested stack */
 	if ((getrlimit (RLIMIT_STACK, &limit) == 0) &&
@@ -144,14 +151,40 @@ static void _allocate_memory(void)
 		_touch_memory(stack_mem, _size_stack);
 	/* FIXME else warn user setting got ignored */
 
-	if ((temp_malloc_mem = malloc(_size_malloc_tmp)))
-		_touch_memory(temp_malloc_mem, _size_malloc_tmp);
+	while (missing > 0) {
+		struct mallinfo inf = mallinfo();
+		hblks = inf.hblks;
+
+		if ((areas[area] = malloc(_size_malloc_tmp)))
+			_touch_memory(areas[area], _size_malloc_tmp);
+
+		inf = mallinfo();
+
+		if (hblks < inf.hblks) {
+			/* malloc cheated and used mmap, even though we told it
+			   not to; we try with twice as many areas, each half
+			   the size, to circumvent the faulty logic in glibc */
+			free(areas[area]);
+			_size_malloc_tmp /= 2;
+		} else {
+			++ area;
+			missing -= _size_malloc_tmp;
+		}
+
+		if (area == max_areas && missing > 0) {
+			/* Too bad. Warn the user and proceed, as things are
+			 * most likely going to work out anyway. */
+			log_warn("WARNING: Failed to reserve memory, %d bytes missing.", missing);
+			break;
+		}
+	}
 
 	if ((_malloc_mem = malloc(_size_malloc)))
 		_touch_memory(_malloc_mem, _size_malloc);
 
-	free(temp_malloc_mem);
-#endif
+	/* free up the reserves so subsequent malloc's can use that memory */
+	for (i = 0; i < area; ++i)
+		free(areas[i]);
 }
 
 static void _release_memory(void)
