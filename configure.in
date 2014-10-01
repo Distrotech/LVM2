@@ -69,6 +69,7 @@ dnl -- Checks for programs.
 AC_PROG_SED
 AC_PROG_AWK
 AC_PROG_CC
+AC_PROG_CXX
 
 dnl probably no longer needed in 2008, but...
 AC_PROG_GCC_TRADITIONAL
@@ -965,17 +966,20 @@ if test "$PROFILING" = yes; then
   COPTIMISE_FLAG="$COPTIMISE_FLAG -fprofile-arcs -ftest-coverage"
   AC_PATH_TOOL(LCOV, lcov)
   AC_PATH_TOOL(GENHTML, genhtml)
-  test -z "$LCOV" -o -z "$GENHTML" && AC_MSG_ERROR([lcov and genhtml are required for profiling])
-  AC_PATH_TOOL(GENPNG, genpng)
-  if test -n "$GENPNG"; then
-    AC_MSG_CHECKING([whether $GENPNG has all required modules])
-    if "$GENPNG" --help > /dev/null 2>&1 ; then
-      AC_MSG_RESULT(ok)
-      GENHTML="$GENHTML --frames"
-    else
-      AC_MSG_RESULT([not supported])
-      AC_MSG_WARN([GD.pm perl module is not installed])
-      GENPNG=
+  if test -z "$LCOV" -o -z "$GENHTML"; then
+    AC_MSG_WARN([lcov and genhtml are required for profiling])
+  else
+    AC_PATH_TOOL(GENPNG, genpng)
+    if test -n "$GENPNG"; then
+      AC_MSG_CHECKING([whether $GENPNG has all required modules])
+      if "$GENPNG" --help > /dev/null 2>&1 ; then
+        AC_MSG_RESULT(ok)
+        GENHTML="$GENHTML --frames"
+      else
+        AC_MSG_RESULT([not supported])
+        AC_MSG_WARN([GD.pm perl module is not installed])
+        GENPNG=
+      fi
     fi
   fi
 fi
@@ -1003,12 +1007,18 @@ AC_ARG_ENABLE(valgrind_pool,
 	      VALGRIND_POOL=$enableval, VALGRIND_POOL=no)
 AC_MSG_RESULT($VALGRIND_POOL)
 
-if test "$VALGRIND_POOL" = yes; then
-	pkg_config_init
-	PKG_CHECK_MODULES(VALGRIND, valgrind, [], [AC_MSG_ERROR(bailing out)])
+pkg_config_init
+PKG_CHECK_MODULES(VALGRIND, valgrind, [HAVE_VALGRIND=yes], [if test x$VALGRIND_POOL = xyes; then AC_MSG_ERROR(bailing out); fi])
+AC_SUBST(VALGRIND_CFLAGS)
+
+if test x$HAVE_VALGRIND = xyes; then
+	AC_DEFINE([HAVE_VALGRIND], 1, [valgrind.h found])
+	AC_SUBST(HAVE_VALGRIND)
+fi
+
+if test x$VALGRIND_POOL = xyes; then
 	AC_DEFINE([VALGRIND_POOL], 1, [Enable a valgrind aware build of pool])
 	AC_SUBST(VALGRIND_POOL)
-	AC_SUBST(VALGRIND_CFLAGS)
 fi
 
 ################################################################################

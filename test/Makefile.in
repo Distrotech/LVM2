@@ -32,6 +32,7 @@ export LVM_TEST_THIN_RESTORE_CMD?=@THIN_RESTORE_CMD@
 
 SUBDIRS = api unit
 SOURCES = lib/not.c lib/harness.c
+CXXSOURCES = lib/runner.cpp
 
 include $(top_builddir)/make.tmpl
 
@@ -55,7 +56,7 @@ ifeq ("@UDEV_SYNC@", "yes")
 dm_udev_synchronisation = 1
 endif
 
-all: check
+all: .tests-stamp
 
 help:
 	@echo -e "\nAvailable targets:"
@@ -90,37 +91,56 @@ help:
 	@echo "  VERBOSE		Verbose output (1), timing (2)."
 
 check: .tests-stamp
-	VERBOSE=$(VERBOSE) \
-	cluster_LVM_TEST_LOCKING=3 \
-	lvmetad_LVM_TEST_LVMETAD=1 \
-	./lib/harness $(patsubst %,normal:%,$(RUN_BASE)) \
-		      $(patsubst %,cluster:%,$(RUN_BASE)) \
-		      $(patsubst %,lvmetad:%,$(LVMETAD_RUN_BASE))
+	VERBOSE=$(VERBOSE) ./lib/runner \
+		--testdir . --outdir results \
+		--flavours ndev-vanilla,ndev-cluster,ndev-lvmetad --only $(T) --skip $(S)
 
 check_system: .tests-stamp
-	VERBOSE=$(VERBOSE) \
-	scluster_LVM_TEST_LOCKING=3 \
-	slvmetad_LVM_TEST_LVMETAD=1 \
-	snormal_LVM_TEST_DEVDIR=/dev \
-	scluster_LVM_TEST_DEVDIR=/dev \
-	slvmetad_LVM_TEST_DEVDIR=/dev \
-	./lib/harness $(patsubst %,snormal:%,$(RUN_BASE)) \
-		      $(patsubst %,scluster:%,$(RUN_BASE)) \
-		      $(patsubst %,slvmetad:%,$(LVMETAD_RUN_BASE))
+	VERBOSE=$(VERBOSE) ./lib/runner \
+		--testdir . --outdir results \
+		--flavours udev-vanilla,udev-cluster,udev-lvmetad --only $(T) --skip $(S)
 
 check_cluster: .tests-stamp
-	@echo Testing with locking_type 3
-	VERBOSE=$(VERBOSE) LVM_TEST_LOCKING=3 ./lib/harness $(RUN_BASE)
+	VERBOSE=$(VERBOSE) ./lib/runner \
+		--testdir . --outdir results \
+		--flavours ndev-cluster --only $(T) --skip $(S)
 
 check_local: .tests-stamp
-	@echo Testing with locking_type 1
-	VERBOSE=$(VERBOSE) LVM_TEST_LOCKING=1 ./lib/harness $(RUN_BASE)
+	VERBOSE=$(VERBOSE) ./lib/runner \
+		--testdir . --outdir results \
+		--flavours ndev-vanilla --only $(T) --skip $(S)
 
 ifeq ("@BUILD_LVMETAD@", "yes")
 check_lvmetad: .tests-stamp
-	@echo Testing with lvmetad on
-	VERBOSE=$(VERBOSE) LVM_TEST_LVMETAD=1 ./lib/harness $(RUN_BASE)
+	VERBOSE=$(VERBOSE) ./lib/runner \
+		--testdir . --outdir results \
+		--flavours ndev-lvmetad --only $(T) --skip $(S)
 endif
+
+DATADIR = $(datadir)/lvm2-testsuite
+EXECDIR = $(libexecdir)/lvm2-testsuite
+
+LIB_FLAVOURS = lib/flavour-ndev-vanilla lib/flavour-ndev-cluster lib/flavour-ndev-lvmetad \
+               lib/flavour-udev-vanilla lib/flavour-udev-cluster lib/flavour-udev-lvmetad
+
+LIB_LOCAL = lib/paths lib/runner
+LIB_EXEC  = lib/not lib/invalid lib/fail lib/should
+LIB_SHARED = lib/check lib/aux lib/inittest lib/utils lib/get lib/lvm-wrapper
+
+install: .tests-stamp lib/paths-installed
+	@echo $(srcdir)
+	@echo $(LIB_FLAVOURS)
+	$(INSTALL_DIR) $(DATADIR)/{shell,api,lib}
+	$(INSTALL_DATA) shell/*.sh $(DATADIR)/shell/
+	$(INSTALL_DATA) api/*.sh $(DATADIR)/api/
+	$(INSTALL_DATA) lib/paths-installed $(DATADIR)/lib/paths
+	$(INSTALL_DATA) $(LIB_FLAVOURS) $(DATADIR)/lib/
+	$(INSTALL_SCRIPT) $(LIB_SHARED) $(DATADIR)/lib/
+	for i in $(CMDS); do (cd $(DATADIR)/lib && ln -fs lvm-wrapper $$i); done
+
+	$(INSTALL_DIR) $(EXECDIR)
+	$(INSTALL_PROGRAM) $(LIB_EXEC) $(EXECDIR)
+	$(INSTALL_PROGRAM) -D lib/runner $(bindir)/lvm2-testsuite
 
 lib/should: lib/not
 	ln -sf not lib/should
@@ -131,6 +151,10 @@ lib/invalid: lib/not
 lib/fail: lib/not
 	ln -sf not lib/fail
 
+lib/runner: lib/runner.o .lib-dir-stamp
+	$(CXX) $(LDFLAGS) -o $@ $<
+
+lib/runner.o: $(wildcard $(srcdir)/lib/*.h)
 
 lib/%: lib/%.o .lib-dir-stamp
 	$(CC) $(LDFLAGS) -o $@ $<
@@ -139,13 +163,10 @@ lib/%: $(srcdir)/lib/%.sh .lib-dir-stamp
 	cp $< $@
 	chmod +x $@
 
-lib/paths: $(srcdir)/Makefile.in .lib-dir-stamp Makefile
-	$(RM) $@-t
-	echo 'top_srcdir="$(top_srcdir)"' >> $@-t
-	echo 'abs_top_builddir="$(abs_top_builddir)"' >> $@-t
-	echo 'abs_top_srcdir="$(abs_top_srcdir)"' >> $@-t
-	echo 'abs_srcdir="$(abs_srcdir)"' >> $@-t
-	echo 'abs_builddir="$(abs_builddir)"' >> $@-t
+lib/flavour-%: $(srcdir)/lib/flavour-%.sh .lib-dir-stamp
+	cp $< $@
+
+lib/paths-common: $(srcdir)/Makefile.in .lib-dir-stamp Makefile
 	echo 'export DM_UDEV_SYNCHRONISATION=$(dm_udev_synchronisation)' >> $@-t
 	echo 'export THIN=@THIN@' >> $@-t
 	echo 'export RAID=@RAID@' >> $@-t
@@ -155,11 +176,25 @@ lib/paths: $(srcdir)/Makefile.in .lib-dir-stamp Makefile
 	echo 'export CLVMD_PIDFILE="@CLVMD_PIDFILE@"' >> $@-t
 	mv $@-t $@
 
-LIB = lib/not lib/invalid lib/fail lib/should lib/harness \
-      lib/check lib/aux lib/inittest lib/utils lib/get lib/lvm-wrapper \
-      lib/paths
+lib/paths-installed: lib/paths-common
+	$(RM) $@-t
+	cat lib/paths-common > $@-t
+	echo 'installed_testsuite=1' >> $@-t
+	echo 'export PATH=@libexecdir@/lvm2-testsuite:@datadir@/lvm2-testsuite/lib:$$PATH' >> $@-t
+	mv $@-t $@
+
+lib/paths: lib/paths-common
+	$(RM) $@-t
+	cat lib/paths-common > $@-t
+	echo 'top_srcdir="$(top_srcdir)"' >> $@-t
+	echo 'abs_top_builddir="$(abs_top_builddir)"' >> $@-t
+	echo 'abs_top_srcdir="$(abs_top_srcdir)"' >> $@-t
+	echo 'abs_srcdir="$(abs_srcdir)"' >> $@-t
+	echo 'abs_builddir="$(abs_builddir)"' >> $@-t
+	mv $@-t $@
 
 CMDS = lvm $(shell cat $(top_builddir)/tools/.commands)
+LIB = $(LIB_SHARED) $(LIB_LOCAL) $(LIB_EXEC) $(LIB_FLAVOURS)
 
 .tests-stamp: $(ALL) $(LIB) $(SUBDIRS)
 	@if test "$(srcdir)" != . ; then \

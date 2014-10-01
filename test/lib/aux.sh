@@ -14,7 +14,7 @@
 run_valgrind() {
 	# Execute script which may use $TESTNAME for creating individual
 	# log files for each execute command
-	exec "${VALGRIND:-valg}" "$@"
+	exec "${VALGRIND:-valgrind}" "$@"
 }
 
 expect_failure() {
@@ -22,7 +22,7 @@ expect_failure() {
 }
 
 prepare_clvmd() {
-	rm -f debug.log
+	rm -f debug.log strace.log
 	test "${LVM_TEST_LOCKING:-0}" -ne 3 && return # not needed
 
 	if pgrep clvmd ; then
@@ -53,7 +53,7 @@ prepare_clvmd() {
 }
 
 prepare_dmeventd() {
-	rm -f debug.log
+	rm -f debug.log strace.log
 	if pgrep dmeventd ; then
 		echo "Cannot test dmeventd with real dmeventd ($(pgrep dmeventd)) running."
 		skip
@@ -79,7 +79,8 @@ prepare_dmeventd() {
 }
 
 prepare_lvmetad() {
-	rm -f debug.log
+	test $# -eq 0 && default_opts="-l wire,debug"
+	rm -f debug.log strace.log
 	# skip if we don't have our own lvmetad...
 	(which lvmetad 2>/dev/null | grep "$abs_builddir") || skip
 
@@ -89,8 +90,10 @@ prepare_lvmetad() {
 	local run_valgrind=
 	test "${LVM_VALGRIND_LVMETAD:-0}" -eq 0 || run_valgrind="run_valgrind"
 
+	kill_sleep_kill_ LOCAL_LVMETAD ${LVM_VALGRIND_LVMETAD:-0}
+
 	echo "preparing lvmetad..."
-	$run_valgrind lvmetad -f "$@" -s "$TESTDIR/lvmetad.socket" -l wire,debug &
+	$run_valgrind lvmetad -f "$@" -s "$TESTDIR/lvmetad.socket" $default_opts "$@" &
 	echo $! > LOCAL_LVMETAD
 	while ! test -e "$TESTDIR/lvmetad.socket"; do echo -n .; sleep .1; done # wait for the socket
 	echo ok
@@ -206,11 +209,18 @@ teardown_devs() {
 }
 
 kill_sleep_kill_() {
-	if test -s "$1" ; then
-		if kill -TERM "$(< $1)" ; then
-			if test "$2" -eq 0 ; then sleep .1 ; else sleep 1 ; fi
-			kill -KILL "$(< $1)" 2>/dev/null || true
-		fi
+	pidfile=$1
+	slow=$2
+	if test -s $pidfile ; then
+		pid=$(< $pidfile)
+		kill -TERM $pid || return 0
+		if test $slow -eq 0 ; then sleep .1 ; else sleep 1 ; fi
+		kill -KILL $pid 2>/dev/null || true
+		wait=0
+		while ps $pid > /dev/null && test $wait -le 10; do
+			sleep .5
+			wait=$(($wait + 1))
+		done
 	fi
 }
 
@@ -223,7 +233,7 @@ teardown() {
 		# Avoid activation of dmeventd if there is no pid
 		cfg=$(test -s LOCAL_DMEVENTD || echo "--config activation{monitoring=0}")
 		vgremove -ff $cfg  \
-			$vg $vg1 $vg2 $vg3 $vg4 &>/dev/null || rm -f debug.log
+			$vg $vg1 $vg2 $vg3 $vg4 &>/dev/null || rm -f debug.log strace.log
 	}
 
 	kill_sleep_kill_ LOCAL_CLVMD ${LVM_VALGRIND_CLVMD:-0}
@@ -272,7 +282,7 @@ prepare_loop() {
 	echo -n .
 
 	local LOOPFILE="$PWD/test.img"
-	dd if=/dev/zero of="$LOOPFILE" bs=$((1024*1024)) count=0 seek=$(($size-1)) 2> /dev/null
+	dd if=/dev/zero of="$LOOPFILE" bs=$((1024*1024)) count=0 seek=$(($size)) 2> /dev/null
 	if LOOP=$(losetup -s -f "$LOOPFILE" 2>/dev/null); then
 		:
 	elif LOOP=$(losetup -f) && losetup "$LOOP" "$LOOPFILE"; then
@@ -294,7 +304,9 @@ prepare_loop() {
 		done
 	fi
 	test -n "$LOOP" # confirm or fail
+	BACKING_DEV="$LOOP"
 	echo "$LOOP" > LOOP
+	echo "$LOOP" > BACKING_DEV
 	echo "ok ($LOOP)"
 }
 
@@ -328,9 +340,9 @@ prepare_scsi_debug_dev() {
 	# Create symlink to scsi_debug device in $DM_DEV_DIR
 	SCSI_DEBUG_DEV="$DM_DEV_DIR/$(basename $DEBUG_DEV)"
 	echo "$SCSI_DEBUG_DEV" > SCSI_DEBUG_DEV
-	echo "$SCSI_DEBUG_DEV" > LOOP
+	echo "$SCSI_DEBUG_DEV" > BACKING_DEV
 	# Setting $LOOP provides means for prepare_devs() override
-	test "$LVM_TEST_DEVDIR" = "/dev" || ln -snf "$DEBUG_DEV" "$SCSI_DEBUG_DEV"
+	test "$DEBUG_DEV" = "$SCSI_DEBUG_DEV" || ln -snf "$DEBUG_DEV" "$SCSI_DEBUG_DEV"
 }
 
 cleanup_scsi_debug_dev() {
@@ -338,20 +350,26 @@ cleanup_scsi_debug_dev() {
 	rm -f SCSI_DEBUG_DEV LOOP
 }
 
+prepare_backing_dev() {
+	if test -f BACKING_DEV; then 
+		BACKING_DEV=$(< BACKING_DEV)
+	elif test -b "$LVM_TEST_BACKING_DEVICE"; then
+		BACKING_DEV="$LVM_TEST_BACKING_DEVICE"
+		echo "$BACKING_DEV" > BACKING_DEV
+	else
+		prepare_loop "$@"
+	fi
+}
+
 prepare_devs() {
 	local n=${1:-3}
 	local devsize=${2:-34}
 	local pvname=${3:-pv}
-	local loopsz
 
-	prepare_loop $(($n*$devsize))
+	prepare_backing_dev $(($n*$devsize))
 	echo -n "## preparing $n devices..."
 
-	if ! loopsz=$(blockdev --getsz "$LOOP" 2>/dev/null); then
-		loopsz=$(blockdev --getsize "$LOOP" 2>/dev/null)
-	fi
-
-	local size=$(($loopsz/$n))
+	local size=$(($devsize*2048)) # sectors
 	local count=0
 	init_udev_transaction
 	for i in $(seq 1 $n); do
@@ -359,10 +377,22 @@ prepare_devs() {
 		local dev="$DM_DEV_DIR/mapper/$name"
 		DEVICES[$count]=$dev
 		count=$(( $count + 1 ))
-		echo 0 $size linear "$LOOP" $((($i-1)*$size)) > "$name.table"
-		dmsetup create -u "TEST-$name" "$name" "$name.table"
+		echo 0 $size linear "$BACKING_DEV" $((($i-1)*$size)) > "$name.table"
+		if not dmsetup create -u "TEST-$name" "$name" "$name.table" &&
+		   test -n "$LVM_TEST_BACKING_DEVICE";
+		then # maybe the backing device is too small for this test
+		    LVM_TEST_BACKING_DEVICE=
+		    rm -f BACKING_DEV
+		    prepare_devs "$@"
+		    return $?
+		fi
 	done
 	finish_udev_transaction
+
+	# non-ephemeral devices need to be cleared between tests
+	test -f LOOP || for d in ${DEVICES[@]}; do
+		dd if=/dev/zero of=$d bs=1M count=1
+	done
 
 	#for i in `seq 1 $n`; do
 	#	local name="${PREFIX}$pvname$i"
@@ -454,7 +484,7 @@ enable_dev() {
 	    shift
 	fi
 
-	rm -f debug.log
+	rm -f debug.log strace.log
 	init_udev_transaction
 	for dev in "$@"; do
 		local name=$(echo "$dev" | sed -e 's,.*/,,')
@@ -577,7 +607,7 @@ unhide_dev() {
 }
 
 mkdev_md5sum() {
-	rm -f debug.log
+	rm -f debug.log strace.log
 	mkfs.ext2 "$DM_DEV_DIR/$1/$2" || return 1
 	md5sum "$DM_DEV_DIR/$1/$2" > "md5.$1-$2"
 }
@@ -680,12 +710,12 @@ apitest() {
 	local t=$1
 	shift
 	test -x "$abs_top_builddir/test/api/$t.t" || skip
-	"$abs_top_builddir/test/api/$t.t" "$@" && rm -f debug.log
+	"$abs_top_builddir/test/api/$t.t" "$@" && rm -f debug.log strace.log
 }
 
 api() {
 	test -x "$abs_top_builddir/test/api/wrapper" || skip
-	"$abs_top_builddir/test/api/wrapper" "$@" && rm -f debug.log
+	"$abs_top_builddir/test/api/wrapper" "$@" && rm -f debug.log strace.log
 }
 
 mirror_recovery_works() {
@@ -775,7 +805,7 @@ can_use_16T() {
 #
 # i.e.   dm_target_at_least  dm-thin-pool  1 0
 target_at_least() {
-	rm -f debug.log
+	rm -f debug.log strace.log
 	case "$1" in
 	  dm-*) modprobe "$1" || true ;;
 	esac

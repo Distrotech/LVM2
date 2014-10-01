@@ -61,6 +61,7 @@ UDEV_CFLAGS = @UDEV_CFLAGS@
 UDEV_LIBS = @UDEV_LIBS@
 BLKID_CFLAGS = @BLKID_CFLAGS@
 BLKID_LIBS = @BLKID_LIBS@
+VALGRIND_CFLAGS = @VALGRIND_CFLAGS@
 TESTING = @TESTING@
 
 # Setup directory variables
@@ -73,10 +74,12 @@ bindir = $(DESTDIR)@bindir@
 confdir = $(DESTDIR)@CONFDIR@/lvm
 includedir = $(DESTDIR)@includedir@
 libdir = $(DESTDIR)@libdir@
+libexecdir = $(DESTDIR)@libexecdir@
 usrlibdir = $(DESTDIR)@usrlibdir@
 sbindir = $(DESTDIR)@sbindir@
 usrsbindir = $(DESTDIR)@usrsbindir@
 datarootdir = @datarootdir@
+datadir = $(DESTDIR)/@datadir@
 infodir = $(DESTDIR)@infodir@
 mandir = $(DESTDIR)@mandir@
 localedir = $(DESTDIR)@LOCALEDIR@
@@ -106,6 +109,7 @@ DEFAULT_MANGLING = @MANGLING@
 
 # Setup vpath search paths for some suffixes
 vpath %.c $(srcdir)
+vpath %.cpp $(srcdir)
 vpath %.in $(srcdir)
 vpath %.po $(srcdir)
 vpath %.exported_symbols $(srcdir)
@@ -136,7 +140,7 @@ INSTALL_ROOT_DIR = $(INSTALL) -m 700 -d
 INSTALL_ROOT_DATA = $(INSTALL) -m 600
 INSTALL_SCRIPT = $(INSTALL) -p $(M_INSTALL_PROGRAM)
 
-.SUFFIXES: .c .d .o .so .a .po .pot .mo .dylib
+.SUFFIXES: .c .cpp .d .o .so .a .po .pot .mo .dylib
 
 WFLAGS += -Wall -Wundef -Wshadow -Wcast-align -Wwrite-strings \
  -Wmissing-prototypes -Wmissing-declarations -Wnested-externs \
@@ -239,7 +243,7 @@ INC_LNS = $(top_builddir)/include/.symlinks_created
 DEPS = $(top_builddir)/make.tmpl $(top_srcdir)/VERSION \
        $(top_builddir)/Makefile $(INC_LNS)
 
-OBJECTS = $(SOURCES:%.c=%.o)
+OBJECTS = $(SOURCES:%.c=%.o) $(CXXSOURCES:%.cpp=%.o)
 POTFILES = $(SOURCES:%.c=%.pot)
 
 .PHONY: all pofile distclean clean cleandir cflow device-mapper
@@ -366,6 +370,9 @@ $(TARGETS): $(OBJECTS)
 %.o: %.c
 	$(CC) -c $(INCLUDES) $(DEFS) $(WFLAGS) $(CFLAGS) $(CFLAGS_$@) $< -o $@
 
+%.o: %.cpp
+	$(CXX) -c $(INCLUDES) $(DEFS) $(WFLAGS) $(CXXFLAGS) $(CXXFLAGS_$@) $< -o $@
+
 %.pot: %.c Makefile
 	$(CC) -E $(INCLUDES) -include $(top_builddir)/include/pogen.h \
 		$(DEFS) $(WFLAGS) $(CFLAGS) $< > $@
@@ -454,7 +461,7 @@ distclean: cleandir $(SUBDIRS.distclean)
 ifeq (,$(findstring $(MAKECMDGOALS),cscope.out cflow clean distclean lcov \
  help check check_local check_cluster check_lvmetad))
     ifdef SOURCES
-       -include $(SOURCES:.c=.d)
+       -include $(SOURCES:.c=.d) $(CXXSOURCES:.cpp=.d)
     endif
     ifdef SOURCES2
        -include $(SOURCES2:.c=.d)
