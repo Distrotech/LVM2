@@ -255,6 +255,17 @@ static int _report(struct cmd_context *cmd, int argc, char **argv,
 	unsigned args_are_pvs, lv_info_needed;
 	int lock_global = 0;
 
+	/*
+	 * When reporting foreign VGs we want to refresh our cached
+	 * copy of them, since other hosts have probably made changes
+	 * to their own VGs.  We also want to override the default
+	 * behavior which skips over foreign VGs.
+	 */
+	if (arg_is_set(cmd, foreign_ARG) && lvmetad_used()) {
+		lvmetad_pvscan_all_devs(cmd, NULL);
+		cmd->include_foreign_vgs = 1;
+	}
+
 	aligned = find_config_tree_bool(cmd, report_aligned_CFG, NULL);
 	buffered = find_config_tree_bool(cmd, report_buffered_CFG, NULL);
 	headings = find_config_tree_bool(cmd, report_headings_CFG, NULL);

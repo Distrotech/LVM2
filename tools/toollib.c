@@ -17,6 +17,7 @@
 #include <sys/stat.h>
 #include <signal.h>
 #include <sys/wait.h>
+#include <sys/utsname.h>
 
 const char *command_name(struct cmd_context *cmd)
 {
@@ -168,6 +169,9 @@ int ignore_vg(struct volume_group *vg, const char *vg_name, int allow_inconsiste
 
 	if ((read_error == FAILED_INCONSISTENT) && allow_inconsistent)
 		return 0;
+
+	if (read_error == FAILED_SYSTEMID)
+		return 1;
 
 	if (read_error == FAILED_NOTFOUND)
 		*ret = ECMD_FAILED;
@@ -602,6 +606,7 @@ int vgcreate_params_set_defaults(struct cmd_context *cmd,
 		vp_def->alloc = vg->alloc;
 		vp_def->clustered = vg_is_clustered(vg);
 		vp_def->vgmetadatacopies = vg->mda_copies;
+		vp_def->system_id = vg->system_id ? dm_pool_strdup(cmd->mem, vg->system_id) : NULL;
 	} else {
 		vp_def->vg_name = NULL;
 		extent_size = find_config_tree_int64(cmd,
@@ -616,6 +621,7 @@ int vgcreate_params_set_defaults(struct cmd_context *cmd,
 		vp_def->alloc = DEFAULT_ALLOC_POLICY;
 		vp_def->clustered = DEFAULT_CLUSTERED;
 		vp_def->vgmetadatacopies = DEFAULT_VGMETADATACOPIES;
+		vp_def->system_id = cmd->system_id ? dm_pool_strdup(cmd->mem, cmd->system_id) : NULL;
 	}
 
 	return 1;
@@ -631,6 +637,9 @@ int vgcreate_params_set_from_args(struct cmd_context *cmd,
 				  struct vgcreate_params *vp_new,
 				  struct vgcreate_params *vp_def)
 {
+	const char *arg_str;
+	const char *system_id_source;
+
 	vp_new->vg_name = skip_dev_dir(cmd, vp_def->vg_name, NULL);
 	vp_new->max_lv = arg_uint_value(cmd, maxlogicalvolumes_ARG,
 					vp_def->max_lv);
@@ -678,6 +687,29 @@ int vgcreate_params_set_from_args(struct cmd_context *cmd,
 	} else {
 		vp_new->vgmetadatacopies = find_config_tree_int(cmd, metadata_vgmetadatacopies_CFG, NULL);
 	}
+
+	if ((arg_str = arg_str_value(cmd, systemid_ARG, NULL))) {
+		vp_new->system_id = system_id_from_string(cmd, arg_str);
+	} else if ((system_id_source = arg_str_value(cmd, systemidsource_ARG, NULL))) {
+		vp_new->system_id = system_id_from_source(cmd, system_id_source);
+	} else {
+		vp_new->system_id = vp_def->system_id;
+	}
+
+	if (arg_str || system_id_source) {
+		if (!vp_new->system_id)
+			log_warn("No local system id found, VG will not have a system id.");
+
+		if (vp_new->system_id && cmd->system_id &&
+		    strcmp(vp_new->system_id, cmd->system_id)) {
+			log_warn("VG system id \"%s\" will not be accessible to local system id \"%s\"",
+				 vp_new->system_id, cmd->system_id);
+		}
+	}
+
+	/* A clustered vg has no system_id. */
+	if (vp_new->clustered)
+		vp_new->system_id = NULL;
 
 	return 1;
 }
