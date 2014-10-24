@@ -961,7 +961,8 @@ xx(vgchange,
    ignoreskippedcluster_ARG, logicalvolume_ARG, maxphysicalvolumes_ARG,
    metadataprofile_ARG, monitor_ARG, noudevsync_ARG, metadatacopies_ARG,
    vgmetadatacopies_ARG, partial_ARG, physicalextentsize_ARG, poll_ARG,
-   refresh_ARG, resizeable_ARG, resizable_ARG, sysinit_ARG, test_ARG, uuid_ARG)
+   refresh_ARG, resizeable_ARG, resizable_ARG, sysinit_ARG, test_ARG, uuid_ARG,
+   systemid_ARG, systemidsource_ARG)
 
 xx(vgck,
    "Check the consistency of volume group(s)",
@@ -1023,7 +1024,8 @@ xx(vgcreate,
    maxphysicalvolumes_ARG, metadataprofile_ARG, metadatatype_ARG,
    physicalextentsize_ARG, test_ARG, force_ARG, zero_ARG, labelsector_ARG,
    metadatasize_ARG, pvmetadatacopies_ARG, metadatacopies_ARG,
-   vgmetadatacopies_ARG, dataalignment_ARG, dataalignmentoffset_ARG)
+   vgmetadatacopies_ARG, dataalignment_ARG, dataalignmentoffset_ARG,
+   systemid_ARG, systemidsource_ARG)
 
 xx(vgdisplay,
    "Display volume group information",
@@ -1240,7 +1242,7 @@ xx(vgs,
    ignoreskippedcluster_ARG, nameprefixes_ARG, noheadings_ARG,
    nolocking_ARG, nosuffix_ARG, options_ARG, partial_ARG,
    readonly_ARG, rows_ARG, select_ARG, separator_ARG, sort_ARG,
-   trustcache_ARG, unbuffered_ARG, units_ARG, unquoted_ARG)
+   trustcache_ARG, unbuffered_ARG, units_ARG, unquoted_ARG, foreign_ARG)
 
 xx(vgscan,
    "Search for all volume groups",
