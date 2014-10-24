@@ -813,11 +813,10 @@ void lv_spawn_background_polling(struct cmd_context *cmd,
  * Output arguments:
  * pp: structure allocated by caller, fields written / validated here
  */
-int pvcreate_params_validate(struct cmd_context *cmd,
-			     int argc, char **argv,
+int pvcreate_params_validate(struct cmd_context *cmd, int pv_count,
 			     struct pvcreate_params *pp)
 {
-	if (!argc) {
+	if (!pv_count) {
 		log_error("Please enter a physical volume path");
 		return 0;
 	}
@@ -1319,6 +1318,7 @@ struct vgnameid_list {
  */
 static int _get_arg_vgnames(struct cmd_context *cmd,
 			    int argc, char **argv,
+			    int only_first_name,
 			    struct dm_list *arg_vgnames,
 			    struct dm_list *arg_tags)
 {
@@ -1330,7 +1330,8 @@ static int _get_arg_vgnames(struct cmd_context *cmd,
 
 	for (; opt < argc; opt++) {
 		vg_name = argv[opt];
-		if (*vg_name == '@') {
+
+		if (!only_first_name && (*vg_name == '@')) {
 			if (!validate_tag(vg_name + 1)) {
 				log_error("Skipping invalid tag: %s", vg_name);
 				if (ret_max < EINVALID_CMD_LINE)
@@ -1350,13 +1351,19 @@ static int _get_arg_vgnames(struct cmd_context *cmd,
 			log_error("Invalid volume group name: %s", vg_name);
 			if (ret_max < EINVALID_CMD_LINE)
 				ret_max = EINVALID_CMD_LINE;
+			if (only_first_name)
+				break;
 			continue;
 		}
+
 		if (!str_list_add(cmd->mem, arg_vgnames,
 				  dm_pool_strdup(cmd->mem, vg_name))) {
 			log_error("strlist allocation failed");
 			return ECMD_FAILED;
 		}
+
+		if (only_first_name)
+			break;
 	}
 
 	return ret_max;
@@ -1519,6 +1526,7 @@ int process_each_vg(struct cmd_context *cmd, int argc, char **argv,
 	struct dm_list vgnameids_to_process;	/* vgnameid_list */
 
 	int enable_all_vgs = (cmd->command->flags & ALL_VGS_IS_DEFAULT);
+	int only_first_name = (flags & ONLY_FIRST_NAME);
 	int ret;
 
 	dm_list_init(&arg_tags);
@@ -1529,7 +1537,7 @@ int process_each_vg(struct cmd_context *cmd, int argc, char **argv,
 	/*
 	 * Find any VGs or tags explicitly provided on the command line.
 	 */
-	if ((ret = _get_arg_vgnames(cmd, argc, argv, &arg_vgnames, &arg_tags)) != ECMD_PROCESSED) {
+	if ((ret = _get_arg_vgnames(cmd, argc, argv, only_first_name, &arg_vgnames, &arg_tags)) != ECMD_PROCESSED) {
 		stack;
 		return ret;
 	}
@@ -1539,10 +1547,11 @@ int process_each_vg(struct cmd_context *cmd, int argc, char **argv,
 	 *   any tags were supplied and need resolving; or
 	 *   no VG names were given and the command defaults to processing all VGs.
 	 */
-	if (((dm_list_empty(&arg_vgnames) && enable_all_vgs) || !dm_list_empty(&arg_tags)) &&
-	    ((ret = _get_vgnameids_on_system(cmd, &vgnameids_on_system, NULL, 0)) != ECMD_PROCESSED)) {
-		stack;
-		return ret;
+	if ((dm_list_empty(&arg_vgnames) && enable_all_vgs) || !dm_list_empty(&arg_tags)) {
+		if ((ret = _get_vgnameids_on_system(cmd, &vgnameids_on_system, NULL, 0)) != ECMD_PROCESSED) {
+			stack;
+			return ret;
+		}
 	}
 
 	if (dm_list_empty(&arg_vgnames) && dm_list_empty(&vgnameids_on_system)) {
