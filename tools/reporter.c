@@ -361,14 +361,6 @@ static int _pvs_in_vg(struct cmd_context *cmd, const char *vg_name,
 		      struct volume_group *vg,
 		      void *handle)
 {
-	int skip;
-
-	if (ignore_vg(vg, vg_name, 0, &skip))
-		return_ECMD_FAILED;
-
-	if (skip)
-		return ECMD_PROCESSED;
-
 	return process_each_pv_in_vg(cmd, vg, handle, &_pvs_single);
 }
 
@@ -376,14 +368,6 @@ static int _pvsegs_in_vg(struct cmd_context *cmd, const char *vg_name,
 			 struct volume_group *vg,
 			 void *handle)
 {
-	int skip;
-
-	if (ignore_vg(vg, vg_name, 0, &skip))
-		return_ECMD_FAILED;
-
-	if (skip)
-		return ECMD_PROCESSED;
-
 	return process_each_pv_in_vg(cmd, vg, handle, &_pvsegs_single);
 }
 
@@ -399,6 +383,17 @@ static int _report(struct cmd_context *cmd, int argc, char **argv,
 	int columns_as_rows;
 	unsigned args_are_pvs, lv_info_needed, lv_segment_status_needed;
 	int lock_global = 0;
+
+	/*
+	 * When reporting foreign VGs we want to refresh our cached
+	 * copy of them, since other hosts have probably made changes
+	 * to their own VGs.  We also want to override the default
+	 * behavior which skips over foreign VGs.
+	 */
+	if (arg_is_set(cmd, foreign_ARG) && lvmetad_used()) {
+		lvmetad_pvscan_all_devs(cmd, NULL);
+		cmd->include_foreign_vgs = 1;
+	}
 
 	aligned = find_config_tree_bool(cmd, report_aligned_CFG, NULL);
 	buffered = find_config_tree_bool(cmd, report_buffered_CFG, NULL);
