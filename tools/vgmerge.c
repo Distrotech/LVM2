@@ -15,18 +15,9 @@
 
 #include "tools.h"
 
-static struct volume_group *_vgmerge_vg_read(struct cmd_context *cmd,
-					     const char *vg_name)
-{
-	struct volume_group *vg;
-	log_verbose("Checking for volume group \"%s\"", vg_name);
-	vg = vg_read_for_update(cmd, vg_name, NULL, 0);
-	if (vg_read_error(vg)) {
-		release_vg(vg);
-		return NULL;
-	}
-	return vg;
-}
+struct vgmerge_params {
+	struct volume_group *vg_to;
+};
 
 /* Select bigger pool metadata spare volume */
 static int _vgmerge_select_pool_metadata_spare(struct cmd_context *cmd,
@@ -51,37 +42,56 @@ static int _vgmerge_select_pool_metadata_spare(struct cmd_context *cmd,
 	return 1;
 }
 
-static int _vgmerge_single(struct cmd_context *cmd, const char *vg_name_to,
-			   const char *vg_name_from)
+static int _vgmerge_single(struct cmd_context *cmd, const char *vg_name,
+			   struct volume_group *vg, void *handle)
 {
+	struct vgmerge_params *vp = handle;
+	struct volume_group *vg_to;
+	struct volume_group *vg_from;
 	struct pv_list *pvl, *tpvl;
-	struct volume_group *vg_to, *vg_from;
 	struct lv_list *lvl1, *lvl2;
 	int r = ECMD_FAILED;
 	int lock_vg_from_first = 0;
 
-	if (!strcmp(vg_name_to, vg_name_from)) {
-		log_error("Duplicate volume group name \"%s\"", vg_name_from);
+	if (!vp->vg_to) {
+		vp->vg_to = vg;
+		return ECMD_PROCESSED;
+	}
+
+	/*
+	 * FIXME: this does not work, because vg_to is dropped
+	 * from lvmcache when it is unlocked after _single.
+	 * The next time we get here and try to merge from,
+	 * the vg_to is invalid because it's not found.
+	 */
+
+	vg_to = vp->vg_to;
+	vg_from = vg;
+
+	if (!strcmp(vg_to->name, vg_from->name)) {
+		log_error("Duplicate volume group name \"%s\"", vg_from->name);
 		return ECMD_FAILED;
 	}
 
-	if (strcmp(vg_name_to, vg_name_from) > 0)
+	if (strcmp(vg_to->name, vg_from->name) > 0)
 		lock_vg_from_first = 1;
 
 	if (lock_vg_from_first) {
-		if (!(vg_from = _vgmerge_vg_read(cmd, vg_name_from)))
-			return_ECMD_FAILED;
-		if (!(vg_to = _vgmerge_vg_read(cmd, vg_name_to))) {
-			unlock_and_release_vg(cmd, vg_from, vg_name_from);
-			return_ECMD_FAILED;
+		if (!lock_vol(cmd, vg_to->name, 0, NULL)) {
+			log_error("Can't get lock for %s", vg_to->name);
+			return ECMD_FAILED;
 		}
 	} else {
-		if (!(vg_to = _vgmerge_vg_read(cmd, vg_name_to)))
-			return_ECMD_FAILED;
+		unlock_vg(cmd, vg_from->name);
 
-		if (!(vg_from = _vgmerge_vg_read(cmd, vg_name_from))) {
-			unlock_and_release_vg(cmd, vg_to, vg_name_to);
-			return_ECMD_FAILED;
+		if (!lock_vol(cmd, vg_to->name, 0, NULL)) {
+			log_error("Can't get lock for %s", vg_to->name);
+			return ECMD_FAILED;
+		}
+
+		if (!lock_vol(cmd, vg_from->name, 0, NULL)) {
+			log_error("Can't get lock for %s", vg_from->name);
+			return ECMD_FAILED;
 		}
 	}
 
@@ -175,36 +185,27 @@ static int _vgmerge_single(struct cmd_context *cmd, const char *vg_name_to,
 bad:
 	/*
 	 * Note: as vg_to is referencing moved elements from vg_from
-	 * the order of release_vg calls is mandatory.
+	 * the order of release_vg calls is mandatory:
+	 * unlock vg_to before unlocking vg_from.
+	 *
+	 * process_each_vg calls unlock_and_release on vg_from.
 	 */
-	unlock_and_release_vg(cmd, vg_to, vg_name_to);
-	unlock_and_release_vg(cmd, vg_from, vg_name_from);
+	unlock_and_release_vg(cmd, vg_to, vg_to->name);
 
 	return r;
 }
 
 int vgmerge(struct cmd_context *cmd, int argc, char **argv)
 {
-	const char *vg_name_to, *vg_name_from;
-	int opt = 0;
-	int ret = 0, ret_max = 0;
+	struct vgmerge_params vp;
 
 	if (argc < 2) {
 		log_error("Please enter 2 or more volume groups to merge");
 		return EINVALID_CMD_LINE;
 	}
 
-	vg_name_to = skip_dev_dir(cmd, argv[0], NULL);
-	argc--;
-	argv++;
+	memset(&vp, 0, sizeof(vp));
 
-	for (; opt < argc; opt++) {
-		vg_name_from = skip_dev_dir(cmd, argv[opt], NULL);
-
-		ret = _vgmerge_single(cmd, vg_name_to, vg_name_from);
-		if (ret > ret_max)
-			ret_max = ret;
-	}
-
-	return ret_max;
+	return process_each_vg(cmd, argc, argv, READ_FOR_UPDATE, &vp,
+			       &_vgmerge_single);
 }
