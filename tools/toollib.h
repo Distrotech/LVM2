@@ -20,8 +20,6 @@
 
 int become_daemon(struct cmd_context *cmd, int skip_lvm);
 
-int ignore_vg(struct volume_group *vg, const char *vg_name, int allow_inconsistent, int *ret);
-
 typedef int (*process_single_vg_fn_t) (struct cmd_context * cmd,
 				       const char *vg_name,
 				       struct volume_group * vg,

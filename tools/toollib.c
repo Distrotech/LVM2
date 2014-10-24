@@ -160,7 +160,8 @@ const char *skip_dev_dir(struct cmd_context *cmd, const char *vg_name,
 /*
  * Returns 1 if VG should be ignored.
  */
-int ignore_vg(struct volume_group *vg, const char *vg_name, int allow_inconsistent, int *ret)
+static int ignore_vg(struct cmd_context *cmd, struct volume_group *vg, const char *vg_name,
+		     struct dm_list *arg_vgnames, int allow_inconsistent, int *ret)
 {
 	uint32_t read_error = vg_read_error(vg);
 
@@ -170,8 +171,21 @@ int ignore_vg(struct volume_group *vg, const char *vg_name, int allow_inconsiste
 	if ((read_error == FAILED_INCONSISTENT) && allow_inconsistent)
 		return 0;
 
-	if (read_error == FAILED_SYSTEMID)
+	/*
+	 * Commands that operate on "all vgs" shouldn't be bothered by
+	 * skipping a foreign VG, and the command shouldn't fail when
+	 * one is skipped.  But, if the command explicitly asked to
+	 * operate on a foreign VG and it's skipped, then the command
+	 * would expect to fail.
+	 */
+	if (read_error == FAILED_SYSTEMID) {
+		if (arg_vgnames && str_list_match_item(arg_vgnames, vg->name)) {
+			log_error("Skipping volume group %s with system id %s",
+				  vg->name, vg->system_id);
+			*ret = ECMD_FAILED;
+		}
 		return 1;
+	}
 
 	if (read_error == FAILED_NOTFOUND)
 		*ret = ECMD_FAILED;
@@ -1488,9 +1502,10 @@ static int _process_vgnameid_list(struct cmd_context *cmd, uint32_t flags,
 		ret = 0;
 
 		vg = vg_read(cmd, vg_name, vg_uuid, flags);
-		if (ignore_vg(vg, vg_name, flags & READ_ALLOW_INCONSISTENT, &ret)) {
+		if (ignore_vg(cmd, vg, vg_name, arg_vgnames, flags & READ_ALLOW_INCONSISTENT, &ret)) {
 			if (ret > ret_max)
 				ret_max = ret;
+
 			release_vg(vg);
 			stack;
 			continue;
@@ -1862,7 +1877,7 @@ static int _process_lv_vgnameid_list(struct cmd_context *cmd, uint32_t flags,
 		}
 
 		vg = vg_read(cmd, vg_name, vg_uuid, flags);
-		if (ignore_vg(vg, vg_name, flags & READ_ALLOW_INCONSISTENT, &ret)) {
+		if (ignore_vg(cmd, vg, vg_name, arg_vgnames, flags & READ_ALLOW_INCONSISTENT, &ret)) {
 			if (ret > ret_max)
 				ret_max = ret;
 			release_vg(vg);
@@ -2178,7 +2193,7 @@ static int _process_pvs_in_vgs(struct cmd_context *cmd, uint32_t flags,
 		skip = 0;
 
 		vg = vg_read(cmd, vg_name, vg_uuid, flags | READ_WARN_INCONSISTENT);
-		if (ignore_vg(vg, vg_name, flags & READ_ALLOW_INCONSISTENT, &ret)) {
+		if (ignore_vg(cmd, vg, vg_name, NULL, flags & READ_ALLOW_INCONSISTENT, &ret)) {
 			if (ret > ret_max)
 				ret_max = ret;
 			skip = 1;

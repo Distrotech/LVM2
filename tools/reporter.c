@@ -218,13 +218,6 @@ static int _pvs_in_vg(struct cmd_context *cmd, const char *vg_name,
 		      struct volume_group *vg,
 		      void *handle)
 {
-	int ret = ECMD_PROCESSED;
-
-	if (ignore_vg(vg, vg_name, 0, &ret)) {
-		stack;
-		return ret;
-	}
-
 	return process_each_pv_in_vg(cmd, vg, handle, &_pvs_single);
 }
 
@@ -232,13 +225,6 @@ static int _pvsegs_in_vg(struct cmd_context *cmd, const char *vg_name,
 			 struct volume_group *vg,
 			 void *handle)
 {
-	int ret = ECMD_PROCESSED;
-
-	if (ignore_vg(vg, vg_name, 0, &ret)) {
-		stack;
-		return ret;
-	}
-
 	return process_each_pv_in_vg(cmd, vg, handle, &_pvsegs_single);
 }
 
