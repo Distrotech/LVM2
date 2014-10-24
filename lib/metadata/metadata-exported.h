@@ -163,6 +163,7 @@
 #define FAILED_ALLOCATION	0x00000080U
 #define FAILED_EXIST		0x00000100U
 #define FAILED_RECOVERY		0x00000200U
+#define FAILED_SYSTEMID		0x00000400U
 #define SUCCESS			0x00000000U
 
 #define VGMETADATACOPIES_ALL UINT32_MAX
@@ -1169,6 +1170,7 @@ struct vgcreate_params {
 	alloc_policy_t alloc;
 	int clustered; /* FIXME: put this into a 'status' variable instead? */
 	uint32_t vgmetadatacopies;
+	const char *system_id;
 };
 
 int validate_major_minor(const struct cmd_context *cmd,
