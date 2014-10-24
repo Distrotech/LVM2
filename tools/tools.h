@@ -106,6 +106,8 @@ struct arg_value_group_list {
 #define ALL_VGS_IS_DEFAULT	0x00000004
 /* Process all devices with --all if none are specified on the command line. */
 #define ENABLE_ALL_DEVS		0x00000008	
+/* Use only the first free arg as the vg name. */
+#define ONLY_FIRST_NAME		0x00000010
  
 /* a register of the lvm commands */
 struct command {
