@@ -34,3 +34,11 @@ struct segment_type *get_segtype_from_string(struct cmd_context *cmd,
 
 	return segtype;
 }
+
+int segtype_allowed_in_cluster_vg(const struct segment_type *segtype)
+{
+	if (segtype_is_cache(segtype) || segtype_is_cache_pool(segtype))
+		return 0;
+
+	return 1;
+}

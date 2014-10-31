@@ -138,6 +138,8 @@ struct segtype_handler {
 struct segment_type *get_segtype_from_string(struct cmd_context *cmd,
 					     const char *str);
 
+int segtype_allowed_in_cluster_vg(const struct segment_type *segtype);
+
 struct segtype_library;
 int lvm_register_segtype(struct segtype_library *seglib,
 			 struct segment_type *segtype);
