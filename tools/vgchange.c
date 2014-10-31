@@ -303,6 +303,7 @@ static int _vgchange_resizeable(struct cmd_context *cmd,
 static int _vgchange_clustered(struct cmd_context *cmd,
 			       struct volume_group *vg)
 {
+	struct lv_list *lvl;
 	int clustered = arg_int_value(cmd, clustered_ARG, 0);
 
 	if (clustered && (vg_is_clustered(vg))) {
@@ -315,6 +316,17 @@ static int _vgchange_clustered(struct cmd_context *cmd,
 		log_error("Volume group \"%s\" is already not clustered",
 			  vg->name);
 		return 0;
+	}
+
+	if (clustered) {
+		dm_list_iterate_items(lvl, &vg->lvs) {
+			if (!segtype_allowed_in_cluster_vg(first_seg(lvl->lv)->segtype)) {
+				log_error("LV %s segtype %s is not allowed in cluster VG.",
+					  display_lvname(lvl->lv),
+					  first_seg(lvl->lv)->segtype->name);
+				return 0;
+			}
+		}
 	}
 
 	if (clustered && !arg_count(cmd, yes_ARG)) {

@@ -34,3 +34,19 @@ struct segment_type *get_segtype_from_string(struct cmd_context *cmd,
 
 	return segtype;
 }
+
+int segtype_allowed_in_cluster_vg(const struct segment_type *segtype)
+{
+	if (segtype_is_striped(segtype))
+		return 1;
+	if (segtype_is_raid(segtype))
+		return 1;
+	if (segtype_is_thin(segtype))
+		return 1;
+	if (segtype_is_mirror(segtype))
+		return 1;
+	if (segtype_is_virtual(segtype))
+		return 1;
+
+	return 0;
+}
