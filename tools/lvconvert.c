@@ -3345,13 +3345,27 @@ static int _lvconvert_single(struct cmd_context *cmd, struct logical_volume *lv,
 				return_ECMD_FAILED;
 		}
 	}
+
 	if (lp->merge) {
 		if ((lv_is_thin_volume(lv) && !_lvconvert_merge_thin_snapshot(cmd, lv, lp)) ||
 		    (!lv_is_thin_volume(lv) && !_lvconvert_merge_old_snapshot(cmd, lv, lp))) {
 			log_print_unless_silent("Unable to merge LV \"%s\" into its origin.", lv->name);
 			return ECMD_FAILED;
 		}
-	} else if (lp->snapshot) {
+		return ECMD_PROCESSED;
+	}
+
+	/*
+	 * Converting to a new type.
+	 */
+
+	if (vg_is_clustered(lv->vg) && !segtype_allowed_in_cluster_vg(lp->segtype)) {
+		log_error("LV segtype %s is not allowed in a cluster VG.",
+			  lp->segtype->name);
+		return ECMD_FAILED;
+	}
+
+	if (lp->snapshot) {
 		if (!_lvconvert_snapshot(cmd, lv, lp))
 			return_ECMD_FAILED;
 	} else if (segtype_is_pool(lp->segtype) || lp->thin || lp->cache) {

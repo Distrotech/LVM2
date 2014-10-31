@@ -1466,6 +1466,12 @@ int lvcreate(struct cmd_context *cmd, int argc, char **argv)
 	if (!_read_activation_params(cmd, vg, &lp))
 		goto_out;
 
+	if (vg_is_clustered(vg) && !segtype_allowed_in_cluster_vg(lp.segtype)) {
+		log_error("LV segtype %s is not allowed in a cluster VG.",
+			  lp.segtype->name);
+		goto_out;
+	}
+
 	/* Resolve segment types with opened VG */
 	if (lp.snapshot && lp.origin_name && !_determine_snapshot_type(vg, &lp, &lcp))
 		goto_out;
