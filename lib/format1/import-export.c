@@ -253,6 +253,9 @@ int import_vg(struct dm_pool *mem,
 	if (vgd->vg_access & VG_CLUSTERED)
 		vg->status |= CLUSTERED;
 
+	if (vgd->vg_access & VG_LOCK_TYPE)
+		vg->status |= LOCK_TYPE;
+
 	if (vgd->vg_access & VG_SHARED)
 		vg->status |= SHARED;
 
@@ -279,6 +282,9 @@ int export_vg(struct vg_disk *vgd, struct volume_group *vg)
 
 	if (vg_is_clustered(vg))
 		vgd->vg_access |= VG_CLUSTERED;
+
+	if (vg->status & LOCK_TYPE)
+		vgd->vg_access |= VG_LOCK_TYPE;
 
 	if (vg->status & SHARED)
 		vgd->vg_access |= VG_SHARED;
