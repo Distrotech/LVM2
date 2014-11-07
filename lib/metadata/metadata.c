@@ -31,6 +31,7 @@
 #include "locking.h"
 #include "archiver.h"
 #include "defaults.h"
+#include "lvmlockd.h"
 
 #include <math.h>
 #include <sys/param.h>
@@ -4326,6 +4327,20 @@ static int _access_vg_clustered(struct cmd_context *cmd, struct volume_group *vg
 	return 1;
 }
 
+static int _access_vg_lock_type(struct cmd_context *cmd, struct volume_group *vg)
+{
+	if (!is_real_vg(vg->name))
+		return 1;
+
+	if (is_lockd_type(vg->lock_type) && !find_config_tree_bool(cmd, global_use_lvmlockd_CFG, NULL)) {
+		log_warn("Cannot access VG %s which requires lvmlockd (lock_type %s).",
+			 vg->name, vg->lock_type);
+		return 0;
+	}
+
+	return 1;
+}
+
 static int _access_vg_systemid(struct cmd_context *cmd, struct volume_group *vg)
 {
 	/*
@@ -4381,6 +4396,11 @@ static int _access_vg(struct cmd_context *cmd, struct volume_group *vg, uint32_t
 
 	if (!_access_vg_clustered(cmd, vg)) {
 		*failure |= FAILED_CLUSTERED;
+		return 0;
+	}
+
+	if (!_access_vg_lock_type(cmd, vg)) {
+		*failure |= FAILED_LOCK_TYPE;
 		return 0;
 	}
 

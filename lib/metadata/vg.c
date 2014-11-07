@@ -20,6 +20,7 @@
 #include "toolcontext.h"
 #include "lvmcache.h"
 #include "archiver.h"
+#include "lvmlockd.h"
 
 struct volume_group *alloc_vg(const char *pool_name, struct cmd_context *cmd,
 			      const char *vg_name)
@@ -614,6 +615,22 @@ int vg_set_system_id(struct volume_group *vg, const char *system_id)
 		log_error("vg_set_system_id no mem");
 		return 0;
 	}
+	return 1;
+}
+
+int vg_set_lock_type(struct volume_group *vg, const char *lock_type)
+{
+	if (!lock_type)
+		lock_type = "none";
+
+	if (!(vg->lock_type = dm_pool_strdup(vg->vgmem, lock_type))) {
+		log_error("vg_set_lock_type %s no mem", lock_type);
+		return 0;
+	}
+
+	if (is_lockd_type(lock_type))
+		vg->status |= LOCK_TYPE;
+
 	return 1;
 }
 

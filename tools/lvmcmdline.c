@@ -1063,8 +1063,10 @@ static int _get_settings(struct cmd_context *cmd)
 
 	cmd->ignore_clustered_vgs = arg_count(cmd, ignoreskippedcluster_ARG) ? 1 : 0;
 
-	if (!arg_count(cmd, sysinit_ARG))
+	if (!arg_count(cmd, sysinit_ARG)) {
 		lvmetad_connect_or_warn();
+		lvmlockd_connect_or_warn();
+	}
 
 	if (arg_count(cmd, nosuffix_ARG))
 		cmd->current_settings.suffix = 0;
