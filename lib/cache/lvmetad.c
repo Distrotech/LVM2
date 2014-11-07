@@ -1030,3 +1030,85 @@ int lvmetad_pvscan_all_devs(struct cmd_context *cmd, activation_handler handler)
 	return r;
 }
 
+/*
+ * Before this command was run, some external entity may have
+ * invalidated lvmetad's cache of global information, e.g. lvmlockd.
+ *
+ * The global information includes things like a new VG, a
+ * VG that was removed, the assignment of a PV to a VG;
+ * any change that is not isolated within a single VG.
+ *
+ * The external entity, like a lock manager, would invalidate
+ * the lvmetad global cache if it detected that the global
+ * information had been changed on disk by something other
+ * than a local lvm command, e.g. an lvm command on another
+ * host with access to the same devices.  (How it detects
+ * the change is specific to lock manager or other entity.)
+ *
+ * The effect is that metadata on disk is newer than the metadata
+ * in the local lvmetad daemon, and the local lvmetad's cache
+ * should be updated from disk before this command uses it.
+ *
+ * So, using this function, a command checks if lvmetad's global
+ * cache is valid.  If so, it does nothing.  If not, it rescans
+ * devices to update the lvmetad cache, then it notifies lvmetad
+ * that it's cache is valid again (consistent with what's on disk.)
+ * This command can then go ahead and use the newly refreshed metadata.
+ *
+ * 1. Check if the lvmetad global cache is invalid.
+ * 2. If so, reread metadata from all devices and update the lvmetad cache.
+ * 3. Tell lvmetad that the global cache is now valid.
+ */
+
+void lvmetad_validate_global_cache(struct cmd_context *cmd, int force)
+{
+	daemon_reply reply;
+	int global_invalid;
+
+	if (force)
+		goto do_scan;
+
+	reply = daemon_send_simple(_lvmetad, "get_global_info",
+				   "token = %s", "skip",
+				   NULL);
+
+	if (reply.error) {
+		log_error("lvmetad_validate_global_cache get_global_info error %d", reply.error);
+		goto do_scan;
+	}
+
+	if (strcmp(daemon_reply_str(reply, "response", ""), "OK")) {
+		log_error("lvmetad_validate_global_cache get_global_info not ok");
+		goto do_scan;
+	}
+
+	global_invalid = daemon_reply_int(reply, "global_invalid", -1);
+
+	daemon_reply_destroy(reply);
+
+	if (!global_invalid) {
+		/* cache is valid */
+		return;
+	}
+
+ do_scan:
+	lvmetad_pvscan_all_devs(cmd, NULL);
+
+	/* Clear the global_invalid flag in lvmetad. */
+
+	reply = daemon_send_simple(_lvmetad, "set_global_info",
+				   "token = %s", "skip",
+				   "global_invalid = %d", 0,
+				   NULL);
+
+	if (reply.error)
+		log_error("lvmetad_validate_global_cache set_global_info error %d", reply.error);
+
+	if (strcmp(daemon_reply_str(reply, "response", ""), "OK"))
+		log_error("lvmetad_validate_global_cache set_global_info not ok");
+
+	daemon_reply_destroy(reply);
+
+	lvmcache_seed_infos_from_lvmetad(cmd);
+}
+
