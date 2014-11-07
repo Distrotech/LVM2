@@ -69,6 +69,8 @@ struct volume_group {
 	const char *old_name;		/* Set during vgrename and vgcfgrestore */
 	const char *system_id;
 	char *lvm1_system_id;
+	const char *lock_type;
+	const char *lock_args;
 
 	uint32_t extent_size;
 	uint32_t extent_count;
@@ -146,6 +148,7 @@ uint64_t vg_status(const struct volume_group *vg);
 int vg_set_alloc_policy(struct volume_group *vg, alloc_policy_t alloc);
 int vg_set_clustered(struct volume_group *vg, int clustered);
 int vg_set_system_id(struct volume_group *vg, const char *system_id);
+int vg_set_lock_type(struct volume_group *vg, const char *lock_type);
 uint64_t vg_size(const struct volume_group *vg);
 uint64_t vg_free(const struct volume_group *vg);
 uint64_t vg_extent_size(const struct volume_group *vg);

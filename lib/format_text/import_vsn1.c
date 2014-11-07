@@ -567,6 +567,16 @@ static int _read_lvnames(struct format_instance *fid __attribute__((unused)),
 		return 0;
 	}
 
+	if (dm_config_get_str(lvn, "lock_type", &str)) {
+		if (!(lv->lock_type = dm_pool_strdup(mem, str)))
+			return_0;
+	}
+
+	if (dm_config_get_str(lvn, "lock_args", &str)) {
+		if (!(lv->lock_args = dm_pool_strdup(mem, str)))
+			return_0;
+	}
+
 	lv->alloc = ALLOC_INHERIT;
 	if (dm_config_get_str(lvn, "allocation_policy", &str)) {
 		lv->alloc = get_alloc_from_string(str);
@@ -777,6 +787,16 @@ static struct volume_group *_read_vg(struct format_instance *fid,
 
 	if (dm_config_get_str(vgn, "system_id", &str))
 		strncpy(system_id, str, NAME_LEN);
+
+	if (dm_config_get_str(vgn, "lock_type", &str)) {
+		if (!(vg->lock_type = dm_pool_strdup(vg->vgmem, str)))
+			goto bad;
+	}
+
+	if (dm_config_get_str(vgn, "lock_args", &str)) {
+		if (!(vg->lock_args = dm_pool_strdup(vg->vgmem, str)))
+			goto bad;
+	}
 
 	if (!_read_id(&vg->id, vgn, "id")) {
 		log_error("Couldn't read uuid for volume group %s.", vg->name);

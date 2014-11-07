@@ -413,6 +413,12 @@ static int _print_vg(struct formatter *f, struct volume_group *vg)
 	if (vg->system_id && *vg->system_id)
 		outf(f, "system_id = \"%s\"", vg->system_id);
 
+	if (vg->lock_type) {
+		outf(f, "lock_type = \"%s\"", vg->lock_type);
+		if (vg->lock_args)
+			outf(f, "lock_args = \"%s\"", vg->lock_args);
+	}
+
 	outsize(f, (uint64_t) vg->extent_size, "extent_size = %u",
 		vg->extent_size);
 	outf(f, "max_lv = %u", vg->max_lv);
@@ -625,6 +631,12 @@ static int _print_lv(struct formatter *f, struct logical_volume *lv)
 		outf(f, "creation_host = \"%s\"", lv->hostname);
 		outfc(f, buffer, "creation_time = %" PRIu64,
 		      lv->timestamp);
+	}
+
+	if (lv->lock_type) {
+		outf(f, "lock_type = \"%s\"", lv->lock_type);
+		if (lv->lock_args)
+			outf(f, "lock_args = \"%s\"", lv->lock_args);
 	}
 
 	if (lv->alloc != ALLOC_INHERIT)
