@@ -158,6 +158,8 @@ int lvmetad_pvscan_single(struct cmd_context *cmd, struct device *dev,
 int lvmetad_pvscan_all_devs(struct cmd_context *cmd, activation_handler handler);
 int lvmetad_pvscan_foreign_vgs(struct cmd_context *cmd, activation_handler handler);
 
+void lvmetad_validate_global_cache(struct cmd_context *cmd, int force);
+
 #  else		/* LVMETAD_SUPPORT */
 
 #    define lvmetad_init(cmd)	do { } while (0)
@@ -183,6 +185,7 @@ int lvmetad_pvscan_foreign_vgs(struct cmd_context *cmd, activation_handler handl
 #    define lvmetad_pvscan_single(cmd, dev, handler)	(0)
 #    define lvmetad_pvscan_all_devs(cmd, handler)	(0)
 #    define lvmetad_pvscan_foreign_vgs(cmd, handler)	(0)
+#    define lvmetad_validate_global_cache(cmd, handler)	do { } while (0)
 
 #  endif	/* LVMETAD_SUPPORT */
 
