@@ -1079,8 +1079,10 @@ static int _get_settings(struct cmd_context *cmd)
 	cmd->include_foreign_vgs = arg_is_set(cmd, foreign_ARG) ? 1 : 0;
 	cmd->include_active_foreign_vgs = cmd->command->flags & ENABLE_FOREIGN_VGS ? 1 : 0;
 		
-	if (!arg_count(cmd, sysinit_ARG))
+	if (!arg_count(cmd, sysinit_ARG)) {
 		lvmetad_connect_or_warn();
+		lvmlockd_connect_or_warn();
+	}
 
 	if (arg_count(cmd, nosuffix_ARG))
 		cmd->current_settings.suffix = 0;

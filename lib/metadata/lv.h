@@ -52,6 +52,8 @@ struct logical_volume {
 
 	uint64_t timestamp;
 	const char *hostname;
+	const char *lock_type;
+	const char *lock_args;
 };
 
 struct lv_with_info_and_seg_status;

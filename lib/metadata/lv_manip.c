@@ -6992,6 +6992,16 @@ static struct logical_volume *_lv_create_an_lv(struct volume_group *vg,
 				   lv->major, lv->minor);
 	}
 
+	if (lp->lock_type && !(lv->lock_type = dm_pool_strdup(cmd->mem, lp->lock_type))) {
+		log_error("Failed to allocate lock_type");
+		return NULL;
+	}
+
+	if (lp->lock_args && !(lv->lock_args = dm_pool_strdup(cmd->mem, lp->lock_args))) {
+		log_error("Failed to allocate lock_args");
+		return NULL;
+	}
+
 	dm_list_splice(&lv->tags, &lp->tags);
 
 	if (!lv_extend(lv, create_segtype,
