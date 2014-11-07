@@ -28,6 +28,7 @@
 #include "archiver.h"
 #include "lvmcache.h"
 #include "lvmetad.h"
+#include "lvmlockd.h"
 #include "lvm-version.h"
 #include "config.h"
 #include "defaults.h"

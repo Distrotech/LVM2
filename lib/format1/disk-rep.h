@@ -41,6 +41,7 @@
 #define	VG_WRITE             0x02	/*     "     */
 #define	VG_CLUSTERED         0x04	/*     "     */
 #define	VG_SHARED            0x08	/*     "     */
+#define	VG_LOCK_TYPE         0x10	/*     "     */
 
 /* logical volume */
 #define	LV_ACTIVE            0x01	/* lv_status */
