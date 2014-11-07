@@ -193,6 +193,11 @@ ifeq ("@BUILD_LVMETAD@", "yes")
   SOURCES +=\
 	cache/lvmetad.c
 endif
+ 
+ifeq ("@BUILD_LVMLOCKD@", "yes")
+  SOURCES +=\
+	locking/lvmlockd.c
+endif
 
 ifeq ("@DMEVENTD@", "yes")
   CLDFLAGS += -L$(top_builddir)/daemons/dmeventd
