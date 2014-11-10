@@ -1346,6 +1346,8 @@ int lvm_run_command(struct cmd_context *cmd, int argc, char **argv)
 {
 	struct dm_config_tree *config_string_cft;
 	struct dm_config_tree *config_profile_command_cft, *config_profile_metadata_cft;
+	struct arg_value_group_list *group;
+	const char *config_override;
 	int ret = 0;
 	int locking_type;
 	int monitoring;
@@ -1378,11 +1380,20 @@ int lvm_run_command(struct cmd_context *cmd, int argc, char **argv)
 		}
 	}
 
-	if (arg_count(cmd, config_ARG))
-		if (!override_config_tree_from_string(cmd, arg_str_value(cmd, config_ARG, ""))) {
+	dm_list_iterate_items(group, &cmd->arg_value_groups) {
+		if (!grouped_arg_is_set(group->arg_values, config_ARG))
+			continue;
+
+		if (!(config_override = grouped_arg_str_value(group->arg_values,
+							      config_ARG,
+							      NULL)))
+			return_0;
+
+		if (!override_config_tree_from_string(cmd, config_override)) {
 			ret = EINVALID_CMD_LINE;
 			goto_out;
 		}
+	}
 
 	if (arg_count(cmd, config_ARG) || !cmd->config_initialized || config_files_changed(cmd)) {
 		/* Reinitialise various settings inc. logging, filters */
