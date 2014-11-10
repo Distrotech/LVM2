@@ -708,7 +708,7 @@ static void _get_token(struct parser *p, int tok_prev)
 	default:
 		p->t = TOK_IDENTIFIER;
 		while ((te != p->fe) && (*te) && !isspace(*te) &&
-		       (*te != '#') && (*te != '=') &&
+		       (*te != '#') && (*te != '=') && (*te != '/') &&
 		       (*te != SECTION_B_CHAR) &&
 		       (*te != SECTION_E_CHAR))
 			te++;
