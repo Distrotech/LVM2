@@ -367,15 +367,9 @@ int override_config_tree_from_string(struct cmd_context *cmd,
 	struct config_source *cs = dm_config_get_custom(cmd->cft);
 
 	/*
-	 * Follow this sequence:
-	 * CONFIG_STRING -> CONFIG_PROFILE_COMMAND -> CONFIG_PROFILE_METADATA -> CONFIG_FILE/CONFIG_MERGED_FILES
+	 * Follow this sequence: CONFIG_STRING+ -> CONFIG_PROFILE_COMMAND ->
+	 * CONFIG_PROFILE_METADATA -> CONFIG_FILE/CONFIG_MERGED_FILES
 	 */
-
-	if (cs->type == CONFIG_STRING) {
-		log_error(INTERNAL_ERROR "override_config_tree_from_string: "
-			  "config cascade already contains a string config.");
-		return 0;
-	}
 
 	if (!(cft_new = dm_config_from_string(config_settings))) {
 		log_error("Failed to set overridden configuration entries.");
