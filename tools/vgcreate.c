@@ -108,6 +108,12 @@ int vgcreate(struct cmd_context *cmd, int argc, char **argv)
 		}
 	}
 
+	if (!lockd_init_vg(cmd, vg)) {
+		log_error("Failed to initialize lock args for lock type %s",
+			  vp_new.lock_type);
+		goto_bad;
+	}
+
 	if (vg_is_clustered(vg))
 		clustered_message = "Clustered ";
 	else if (locking_is_clustered())
