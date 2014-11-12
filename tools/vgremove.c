@@ -68,6 +68,9 @@ static int vgremove_single(struct cmd_context *cmd, const char *vg_name,
 		}
 	}
 
+	if (!lockd_free_vg_before(cmd, vg))
+		return_ECMD_FAILED;
+
 	if (!force && !vg_remove_check(vg))
 		return_ECMD_FAILED;
 
@@ -75,6 +78,8 @@ static int vgremove_single(struct cmd_context *cmd, const char *vg_name,
 
 	if (!vg_remove(vg))
 		return_ECMD_FAILED;
+
+	lockd_free_vg_final(cmd, vg);
 
 	return ECMD_PROCESSED;
 }
