@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2013 Red Hat, Inc.
+ * Copyright (C) 2014 Red Hat, Inc.
  *
  * This file is part of LVM2.
  *
@@ -63,7 +63,7 @@ static inline int is_lockd_type(const char *lock_type)
 
 #ifdef LVMLOCKD_SUPPORT
 
-/* daemon management */
+/* lvmlockd connection and communication */
 
 void lvmlockd_init(struct cmd_context *);
 void lvmlockd_set_active(int);
@@ -71,6 +71,12 @@ void lvmlockd_set_socket(const char *);
 void lvmlockd_disconnect(void);
 void lvmlockd_connect_or_warn(void);
 int lvmlockd_connected(void);
+
+/* vgcreate/vgremove use init/free */
+
+int lockd_init_vg(struct cmd_context *cmd, struct volume_group *vg);
+int lockd_free_vg_before(struct cmd_context *cmd, struct volume_group *vg);
+void lockd_free_vg_final(struct cmd_context *cmd, struct volume_group *vg);
 
 #else /* LVMLOCKD_SUPPORT */
 
@@ -80,6 +86,10 @@ int lvmlockd_connected(void);
 #define lvmlockd_disconnect()       do { } while (0)
 #define lvmlockd_connect_or_warn()  do { } while (0)
 #define lvmlockd_connected          (0)
+
+#define lockd_init_vg(cmd, vg)        (0)
+#define lockd_free_vg_before(cmd, vg) (0)
+#define lockd_free_vg_final(cmd, vg)  do { } while (0)
 
 #endif /* LVMLOCKD_SUPPORT */
 
