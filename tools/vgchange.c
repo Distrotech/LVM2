@@ -533,7 +533,22 @@ change:
 	}
 
 	vg->system_id = system_id;
+
+	/* update system_id in lvmlockd's record for this vg */
+	if (!lockd_start_vg(cmd, vg))
+		log_debug("Failed to update lvmlockd.");
+
 	return 1;
+}
+
+static int _vgchange_lock_start(struct cmd_context *cmd, struct volume_group *vg)
+{
+	return lockd_start_vg(cmd, vg);
+}
+
+static int _vgchange_lock_stop(struct cmd_context *cmd, struct volume_group *vg)
+{
+	return lockd_stop_vg(cmd, vg);
 }
 
 static int vgchange_single(struct cmd_context *cmd, const char *vg_name,
@@ -651,6 +666,14 @@ static int vgchange_single(struct cmd_context *cmd, const char *vg_name,
 		if (!_vgchange_background_polling(cmd, vg))
 			return_ECMD_FAILED;
 
+	if (arg_is_set(cmd, lockstart_ARG)) {
+		if (!_vgchange_lock_start(cmd, vg))
+			return_ECMD_FAILED;
+	} else if (arg_is_set(cmd, lockstop_ARG)) {
+		if (!_vgchange_lock_stop(cmd, vg))
+			return_ECMD_FAILED;
+	}
+
         return ret;
 }
 
@@ -658,6 +681,8 @@ int vgchange(struct cmd_context *cmd, int argc, char **argv)
 {
 	int noupdate =
 		arg_count(cmd, activate_ARG) ||
+		arg_count(cmd, lockstart_ARG) ||
+		arg_count(cmd, lockstop_ARG) ||
 		arg_count(cmd, monitor_ARG) ||
 		arg_count(cmd, poll_ARG) ||
 		arg_count(cmd, refresh_ARG);
