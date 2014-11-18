@@ -539,11 +539,8 @@ static int _free_vg_dlm(struct cmd_context *cmd, struct volume_group *vg)
 		return 0;
 	}
 
-	/*
-	 * Leave the dlm lockspace.
-	 * Joining and leaving the lockspaces to be added by later patch.
-	 * lockd_stop_vg(cmd, vg);
-	 */
+	/* Leave the dlm lockspace. */
+	lockd_stop_vg(cmd, vg);
 
 	return 1;
 }
@@ -700,5 +697,169 @@ void lockd_free_vg_final(struct cmd_context *cmd, struct volume_group *vg)
 	default:
 		log_error("Unknown lock_type.");
 	}
+}
+
+/*
+ * Starting a vg involves:
+ * 1. reading the vg without a lock
+ * 2. getting the lock_type/lock_args from the vg metadata
+ * 3. doing start_vg in lvmlockd for the lock_type;
+ *    this means joining the lockspace
+ *
+ * The vg read in step 1 should not be used for anything
+ * other than getting the lock_type/lock_args/uuid necessary
+ * for starting the lockspace.  To use the vg after starting
+ * the lockspace, follow the standard method which is:
+ * lock the vg, read/use/write the vg, unlock the vg.
+ */
+
+int lockd_start_vg(struct cmd_context *cmd, struct volume_group *vg)
+{
+	char uuid[64] __attribute__((aligned(8)));
+	daemon_reply reply;
+	const char *lock_type;
+	int host_id = 0;
+	int result;
+	int ret;
+
+	memset(uuid, 0, sizeof(uuid));
+
+	/*
+	 * We do not skip non-lockd vg's here (see add_local below).
+	 * We use this to ensure lvmlockd has seen the local vg.
+	 * It is an optimization in case lvmlockd has not seen the
+	 * local vg yet.
+	 */
+
+	if (!_lvmlockd_active)
+		return 1;
+	if (!lvmlockd_connected())
+		return 0;
+
+	/* Skip starting the vg lockspace when the vg lock is skipped. */
+
+	/* Added in a later patch. */
+	/*
+	if (cmd_mode && !strcmp(cmd_mode, "na"))
+		return 1;
+	*/
+
+	log_debug("lockd_start_vg %s lock_type %s", vg->name,
+		  vg->lock_type ? vg->lock_type : "empty");
+
+	if (vg->lock_type && !strcmp(vg->lock_type, "sanlock")) {
+		/*
+		 * This is the big difference between starting
+		 * sanlock vgs vs starting dlm vgs: the internal
+		 * sanlock lv needs to be activated before lvmlockd
+		 * does the start because sanlock needs to use the lv
+		 * to access locks.
+		 */
+		if (!_activate_sanlock_lv(cmd, vg))
+			return 0;
+
+		host_id = find_config_tree_int(cmd, local_host_id_CFG, NULL);
+	}
+
+	id_write_format(&vg->id, uuid, sizeof(uuid));
+
+	if (!is_lockd_type(vg->lock_type)) {
+		const char *sysid = NULL;
+
+		if (vg->system_id && (strlen(vg->system_id) > 0))
+			sysid = vg->system_id;
+
+		reply = _lockd_send("add_local",
+				"pid = %d", getpid(),
+				"vg_name = %s", vg->name,
+				"vg_uuid = %s", uuid[0] ? uuid : "none",
+				"vg_sysid = %s", sysid ?: "none",
+				"our_system_id = %s", cmd->system_id ?: "none",
+				NULL);
+
+		lock_type = "local";
+	} else {
+		reply = _lockd_send("start_vg",
+				"pid = %d", getpid(),
+				"vg_name = %s", vg->name,
+				"vg_lock_type = %s", vg->lock_type,
+				"vg_lock_args = %s", vg->lock_args,
+				"vg_uuid = %s", uuid[0] ? uuid : "none",
+				"version = %d", (int64_t)vg->seqno,
+				"host_id = %d", host_id,
+				NULL);
+
+		lock_type = vg->lock_type;
+	}
+
+	if (!_lockd_result(reply, &result, NULL)) {
+		result = -1;
+		ret = 0;
+	} else {
+		ret = (result < 0) ? 0 : 1;
+	}
+
+	if (result == -EEXIST) {
+		ret = 1;
+		goto out;
+	}
+
+	if (!ret)
+		log_error("Locking start %s VG %s %d", lock_type, vg->name, result);
+	else
+		log_debug("lockd_start_vg %s done", vg->name);
+
+out:
+	daemon_reply_destroy(reply);
+
+	return ret;
+}
+
+int lockd_stop_vg(struct cmd_context *cmd, struct volume_group *vg)
+{
+	daemon_reply reply;
+	int result;
+	int ret;
+
+	if (!is_lockd_type(vg->lock_type))
+		return 1;
+
+	if (!_lvmlockd_active)
+		return 1;
+	if (!lvmlockd_connected())
+		return 0;
+
+	log_debug("lockd_stop_vg %s lock_type %s", vg->name,
+		  vg->lock_type ? vg->lock_type : "empty");
+
+	reply = _lockd_send("stop_vg",
+			"pid = %d", getpid(),
+			"vg_name = %s", vg->name,
+			NULL);
+
+	if (!_lockd_result(reply, &result, NULL)) {
+		ret = 0;
+	} else {
+		ret = (result < 0) ? 0 : 1;
+	}
+
+	if (result == -EBUSY) {
+		log_error("Cannot stop locking in busy VG %s", vg->name);
+		goto out;
+	}
+
+	if (!ret) {
+		log_error("Locking stop %s VG %s %d", vg->lock_type, vg->name, result);
+		goto out;
+	}
+
+	if (!strcmp(vg->lock_type, "sanlock")) {
+		log_debug("lockd_stop_vg deactivate sanlock lv");
+		_deactivate_sanlock_lv(cmd, vg);
+	}
+out:
+	daemon_reply_destroy(reply);
+
+	return ret;
 }
 
