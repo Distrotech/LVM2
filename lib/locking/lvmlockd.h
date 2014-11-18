@@ -78,6 +78,11 @@ int lockd_init_vg(struct cmd_context *cmd, struct volume_group *vg);
 int lockd_free_vg_before(struct cmd_context *cmd, struct volume_group *vg);
 void lockd_free_vg_final(struct cmd_context *cmd, struct volume_group *vg);
 
+/* start and stop the lockspace for a vg */
+
+int lockd_start_vg(struct cmd_context *cmd, struct volume_group *vg);
+int lockd_stop_vg(struct cmd_context *cmd, struct volume_group *vg);
+
 #else /* LVMLOCKD_SUPPORT */
 
 #define lvmlockd_init(cmd)          do { } while (0)
@@ -90,6 +95,9 @@ void lockd_free_vg_final(struct cmd_context *cmd, struct volume_group *vg);
 #define lockd_init_vg(cmd, vg)        (0)
 #define lockd_free_vg_before(cmd, vg) (0)
 #define lockd_free_vg_final(cmd, vg)  do { } while (0)
+
+#define lockd_start_vg(cmd, vg) (1)
+#define lockd_stop_vg(cmd, vg)  (1)
 
 #endif /* LVMLOCKD_SUPPORT */
 
