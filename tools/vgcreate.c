@@ -135,6 +135,10 @@ int vgcreate(struct cmd_context *cmd, int argc, char **argv)
 				clustered_message, *clustered_message ? 'v' : 'V', vg->name,
 				vg->system_id ? " with system ID " : "", vg->system_id ? : "");
 
+	/* Start the VG lockspace because it will likely be used right away. */
+	if (!lockd_start_vg(cmd, vg))
+		log_error("Failed to start locking");
+
 	release_vg(vg);
 	return ECMD_PROCESSED;
 
