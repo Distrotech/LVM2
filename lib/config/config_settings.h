@@ -283,5 +283,6 @@ cfg(tag_host_list_CFG, "host_list", tag_CFG_SUBSECTION, CFG_ALLOW_EMPTY | CFG_DE
 
 cfg(local_system_id_CFG, "system_id", local_CFG_SECTION, CFG_DEFAULT_UNDEFINED, CFG_TYPE_STRING, NULL, vsn(2, 2, 112), NULL)
 cfg_array(local_allow_system_id_CFG, "allow_system_id", local_CFG_SECTION, CFG_DEFAULT_UNDEFINED, CFG_TYPE_STRING, NULL, vsn(2, 2, 112), NULL)
+cfg(local_host_id_CFG, "host_id", local_CFG_SECTION, CFG_DEFAULT_UNDEFINED, CFG_TYPE_INT, 0, vsn(2, 2, 112), NULL)
 
 cfg(CFG_COUNT, NULL, root_CFG_SECTION, 0, CFG_TYPE_INT, 0, vsn(0, 0, 0), NULL)
