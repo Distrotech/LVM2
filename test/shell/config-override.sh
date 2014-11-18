@@ -11,7 +11,10 @@
 
 . lib/inittest
 
-aux prepare_vg 2
+aux prepare_devs 2
+pvcreate $dev1 $dev2
+vgcreate $vg $dev1 $dev2
+
 lvcreate -n test -l 1 -ay $vg
 check active $vg test
 lvchange -an $vg
@@ -20,6 +23,8 @@ lvchange -ay $vg --config "activation { volume_list = [] }"
 not check active $vg test
 lvchange -ay $vg --config "activation { volume_list = [ \"$vg\" ] }" \
 	         --config "activation { volume_list = [] }"
+lvchange -ay $vg --config "activation/volume_list = [ \"$vg\" ]" \
+	         --config "activation/volume_list = []"
 not check active $vg test
 lvchange -ay $vg --config "activation { volume_list = [] }" \
 	         --config "activation { volume_list = [ \"$vg\" ] }"
