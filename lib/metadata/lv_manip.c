@@ -3514,7 +3514,7 @@ static int _lv_insert_empty_sublvs(struct logical_volume *lv,
 			return_0;
 
 		/* Metadata LVs for raid */
-		if (segtype_is_raid(segtype)) {
+		if (segtype_is_raid(segtype)) { //  HM FIXME raid0 w/o rmeta: && !segtype_is_raid0(segtype)) {
 			if (dm_snprintf(img_name, len, "%s_rmeta_%u", lv->name, i) < 0)
 				return_0;
 		} else
