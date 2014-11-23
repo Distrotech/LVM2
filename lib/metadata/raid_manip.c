@@ -248,11 +248,7 @@ static int _raid_remove_top_layer(struct logical_volume *lv,
 
 	if (!remove_layer_from_lv(lv, lv_tmp))
 		return_0;
-#if 0
-	/* FIXME: removes bogus references from top-level first seg to r_rimage_0 LV */
-	if (!remove_seg_from_segs_using_this_lv(lv_tmp, seg))
-		return_0;
-#endif
+
 	lv->status &= ~(MIRRORED | RAID);
 
 	return 1;
