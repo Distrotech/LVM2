@@ -150,23 +150,76 @@ struct segment_type *init_unknown_segtype(struct cmd_context *cmd,
 					  const char *name);
 
 #define RAID_FEATURE_RAID10			(1U << 0) /* version 1.3 */
+#define RAID_FEATURE_RAID0			(1U << 1) /* version 1.6 */
 
 #ifdef RAID_INTERNAL
 int init_raid_segtypes(struct cmd_context *cmd, struct segtype_library *seglib);
 #endif
 
-#define SEG_TYPE_NAME_RAID1	"raid1"
-#define SEG_TYPE_NAME_RAID10	"raid10"
-#define SEG_TYPE_NAME_RAID4	"raid4"
-#define SEG_TYPE_NAME_RAID5	"raid5"
-#define SEG_TYPE_NAME_RAID5_LA	"raid5_la"
-#define SEG_TYPE_NAME_RAID5_LS	"raid5_ls"
-#define SEG_TYPE_NAME_RAID5_RA	"raid5_ra"
-#define SEG_TYPE_NAME_RAID5_RS	"raid5_rs"
-#define SEG_TYPE_NAME_RAID6	"raid6"
-#define SEG_TYPE_NAME_RAID6_NC	"raid6_nc"
-#define SEG_TYPE_NAME_RAID6_NR	"raid6_nr"
-#define SEG_TYPE_NAME_RAID6_ZR	"raid6_zr"
+#define SEG_TYPE_NAME_RAID0		"raid0"
+#define SEG_TYPE_NAME_RAID1		"raid1"
+#define SEG_TYPE_NAME_RAID10		"raid10"
+#define SEG_TYPE_NAME_RAID4		"raid4"		/* this is SEG_TYPE_NAME_RAID4_0 */
+#define SEG_TYPE_NAME_RAID4_N		"raid4_n"
+#define SEG_TYPE_NAME_RAID5		"raid5"
+#define SEG_TYPE_NAME_RAID5_0		"raid5_0"
+#define SEG_TYPE_NAME_RAID5_N		"raid5_n"
+#define SEG_TYPE_NAME_RAID5_LA		"raid5_la"
+#define SEG_TYPE_NAME_RAID5_LS		"raid5_ls"
+#define SEG_TYPE_NAME_RAID5_RA		"raid5_ra"
+#define SEG_TYPE_NAME_RAID5_RS		"raid5_rs"
+#define SEG_TYPE_NAME_RAID6		"raid6"
+#define SEG_TYPE_NAME_RAID6_NC		"raid6_nc"
+#define SEG_TYPE_NAME_RAID6_NR		"raid6_nr"
+#define SEG_TYPE_NAME_RAID6_ZR		"raid6_zr"
+#define SEG_TYPE_NAME_RAID6_LA_6	"raid6_la_6"
+#define SEG_TYPE_NAME_RAID6_LS_6	"raid6_ls_6"
+#define SEG_TYPE_NAME_RAID6_RA_6	"raid6_ra_6"
+#define SEG_TYPE_NAME_RAID6_RS_6	"raid6_rs_6"
+#define SEG_TYPE_NAME_RAID6_0_6		"raid6_0_6"
+#define SEG_TYPE_NAME_RAID6_N_6		"raid6_n_6"
+
+#define segtype_is_raid0(segtype)	(!strcmp((segtype)->name, SEG_TYPE_NAME_RAID0))
+#define segtype_is_raid1(segtype)	(!strcmp((segtype)->name, SEG_TYPE_NAME_RAID1))
+#define segtype_is_raid10(segtype)	(!strcmp((segtype)->name, SEG_TYPE_NAME_RAID10))
+#define segtype_is_any_raid4(segtype)	(!strncmp((segtype)->name, SEG_TYPE_NAME_RAID4, 5))
+#define segtype_is_raid4(segtype)	(!strcmp((segtype)->name, SEG_TYPE_NAME_RAID4))
+#define segtype_is_raid4_n(segtype)	(!strcmp((segtype)->name, SEG_TYPE_NAME_RAID4_N))
+#define segtype_is_any_raid5(segtype)	(!strncmp((segtype)->name, SEG_TYPE_NAME_RAID5, 5))
+#define segtype_is_raid5_ls(segtype)	(!strcmp((segtype)->name, SEG_TYPE_NAME_RAID5_LS))
+#define segtype_is_raid5_rs(segtype)	(!strcmp((segtype)->name, SEG_TYPE_NAME_RAID5_RS))
+#define segtype_is_raid5_la(segtype)	(!strcmp((segtype)->name, SEG_TYPE_NAME_RAID5_LA))
+#define segtype_is_raid5_ra(segtype)	(!strcmp((segtype)->name, SEG_TYPE_NAME_RAID5_RA))
+#define segtype_is_raid5_0(segtype)	(!strcmp((segtype)->name, SEG_TYPE_NAME_RAID5_0))
+#define segtype_is_raid5_n(segtype)	(!strcmp((segtype)->name, SEG_TYPE_NAME_RAID5_N))
+#define segtype_is_any_raid6(segtype)	(!strncmp((segtype)->name, SEG_TYPE_NAME_RAID6, 5))
+#define segtype_is_raid6_ls_6(segtype)	(!strcmp((segtype)->name, SEG_TYPE_NAME_RAID6_LS_6))
+#define segtype_is_raid6_rs_6(segtype)	(!strcmp((segtype)->name, SEG_TYPE_NAME_RAID6_RS_6))
+#define segtype_is_raid6_la_6(segtype)	(!strcmp((segtype)->name, SEG_TYPE_NAME_RAID6_LA_6))
+#define segtype_is_raid6_ra_6(segtype)	(!strcmp((segtype)->name, SEG_TYPE_NAME_RAID6_RA_6))
+#define segtype_is_raid6_0_6(segtype)	(!strcmp((segtype)->name, SEG_TYPE_NAME_RAID6_0_6))
+#define segtype_is_raid6_n_6(segtype)	(!strcmp((segtype)->name, SEG_TYPE_NAME_RAID6_N_6))
+
+#define seg_is_raid0(seg)		segtype_is_raid0((seg)->segtype)
+#define seg_is_raid1(seg)		segtype_is_raid1((seg)->segtype)
+#define seg_is_raid10(seg)		segtype_is_raid10((seg)->segtype)
+#define seg_is_any_raid4(seg)		segtype_is_any_raid4((seg)->segtype)
+#define seg_is_raid4(seg)		segtype_is_raid4((seg)->segtype)
+#define seg_is_raid4_n(seg)		segtype_is_raid4_n((seg)->segtype)
+#define seg_is_any_raid5(seg)		segtype_is_any_raid5((seg)->segtype)
+#define seg_is_raid5_ls(seg)		segtype_is_raid5_ls((seg)->segtype)
+#define seg_is_raid5_rs(seg)		segtype_is_raid5_rs((seg)->segtype)
+#define seg_is_raid5_la(seg)		segtype_is_raid5_la((seg)->segtype)
+#define seg_is_raid5_ra(seg)		segtype_is_raid5_ra((seg)->segtype)
+#define seg_is_raid5_0(seg)		segtype_is_raid5_0((seg)->segtype)
+#define seg_is_raid5_n(seg)		segtype_is_raid5_n((seg)->segtype)
+#define seg_is_any_raid6(seg)		segtype_is_any_raid6((seg)->segtype)
+#define seg_is_raid6_ls_6(seg)		segtype_is_raid6_ls_6((seg)->segtype)
+#define seg_is_raid6_rs_6(seg)		segtype_is_raid6_rs_6((seg)->segtype)
+#define seg_is_raid6_la_6(seg)		segtype_is_raid6_la_6((seg)->segtype)
+#define seg_is_raid6_ra_6(seg)		segtype_is_raid6_ra_6((seg)->segtype)
+#define seg_is_raid6_0_6(seg)		segtype_is_raid6_0_6((seg)->segtype)
+#define seg_is_raid6_n_6(seg)		segtype_is_raid6_n_6((seg)->segtype)
 
 #ifdef REPLICATOR_INTERNAL
 int init_replicator_segtype(struct cmd_context *cmd, struct segtype_library *seglib);

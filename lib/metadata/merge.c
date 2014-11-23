@@ -137,10 +137,10 @@ int check_lv_segments(struct logical_volume *lv, int complete_vg)
 			inc_error_count;
 		}
 
-		area_multiplier = segtype_is_striped(seg->segtype) ?
-					seg->area_count : 1;
+		area_multiplier = seg_is_striped(seg) ? seg->area_count : 1;
 
 		if (seg->area_len * area_multiplier != seg->len) {
+printf("segtype=%s area_len=%d area_len*mp=%u seg->len=%u\n", seg->segtype->name, seg->area_len, seg->area_len * area_multiplier, seg->len);
 			log_error("LV %s: segment %u has inconsistent "
 				  "area_len %u",
 				  lv->name, seg_count, seg->area_len);
@@ -405,7 +405,10 @@ int check_lv_segments(struct logical_volume *lv, int complete_vg)
 				continue;
 			if (lv == seg_lv(seg, s))
 				seg_found++;
-			if (seg_is_raid(seg) && (lv == seg_metalv(seg, s)))
+
+			/* HM FIXME: TESTME */
+			// if (seg_is_raid(seg) && seg->meta_areas && lv == seg_metalv(seg, s))
+			if (seg->meta_areas && lv == seg_metalv(seg, s))
 				seg_found++;
 		}
 		if (seg_is_replicator_dev(seg)) {
@@ -419,13 +422,14 @@ int check_lv_segments(struct logical_volume *lv, int complete_vg)
 				seg_found++;
 		}
 		if (seg_is_replicator(seg) && lv == seg->rlog_lv)
-				seg_found++;
+			seg_found++;
 		if (seg->log_lv == lv)
 			seg_found++;
 		if (seg->metadata_lv == lv || seg->pool_lv == lv)
 			seg_found++;
 		if (seg_is_thin_volume(seg) && (seg->origin == lv || seg->external_lv == lv))
 			seg_found++;
+
 		if (!seg_found) {
 			log_error("LV %s is used by LV %s:%" PRIu32 "-%" PRIu32
 				  ", but missing ptr from %s to %s",
@@ -444,11 +448,22 @@ int check_lv_segments(struct logical_volume *lv, int complete_vg)
 
 		seg_found = 0;
 		dm_list_iterate_items(seg2, &seg->lv->segments)
-			if (sl->seg == seg2) {
+			if (seg == seg2) {
 				seg_found++;
 				break;
 			}
+
 		if (!seg_found) {
+{
+unsigned ss = 0;
+printf("seg->lv=%s\n", seg->lv->name);
+dm_list_iterate_items(seg2, &seg->lv->segments) {
+	ss++;
+	printf("seg_lv(seg2, 0)->segs_using_this_lv");
+}
+printf("s=%u\n", ss);
+
+}
 			log_error("LV segment %s:%" PRIu32 "-%" PRIu32
 				  " is incorrectly listed as being used by LV %s",
 				  seg->lv->name, seg->le, seg->le + seg->len - 1,

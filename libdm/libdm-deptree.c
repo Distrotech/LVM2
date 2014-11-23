@@ -42,9 +42,13 @@ enum {
 	SEG_ZERO,
 	SEG_THIN_POOL,
 	SEG_THIN,
+	SEG_RAID0,
 	SEG_RAID1,
 	SEG_RAID10,
 	SEG_RAID4,
+	SEG_RAID4_N,
+	SEG_RAID5_0,
+	SEG_RAID5_N,
 	SEG_RAID5_LA,
 	SEG_RAID5_RA,
 	SEG_RAID5_LS,
@@ -52,6 +56,12 @@ enum {
 	SEG_RAID6_ZR,
 	SEG_RAID6_NR,
 	SEG_RAID6_NC,
+	SEG_RAID6_LA_6,
+	SEG_RAID6_RA_6,
+	SEG_RAID6_LS_6,
+	SEG_RAID6_RS_6,
+	SEG_RAID6_0_6,
+	SEG_RAID6_N_6,
 };
 
 /* FIXME Add crypt and multipath support */
@@ -74,9 +84,13 @@ static const struct {
 	{ SEG_ZERO, "zero"},
 	{ SEG_THIN_POOL, "thin-pool"},
 	{ SEG_THIN, "thin"},
+	{ SEG_RAID0, "raid0"},
 	{ SEG_RAID1, "raid1"},
 	{ SEG_RAID10, "raid10"},
 	{ SEG_RAID4, "raid4"},
+	{ SEG_RAID4_N, "raid4_n"},
+	{ SEG_RAID5_0, "raid5_0"},
+	{ SEG_RAID5_N, "raid5_n"},
 	{ SEG_RAID5_LA, "raid5_la"},
 	{ SEG_RAID5_RA, "raid5_ra"},
 	{ SEG_RAID5_LS, "raid5_ls"},
@@ -84,9 +98,15 @@ static const struct {
 	{ SEG_RAID6_ZR, "raid6_zr"},
 	{ SEG_RAID6_NR, "raid6_nr"},
 	{ SEG_RAID6_NC, "raid6_nc"},
+	{ SEG_RAID6_LA_6, "raid6_la_6"},
+	{ SEG_RAID6_RA_6, "raid6_ra_6"},
+	{ SEG_RAID6_LS_6, "raid6_ls_6"},
+	{ SEG_RAID6_RS_6, "raid6_rs_6"},
+	{ SEG_RAID6_0_6, "raid6_0_6"},
+	{ SEG_RAID6_N_6, "raid6_n_6"},
 
 	/*
-	 *WARNING: Since 'raid' target overloads this 1:1 mapping table
+	 * WARNING: Since 'raid' target overloads this 1:1 mapping table
 	 * for search do not add new enum elements past them!
 	 */
 	{ SEG_RAID5_LS, "raid5"}, /* same as "raid5_ls" (default for MD also) */
@@ -2088,9 +2108,12 @@ static int _emit_areas_line(struct dm_task *dmt __attribute__((unused)),
 					EMIT_PARAMS(*pos, "%s", synctype);
 			}
 			break;
+		case SEG_RAID0:
 		case SEG_RAID1:
-		case SEG_RAID10:
 		case SEG_RAID4:
+		case SEG_RAID4_N:
+		case SEG_RAID5_0:
+		case SEG_RAID5_N:
 		case SEG_RAID5_LA:
 		case SEG_RAID5_RA:
 		case SEG_RAID5_LS:
@@ -2098,6 +2121,12 @@ static int _emit_areas_line(struct dm_task *dmt __attribute__((unused)),
 		case SEG_RAID6_ZR:
 		case SEG_RAID6_NR:
 		case SEG_RAID6_NC:
+		case SEG_RAID6_LA_6:
+		case SEG_RAID6_RA_6:
+		case SEG_RAID6_LS_6:
+		case SEG_RAID6_RS_6:
+		case SEG_RAID6_0_6:
+		case SEG_RAID6_N_6:
 			if (!area->dev_node) {
 				EMIT_PARAMS(*pos, " -");
 				break;
@@ -2285,6 +2314,12 @@ static int _mirror_emit_segment_line(struct dm_task *dmt, struct load_segment *s
 	return 1;
 }
 
+/* Return 2 if @p != 0 */
+static int _add_2_if_value(unsigned p)
+{
+	return p ? 2 : 0;
+}
+
 static int _raid_emit_segment_line(struct dm_task *dmt, uint32_t major,
 				   uint32_t minor, struct load_segment *seg,
 				   uint64_t *seg_start, char *params,
@@ -2297,23 +2332,16 @@ static int _raid_emit_segment_line(struct dm_task *dmt, uint32_t major,
 	if ((seg->flags & DM_NOSYNC) || (seg->flags & DM_FORCESYNC))
 		param_count++;
 
-	if (seg->region_size)
-		param_count += 2;
-
-	if (seg->writebehind)
-		param_count += 2;
-
-	if (seg->min_recovery_rate)
-		param_count += 2;
-
-	if (seg->max_recovery_rate)
-		param_count += 2;
+	param_count += _add_2_if_value(seg->region_size) +
+		       _add_2_if_value(seg->writebehind) +
+		       _add_2_if_value(seg->min_recovery_rate) +
+		       _add_2_if_value(seg->max_recovery_rate);
 
 	/* rebuilds is 64-bit */
 	param_count += 2 * hweight32(seg->rebuilds & 0xFFFFFFFF);
 	param_count += 2 * hweight32(seg->rebuilds >> 32);
 
-	/* rebuilds is 64-bit */
+	/* writemostly is 64-bit */
 	param_count += 2 * hweight32(seg->writemostly & 0xFFFFFFFF);
 	param_count += 2 * hweight32(seg->writemostly >> 32);
 
@@ -2351,7 +2379,7 @@ static int _raid_emit_segment_line(struct dm_task *dmt, uint32_t major,
 			    seg->max_recovery_rate);
 
 	/* Print number of metadata/data device pairs */
-	EMIT_PARAMS(pos, " %u", seg->area_count/2);
+	EMIT_PARAMS(pos, " %u", seg->area_count / 2);
 
 	if (_emit_areas_line(dmt, seg, params, paramsize, &pos) <= 0)
 		return_0;
@@ -2522,9 +2550,13 @@ static int _emit_segment_line(struct dm_task *dmt, uint32_t major,
 			    seg->iv_offset != DM_CRYPT_IV_DEFAULT ?
 			    seg->iv_offset : *seg_start);
 		break;
+	case SEG_RAID0:
 	case SEG_RAID1:
 	case SEG_RAID10:
 	case SEG_RAID4:
+	case SEG_RAID4_N:
+	case SEG_RAID5_0:
+	case SEG_RAID5_N:
 	case SEG_RAID5_LA:
 	case SEG_RAID5_RA:
 	case SEG_RAID5_LS:
@@ -2532,6 +2564,12 @@ static int _emit_segment_line(struct dm_task *dmt, uint32_t major,
 	case SEG_RAID6_ZR:
 	case SEG_RAID6_NR:
 	case SEG_RAID6_NC:
+	case SEG_RAID6_LA_6:
+	case SEG_RAID6_RA_6:
+	case SEG_RAID6_LS_6:
+	case SEG_RAID6_RS_6:
+	case SEG_RAID6_0_6:
+	case SEG_RAID6_N_6:
 		target_type_is_raid = 1;
 		r = _raid_emit_segment_line(dmt, major, minor, seg, seg_start,
 					    params, paramsize);
@@ -4050,8 +4088,12 @@ int dm_tree_node_add_null_area(struct dm_tree_node *node, uint64_t offset)
 	seg = dm_list_item(dm_list_last(&node->props.segs), struct load_segment);
 
 	switch (seg->type) {
+	case SEG_RAID0:
 	case SEG_RAID1:
 	case SEG_RAID4:
+	case SEG_RAID4_N:
+	case SEG_RAID5_0:
+	case SEG_RAID5_N:
 	case SEG_RAID5_LA:
 	case SEG_RAID5_RA:
 	case SEG_RAID5_LS:
@@ -4059,6 +4101,12 @@ int dm_tree_node_add_null_area(struct dm_tree_node *node, uint64_t offset)
 	case SEG_RAID6_ZR:
 	case SEG_RAID6_NR:
 	case SEG_RAID6_NC:
+	case SEG_RAID6_LA_6:
+	case SEG_RAID6_RA_6:
+	case SEG_RAID6_LS_6:
+	case SEG_RAID6_RS_6:
+	case SEG_RAID6_0_6:
+	case SEG_RAID6_N_6:
 		break;
 	default:
 		log_error("dm_tree_node_add_null_area() called on an unsupported segment type");

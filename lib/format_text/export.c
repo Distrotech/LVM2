@@ -567,13 +567,13 @@ int out_areas(struct formatter *f, const struct lv_segment *seg,
 
 			/* RAID devices are laid-out in metadata/data pairs */
 			if (!lv_is_raid_image(seg_lv(seg, s)) ||
-			    !lv_is_raid_metadata(seg_metalv(seg, s))) {
+			    (seg->meta_areas && seg_metalv(seg, s) && !lv_is_raid_metadata(seg_metalv(seg, s)))) {
 				log_error("RAID segment has non-RAID areas");
 				return 0;
 			}
 
 			outf(f, "\"%s\", \"%s\"%s",
-			     seg_metalv(seg, s)->name, seg_lv(seg, s)->name,
+			     (seg->meta_areas && seg_metalv(seg, s)) ? seg_metalv(seg, s)->name : "-", seg_lv(seg, s)->name,
 			     (s == seg->area_count - 1) ? "" : ",");
 
 			break;
@@ -594,6 +594,12 @@ static int _print_lv(struct formatter *f, struct logical_volume *lv)
 	int seg_count;
 	struct tm *local_tm;
 	time_t ts;
+
+#if 1
+	/* FIXME: HM: workaround for empty metadata lvs with raid0 */
+	if (!dm_list_size(&lv->segments))
+		return 1;
+#endif
 
 	outnl(f);
 	outf(f, "%s {", lv->name);

@@ -1096,10 +1096,14 @@ static int _validate_stripe_params(struct cmd_context *cmd, uint32_t *stripes,
  */
 int get_stripe_params(struct cmd_context *cmd, uint32_t *stripes, uint32_t *stripe_size)
 {
-	/* stripes_long_ARG takes precedence (for lvconvert) */
-	*stripes = arg_uint_value(cmd, arg_count(cmd, stripes_long_ARG) ? stripes_long_ARG : stripes_ARG, 1);
+	int r;
+	uint32_t s;
 
-	*stripe_size = arg_uint_value(cmd, stripesize_ARG, 0);
+	/* stripes_long_ARG takes precedence (for lvconvert) */
+	s = arg_uint_value(cmd, arg_count(cmd, stripes_long_ARG) ? stripes_long_ARG : stripes_ARG, ~0);
+	*stripes = (s == ~0) ? 2 : s;
+
+	*stripe_size = arg_uint_value(cmd, stripesize_ARG, DEFAULT_STRIPESIZE);
 	if (*stripe_size) {
 		if (arg_sign_value(cmd, stripesize_ARG, SIGN_NONE) == SIGN_MINUS) {
 			log_error("Negative stripesize is invalid.");
@@ -1113,7 +1117,11 @@ int get_stripe_params(struct cmd_context *cmd, uint32_t *stripes, uint32_t *stri
 		}
 	}
 
-	return _validate_stripe_params(cmd, stripes, stripe_size);
+	r = _validate_stripe_params(cmd, stripes, stripe_size);
+	if (s == ~0)
+		*stripes = 1;
+
+	return r;
 }
 
 static int _validate_cachepool_params(struct dm_config_tree *tree)
