@@ -238,6 +238,7 @@ static int _check_conversion_type(struct cmd_context *cmd, const char *type_str)
 
 	/* FIXME: Check thin-pool and thin more thoroughly! */
 	if (!strcmp(type_str, "snapshot") ||
+	    !strcmp(type_str, "striped") ||
 	    !strncmp(type_str, "raid", 4) ||
 	    !strcmp(type_str, "cache-pool") || !strcmp(type_str, "cache") ||
 	    !strcmp(type_str, "thin-pool") || !strcmp(type_str, "thin"))
@@ -253,7 +254,9 @@ static int _snapshot_type_requested(struct cmd_context *cmd, const char *type_st
 }
 /* mirror/raid* (1,10,4,5,6 and their variants) reshape */
 static int _mirror_or_raid_type_requested(struct cmd_context *cmd, const char *type_str) {
-	return (arg_count(cmd, mirrors_ARG) || !strncmp(type_str, "raid", 4) || !strcmp(type_str, "mirror"));
+	return (arg_count(cmd, mirrors_ARG) ||
+		!strncmp(type_str, "raid", 4) ||
+		!strcmp(type_str, "mirror"));
 }
 
 static int _read_pool_params(struct cmd_context *cmd, int *pargc, char ***pargv,
@@ -377,6 +380,11 @@ static int _read_params(struct cmd_context *cmd, int argc, char **argv,
 	if (!_check_conversion_type(cmd, type_str))
 		return_0;
 
+	/* FIXME: TESTME */
+	if (!arg_count(cmd, type_ARG) &&
+	    !get_stripe_params(cmd, &lp->stripes, &lp->stripe_size))
+		return_0;
+
 	if (arg_count(cmd, repair_ARG) &&
 	    arg_outside_list_is_set(cmd, "cannot be used with --repair",
 				    repair_ARG,
@@ -438,9 +446,11 @@ static int _read_params(struct cmd_context *cmd, int argc, char **argv,
 	}
 
 	if ((arg_count(cmd, stripes_long_ARG) || arg_count(cmd, stripesize_ARG)) &&
-	    !(_mirror_or_raid_type_requested(cmd, type_str) ||
-	      arg_count(cmd, repair_ARG) ||
-	      arg_count(cmd, thinpool_ARG))) {
+#if 1
+	    (!_mirror_or_raid_type_requested(cmd, type_str) ||
+#endif
+	     arg_count(cmd, repair_ARG) ||
+	     arg_count(cmd, thinpool_ARG))) {
 		log_error("--stripes or --stripesize argument is only valid "
 			  "with --mirrors/--type mirror/--type raid*, --repair and --thinpool");
 		return 0;
@@ -1326,7 +1336,8 @@ static int _lvconvert_mirrors_parse_params(struct cmd_context *cmd,
 	*new_mimage_count = lp->mirrors;
 
 	/* Too many mimages? */
-	if (lp->mirrors > DEFAULT_MIRROR_MAX_IMAGES) {
+	if ((!arg_count(cmd, type_ARG) || strcmp(arg_str_value(cmd, type_ARG, NULL), SEG_TYPE_NAME_RAID1)) &&
+	    lp->mirrors > DEFAULT_MIRROR_MAX_IMAGES) {
 		log_error("Only up to %d images in mirror supported currently.",
 			  DEFAULT_MIRROR_MAX_IMAGES);
 		return 0;
@@ -1756,7 +1767,6 @@ static int _lvconvert_mirrors(struct cmd_context *cmd,
 
 	if (!_lvconvert_validate_thin(lv, lp))
 		return_0;
-
 	if (lv_is_thin_type(lv)) {
 		log_error("Mirror segment type cannot be used for thinpool%s.\n"
 			  "Try \"%s\" segment type instead.",
@@ -1811,10 +1821,39 @@ static int _is_valid_raid_conversion(const struct segment_type *from_segtype,
 	if (from_segtype == to_segtype)
 		return 1;
 
-	if (!segtype_is_raid(from_segtype) && !segtype_is_raid(to_segtype))
-		return_0;  /* Not converting to or from RAID? */
+	/* From striped to mirror or vice-versa */
+	if (segtype_is_striped(from_segtype) &&
+	    segtype_is_mirror(to_segtype))
+		return 1;
 
-	return 1;
+	if (segtype_is_mirror(from_segtype) &&
+	    segtype_is_striped(to_segtype))
+		return 1;
+
+	/* From striped to raid0 or vice-versa */
+	if (segtype_is_striped(from_segtype) &&
+	    segtype_is_raid0(to_segtype))
+		return 1;
+
+	if (segtype_is_raid0(from_segtype) &&
+	    segtype_is_striped(to_segtype))
+		return 1;
+
+	/* From striped to raid1 or vice-versa */
+	if (segtype_is_striped(from_segtype) &&
+	    segtype_is_raid1(to_segtype))
+		return 1;
+
+	if (segtype_is_raid1(from_segtype) &&
+	    segtype_is_striped(to_segtype))
+		return 1;
+
+	/* From raid to raid */
+	if (segtype_is_raid(from_segtype) &&
+	    segtype_is_raid(to_segtype))
+		return 1;
+
+	return 0;
 }
 
 static void _lvconvert_raid_repair_ask(struct cmd_context *cmd,
@@ -1846,7 +1885,7 @@ static void _lvconvert_raid_repair_ask(struct cmd_context *cmd,
 
 static int _lvconvert_raid(struct logical_volume *lv, struct lvconvert_params *lp)
 {
-	int replace = 0, image_count = 0;
+	int replace = 0, image_count = 0, reshape_args = 0;
 	struct dm_list *failed_pvs;
 	struct cmd_context *cmd = lv->vg->cmd;
 	struct lv_segment *seg = first_seg(lv);
@@ -1855,6 +1894,7 @@ static int _lvconvert_raid(struct logical_volume *lv, struct lvconvert_params *l
 	if (!arg_count(cmd, type_ARG))
 		lp->segtype = seg->segtype;
 
+	/* FIXME: remove constraint on mirror/raid1 */
 	/* Can only change image count for raid1 and linear */
 	if (arg_count(cmd, mirrors_ARG) &&
 	    !seg_is_mirrored(seg) && !seg_is_linear(seg)) {
@@ -1875,6 +1915,8 @@ static int _lvconvert_raid(struct logical_volume *lv, struct lvconvert_params *l
 
 	/* Change number of RAID1 images */
 	if (arg_count(cmd, mirrors_ARG) || arg_count(cmd, splitmirrors_ARG)) {
+		int track;
+
 		image_count = lv_raid_image_count(lv);
 		if (lp->mirrors_sign == SIGN_PLUS)
 			image_count += lp->mirrors;
@@ -1883,10 +1925,11 @@ static int _lvconvert_raid(struct logical_volume *lv, struct lvconvert_params *l
 		else
 			image_count = lp->mirrors + 1;
 
-		if (image_count < 1) {
-			log_error("Unable to %s images by specified amount",
-				  arg_count(cmd, splitmirrors_ARG) ?
-				  "split" : "reduce");
+		track = arg_count(cmd, trackchanges_ARG);
+		if (image_count < 1 || (track && lp->mirrors != 1)) {
+			log_error("Unable to %s images by specified amount%s",
+				  arg_count(cmd, splitmirrors_ARG) ?  "split" : "reduce",
+				  track ? "; only one with tracking" : "");
 			return 0;
 		}
 	}
@@ -1904,8 +1947,19 @@ static int _lvconvert_raid(struct logical_volume *lv, struct lvconvert_params *l
 	if (arg_count(cmd, mirrors_ARG))
 		return lv_raid_change_image_count(lv, image_count, lp->pvh);
 
-	if (arg_count(cmd, type_ARG))
-		return lv_raid_reshape(lv, lp->segtype);
+	if (!arg_count(cmd, stripes_long_ARG))
+		lp->stripes = seg->area_count - seg->segtype->parity_devs;
+	else
+		reshape_args++;
+
+	/* FIXME: stripesize arg alone does not work */
+	if (!arg_count(cmd, stripesize_ARG))
+		lp->stripe_size = seg->stripe_size;
+	else
+		reshape_args++;
+
+	if (arg_count(cmd, type_ARG) || reshape_args)
+		return lv_raid_reshape(lv, lp->segtype, lp->stripes, lp->stripe_size, lp->pvh);
 
 	if (arg_count(cmd, replace_ARG))
 		return lv_raid_replace(lv, lp->replace_pvh, lp->pvh);
@@ -1919,7 +1973,9 @@ static int _lvconvert_raid(struct logical_volume *lv, struct lvconvert_params *l
 			return 0;
 		}
 
-		if (!lv_raid_percent(lv, &sync_percent)) {
+		if (!seg_is_striped(seg) &&
+		    !seg_is_raid0(seg) &&
+		    !lv_raid_percent(lv, &sync_percent)) {
 			log_error("Unable to determine sync status of %s/%s.",
 				  lv->vg->name, lv->name);
 			return 0;
@@ -3362,7 +3418,7 @@ static int _lvconvert_single(struct cmd_context *cmd, struct logical_volume *lv,
 		    (lp->cache && !_lvconvert_cache(cmd, lv, lp)))
 			return_ECMD_FAILED;
 	} else if (segtype_is_raid(lp->segtype) ||
-		   (lv->status & RAID) || lp->merge_mirror) {
+		   lv_is_raid(lv) || lp->merge_mirror) {
 		if (!archive(lv->vg))
 			return_ECMD_FAILED;
 
@@ -3390,7 +3446,8 @@ static int _lvconvert_single(struct cmd_context *cmd, struct logical_volume *lv,
 		/* If repairing and using policies, remove missing PVs from VG */
 		if (arg_count(cmd, repair_ARG) && arg_count(cmd, use_policies_ARG))
 			_remove_missing_empty_pv(lv->vg, failed_pvs);
-	}
+	} else
+		log_error("Nothing to do");
 
 	return ECMD_PROCESSED;
 }

@@ -1082,7 +1082,10 @@ int lv_raid_split_and_track(struct logical_volume *lv,
 			    struct dm_list *splittable_pvs);
 int lv_raid_merge(struct logical_volume *lv);
 int lv_raid_reshape(struct logical_volume *lv,
-		    const struct segment_type *new_segtype);
+		    const struct segment_type *new_segtype,
+		    const unsigned stripes,
+		    const unsigned new_stripe_size,
+		    struct dm_list *allocate_pvs);
 int lv_raid_replace(struct logical_volume *lv, struct dm_list *remove_pvs,
 		    struct dm_list *allocate_pvs);
 int lv_raid_remove_missing(struct logical_volume *lv);
