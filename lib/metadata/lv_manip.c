@@ -249,15 +249,18 @@ static int _lv_layout_and_role_raid(struct dm_pool *mem,
 	if (lv_is_raid_image(lv)) {
 		if (!str_list_add_no_dup_check(mem, role, _lv_type_names[LV_TYPE_RAID]) ||
 		    !str_list_add_no_dup_check(mem, role, _lv_type_names[LV_TYPE_IMAGE]))
-			goto_bad;
+			return 0;
+
 	} else if (lv_is_raid_metadata(lv)) {
 		if (!str_list_add_no_dup_check(mem, role, _lv_type_names[LV_TYPE_RAID]) ||
 		    !str_list_add_no_dup_check(mem, role, _lv_type_names[LV_TYPE_METADATA]))
-			goto_bad;
+			return 0;
+
 	} else if (lv_is_pvmove(lv)) {
 		if (!str_list_add_no_dup_check(mem, role, _lv_type_names[LV_TYPE_PVMOVE]) ||
 		    !str_list_add_no_dup_check(mem, layout, _lv_type_names[LV_TYPE_RAID]))
-			goto_bad;
+			return 0;
+
 	} else
 		top_level = 1;
 
@@ -268,7 +271,7 @@ static int _lv_layout_and_role_raid(struct dm_pool *mem,
 
 	/* top-level LVs */
 	if (!str_list_add_no_dup_check(mem, layout, _lv_type_names[LV_TYPE_RAID]))
-		goto bad;
+		return 0;
 
 	/* WARNING: all LV_TYPE_RAID* have to be in a sequence in the _lv_type_name_enum */
 	segtype_name = first_seg(lv)->segtype->name;
@@ -280,17 +283,15 @@ static int _lv_layout_and_role_raid(struct dm_pool *mem,
 	    !str_list_add_no_dup_check(mem, layout, _lv_type_names[LV_TYPE_RAID6]))
 		return 0;
 
-	for (t = LV_TYPE_RAID0; t <= LV_TYPE_RAID6_0_6; t++) {
-		if (!strcmp(segtype_name, _lv_type_names[t]))
-			if (!str_list_add_no_dup_check(mem, layout, _lv_type_names[t]))
-				goto bad;
-			else
+	for (t = LV_TYPE_RAID0; t <= LV_TYPE_RAID6_0_6; t++)
+		if (!strcmp(segtype_name, _lv_type_names[t])) {
+			if (str_list_add_no_dup_check(mem, layout, _lv_type_names[t]))
 				break;
-	}
+
+			return 0;
+		}
 
 	return 1;
-bad:
-	return 0;
 }
 
 static int _lv_layout_and_role_thin(struct dm_pool *mem,
