@@ -2319,16 +2319,12 @@ static int __adjust_segtype_for_takeover(struct logical_volume *lv, struct segme
 
 		/* To raid1 */
 		} else if (segtype_is_raid1(segtype)) {
-			/* HM FIXME: go figure! */
-			return 0;
-
 			/* From raid 4_n/5_n */
-			if (!seg_is_raid5_n(seg) ||
+			if (!seg_is_raid5_0(seg) ||
 			    seg->area_count != 3)
 				return 0;
 
 			lv->le_count /= 2;
-
 
 		/* To raid4 */
 		} else if (segtype_is_any_raid4(segtype)) {
