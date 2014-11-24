@@ -1535,6 +1535,21 @@ static int _get_vgnameids_on_system(struct cmd_context *cmd,
 	return ECMD_PROCESSED;
 }
 
+int select_match_vg(struct cmd_context *cmd, struct volume_group *vg)
+{
+	return 1;
+}
+
+int select_match_lv(struct cmd_context *cmd, struct volume_group *vg, struct logical_volume *lv)
+{
+	return 1;
+}
+
+int select_match_pv(struct cmd_context *cmd, struct volume_group *vg, struct physical_volume *pv)
+{
+	return 1;
+}
+
 static int _process_vgnameid_list(struct cmd_context *cmd, uint32_t flags,
 				  struct dm_list *vgnameids_to_process,
 				  struct dm_list *arg_vgnames,
@@ -1577,9 +1592,10 @@ static int _process_vgnameid_list(struct cmd_context *cmd, uint32_t flags,
 		}
 
 		/* Process this VG? */
-		if (process_all ||
+		if ((process_all ||
 		    (!dm_list_empty(arg_vgnames) && str_list_match_item(arg_vgnames, vg_name)) ||
-		    (!dm_list_empty(arg_tags) && str_list_match_list(arg_tags, &vg->tags, NULL))) {
+		    (!dm_list_empty(arg_tags) && str_list_match_list(arg_tags, &vg->tags, NULL))) &&
+		    select_match_vg(cmd, handle, vg)) {
 			ret = process_single_vg(cmd, vg_name, vg, handle);
 			if (ret != ECMD_PROCESSED)
 				stack;
@@ -1692,6 +1708,7 @@ int process_each_lv_in_vg(struct cmd_context *cmd, struct volume_group *vg,
 {
 	int ret_max = ECMD_PROCESSED;
 	int ret = 0;
+	unsigned process_lv;
 	unsigned process_all = 0;
 	unsigned tags_supplied = 0;
 	unsigned lvargs_supplied = 0;
@@ -1745,12 +1762,31 @@ int process_each_lv_in_vg(struct cmd_context *cmd, struct volume_group *vg,
 		if (!lvargs_supplied && !lv_is_visible(lvl->lv) && !arg_count(cmd, all_ARG))
 			continue;
 
-		/* Only process the LV if the name matches or process_all is set or if an LV tag matches */
-		if (lvargs_supplied && str_list_match_item(arg_lvnames, lvl->lv->name))
+		/*
+		 * process the LV if one of the following:
+		 * - process_all is set
+		 * - LV name matches a supplied LV name
+		 * - LV tag matches a supplied LV tag
+		 * - LV matches the selection
+		 */
+
+		process_lv = process_all;
+
+		if (!process_lv && lvargs_supplied && str_list_match_item(arg_lvnames, lvl->lv->name)) {
 			/* Remove LV from list of unprocessed LV names */
 			str_list_del(arg_lvnames, lvl->lv->name);
-		else if (!process_all &&
-			 (!tags_supplied || !str_list_match_list(tags_in, &lvl->lv->tags, NULL)))
+			process_lv = 1;
+		}
+
+		if (!process_lv && tags_supplied && str_list_match_list(tags_in, &lvl->lv->tags, NULL))
+			process_lv = 1;
+
+		process_lv = process_lv && select_match_lv(cmd, vg, lvl->lv);
+
+		if (sigint_caught())
+			return_ECMD_FAILED;
+
+		if (!process_lv)
 			continue;
 
 		log_very_verbose("Processing LV %s in VG %s.", lvl->lv->name, vg->name);
@@ -2188,6 +2224,9 @@ static int _process_pvs_in_vg(struct cmd_context *cmd,
 
 		if (!process_pv && !dm_list_empty(arg_tags) &&
 		    str_list_match_list(arg_tags, &pv->tags, NULL))
+			process_pv = 1;
+
+		if (!process_pv && select_match_pv(cmd, vg, pv))
 			process_pv = 1;
 
 		if (process_pv) {
