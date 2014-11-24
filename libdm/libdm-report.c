@@ -1566,7 +1566,7 @@ static int _check_report_selection(struct dm_report *rh, struct dm_list *fields)
 	return _check_selection(rh, rh->selection_root, fields);
 }
 
-int dm_report_object(struct dm_report *rh, void *object)
+static int _do_report_object(struct dm_report *rh, void *object, int do_output, int *selected)
 {
 	const struct dm_report_field_type *fields;
 	struct field_properties *fp;
@@ -1577,7 +1577,13 @@ int dm_report_object(struct dm_report *rh, void *object)
 	int r = 0;
 
 	if (!rh) {
-		log_error(INTERNAL_ERROR "dm_report handler is NULL.");
+		log_error(INTERNAL_ERROR "_do_report_object: dm_report handler is NULL.");
+		return 0;
+	}
+
+	if (!do_output && !selected) {
+		log_error(INTERNAL_ERROR "_do_report_object: output not requested and "
+					 "selected output variable is NULL too.");
 		return 0;
 	}
 
@@ -1585,7 +1591,7 @@ int dm_report_object(struct dm_report *rh, void *object)
 		return 1;
 
 	if (!(row = dm_pool_zalloc(rh->mem, sizeof(*row)))) {
-		log_error("dm_report_object: struct row allocation failed");
+		log_error("_do_report_object: struct row allocation failed");
 		return 0;
 	}
 
@@ -1595,7 +1601,7 @@ int dm_report_object(struct dm_report *rh, void *object)
 	    !(row->sort_fields =
 		dm_pool_zalloc(rh->mem, sizeof(struct dm_report_field *) *
 			       rh->keys_count))) {
-		log_error("dm_report_object: "
+		log_error("_do_report_object: "
 			  "row sort value structure allocation failed");
 		goto out;
 	}
@@ -1606,7 +1612,7 @@ int dm_report_object(struct dm_report *rh, void *object)
 	/* For each field to be displayed, call its report_fn */
 	dm_list_iterate_items(fp, &rh->field_props) {
 		if (!(field = dm_pool_zalloc(rh->mem, sizeof(*field)))) {
-			log_error("dm_report_object: "
+			log_error("_do_report_object: "
 				  "struct dm_report_field allocation failed");
 			goto out;
 		}
@@ -1623,7 +1629,7 @@ int dm_report_object(struct dm_report *rh, void *object)
 		data = fp->implicit ? _report_get_implicit_field_data(rh, fp, row)
 				    : _report_get_field_data(rh, fp, object);
 		if (!data) {
-			log_error("dm_report_object: "
+			log_error("_do_report_object: "
 				  "no data assigned to field %s",
 				  fields[fp->field_num].id);
 			goto out;
@@ -1632,7 +1638,7 @@ int dm_report_object(struct dm_report *rh, void *object)
 		if (!fields[fp->field_num].report_fn(rh, rh->mem,
 							 field, data,
 							 rh->private)) {
-			log_error("dm_report_object: "
+			log_error("_do_report_object: "
 				  "report function failed for field %s",
 				  fields[fp->field_num].id);
 			goto out;
@@ -1642,6 +1648,8 @@ int dm_report_object(struct dm_report *rh, void *object)
 	}
 
 	if (!_check_report_selection(rh, &row->fields)) {
+		row->selected = 0;
+
 		if (!field_sel_status) {
 			r = 1;
 			goto out;
@@ -1653,7 +1661,6 @@ int dm_report_object(struct dm_report *rh, void *object)
 		 * The "selected" field reports the result
 		 * of the selection.
 		 */
-		row->selected = 0;
 		_implicit_report_fields[field_sel_status->props->field_num].report_fn(rh,
 						rh->mem, field_sel_status, row, rh->private);
 		/*
@@ -1665,6 +1672,11 @@ int dm_report_object(struct dm_report *rh, void *object)
 			r = 1;
 			goto out;
 		}
+	}
+
+	if (!do_output) {
+		r = 1;
+		goto out;
 	}
 
 	dm_list_add(&rh->rows, &row->list);
@@ -1685,7 +1697,9 @@ int dm_report_object(struct dm_report *rh, void *object)
 
 	r = 1;
 out:
-	if (!r)
+	if (selected)
+		*selected = row->selected;
+	if (!do_output || !r)
 		dm_pool_free(rh->mem, row);
 	return r;
 }
@@ -1740,6 +1754,16 @@ int dm_report_compact_fields(struct dm_report *rh)
 	 */
 
 	return 1;
+}
+
+int dm_report_object(struct dm_report *rh, void *object)
+{
+	return _do_report_object(rh, object, 1, NULL);
+}
+
+int dm_report_object_is_selected(struct dm_report *rh, void *object, int do_output, int *selected)
+{
+	return _do_report_object(rh, object, do_output, selected);
 }
 
 /*
