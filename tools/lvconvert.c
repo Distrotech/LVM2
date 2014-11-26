@@ -3450,6 +3450,9 @@ static int lvconvert_single(struct cmd_context *cmd, struct lvconvert_params *lp
 		cmd->handles_missing_pvs = 1;
 	}
 
+	if (!lockd_vg(cmd, lp->vg_name, "ex", 0))
+		goto_out;
+
 	if (!(lv = get_vg_lock_and_logical_volume(cmd, lp->vg_name, lp->lv_name)))
 		goto_out;
 

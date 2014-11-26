@@ -1793,17 +1793,17 @@ static int _process_vgnameid_list(struct cmd_context *cmd, uint32_t flags,
 		vg_uuid = vgnl->vgid;
 		skip = 0;
 
+		if (!lockd_vg(cmd, vg_name, NULL, 0))
+			continue;
+
 		vg = vg_read(cmd, vg_name, vg_uuid, flags);
 		if (ignore_vg(vg, vg_name, arg_vgnames, flags & READ_ALLOW_INCONSISTENT, &skip)) {
 			stack;
 			ret_max = ECMD_FAILED;
-			release_vg(vg);
-			continue;
+			goto endvg;
 		}
-		if (skip) {
-			release_vg(vg);
-			continue;
-		}
+		if (skip)
+			goto endvg;
 
 		/* Process this VG? */
 		if (process_all ||
@@ -1816,10 +1816,11 @@ static int _process_vgnameid_list(struct cmd_context *cmd, uint32_t flags,
 				ret_max = ret;
 		}
 
-		if (vg_read_error(vg))
-			release_vg(vg);
-		else
-			unlock_and_release_vg(cmd, vg, vg_name);
+		if (!vg_read_error(vg))
+			unlock_vg(cmd, vg_name);
+endvg:
+		release_vg(vg);
+		lockd_vg(cmd, vg_name, "un", 0);
 	}
 
 	return ret_max;
@@ -2175,18 +2176,18 @@ static int _process_lv_vgnameid_list(struct cmd_context *cmd, uint32_t flags,
 			}
 		}
 
+		if (!lockd_vg(cmd, vg_name, NULL, 0))
+			continue;
+
 		vg = vg_read(cmd, vg_name, vg_uuid, flags);
 		if (ignore_vg(vg, vg_name, arg_vgnames, flags & READ_ALLOW_INCONSISTENT, &skip)) {
 			stack;
 			ret_max = ECMD_FAILED;
-			release_vg(vg);
-			continue;
+			goto endvg;
 
 		}
-		if (skip) {
-			release_vg(vg);
-			continue;
-		}
+		if (skip)
+			goto endvg;
 
 		ret = process_each_lv_in_vg(cmd, vg, &lvnames, tags_arg, 0,
 					    handle, process_single_lv);
@@ -2195,7 +2196,10 @@ static int _process_lv_vgnameid_list(struct cmd_context *cmd, uint32_t flags,
 		if (ret > ret_max)
 			ret_max = ret;
 
-		unlock_and_release_vg(cmd, vg, vg_name);
+		unlock_vg(cmd, vg_name);
+endvg:
+		release_vg(vg);
+		lockd_vg(cmd, vg_name, "un", 0);
 	}
 
 	return ret_max;
@@ -2500,12 +2504,14 @@ static int _process_pvs_in_vgs(struct cmd_context *cmd, uint32_t flags,
 		vg_uuid = vgnl->vgid;
 		skip = 0;
 
+		if (!lockd_vg(cmd, vg_name, NULL, 0))
+			continue;
+
 		vg = vg_read(cmd, vg_name, vg_uuid, flags | READ_WARN_INCONSISTENT);
 		if (ignore_vg(vg, vg_name, NULL, flags & READ_ALLOW_INCONSISTENT, &skip)) {
 			stack;
 			ret_max = ECMD_FAILED;
-			release_vg(vg);
-			continue;
+			goto endvg;
 		}
 		
 		/*
@@ -2520,10 +2526,11 @@ static int _process_pvs_in_vgs(struct cmd_context *cmd, uint32_t flags,
 		if (ret > ret_max)
 			ret_max = ret;
 
-		if (skip)
-			release_vg(vg);
-		else
-			unlock_and_release_vg(cmd, vg, vg->name);
+		if (!skip)
+			unlock_vg(cmd, vg->name);
+endvg:
+		release_vg(vg);
+		lockd_vg(cmd, vg_name, "un", 0);
 
 		/* Quit early when possible. */
 		if (!process_all && dm_list_empty(arg_tags) && dm_list_empty(arg_pvnames))

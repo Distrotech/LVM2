@@ -29,6 +29,12 @@ static struct volume_group *_get_old_vg_for_rename(struct cmd_context *cmd,
 		return_NULL;
 	}
 
+	if (is_lockd_type(vg->lock_type)) {
+		log_error("vgrename not allowed for lock_type %s", vg->lock_type);
+		unlock_and_release_vg(cmd, vg, vg_name_old);
+		return NULL;
+	}
+
 	return vg;
 }
 
