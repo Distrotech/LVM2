@@ -573,6 +573,20 @@ int string_arg(struct cmd_context *cmd __attribute__((unused)),
 	return 1;
 }
 
+int arg_tag_count(int argc, char **argv)
+{
+	const char *name;
+	int count = 0;
+	int i;
+
+	for (i = 0; i < argc; i++) {
+		name = argv[i];
+		if (*name == '@')
+			count++;
+	}
+	return count;
+}
+
 int tag_arg(struct cmd_context *cmd __attribute__((unused)), struct arg_values *av)
 {
 	char *pos = av->value;
@@ -751,6 +765,7 @@ void lvm_register_commands(void)
 					    yes_ARG, \
 					    quiet_ARG, config_ARG, \
 					    commandprofile_ARG, \
+					    lockgl_ARG, \
 					    profile_ARG, -1);
 #include "commands.h"
 #undef xx
@@ -1038,6 +1053,9 @@ static int _get_settings(struct cmd_context *cmd)
 		cmd->current_settings.archive = 0;
 		cmd->current_settings.backup = 0;
 	}
+
+	if (arg_is_set(cmd, lockgl_ARG))
+		cmd->lock_gl_mode = arg_str_value(cmd, lockgl_ARG, NULL);
 
 	cmd->partial_activation = 0;
 	cmd->degraded_activation = 0;

@@ -371,6 +371,9 @@ int pvscan(struct cmd_context *cmd, int argc, char **argv)
 		return ECMD_FAILED;
 	}
 
+	if (!lockd_gl(cmd, "sh", 0))
+		return_ECMD_FAILED;
+
 	if (cmd->full_filter->wipe)
 		cmd->full_filter->wipe(cmd->full_filter);
 	lvmcache_destroy(cmd, 1, 0);

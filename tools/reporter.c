@@ -629,6 +629,9 @@ static int _report(struct cmd_context *cmd, int argc, char **argv,
 	/* Check PV specifics and do extra changes/actions if needed. */
 	_check_pv_list(cmd, argc, argv, &report_type, &args_are_pvs);
 
+	if ((!argc || arg_tag_count(argc, argv)) && !lockd_gl(cmd, "sh", 0))
+		return_ECMD_FAILED;
+
 	switch (report_type) {
 	case DEVTYPES:
 		keys = find_config_tree_str(cmd, report_devtypes_sort_CFG, NULL);

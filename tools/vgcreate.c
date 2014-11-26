@@ -50,6 +50,9 @@ int vgcreate(struct cmd_context *cmd, int argc, char **argv)
 	if (!vgcreate_params_validate(cmd, &vp_new))
 	    return EINVALID_CMD_LINE;
 
+	if (!lockd_gl_create(cmd, "ex", vp_new.lock_type))
+		return ECMD_FAILED;
+
 	lvmcache_seed_infos_from_lvmetad(cmd);
 
 	/* Create the new VG */
