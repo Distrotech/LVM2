@@ -605,6 +605,8 @@ int vg_remove(struct volume_group *vg)
 	if (!lvmetad_vg_remove(vg))
 		stack;
 
+	lockd_vg_update(vg);
+
 	if (!backup_remove(vg->cmd, vg->name))
 		stack;
 
@@ -2903,6 +2905,8 @@ int vg_commit(struct volume_group *vg)
 	if ((vg->fid->fmt->features & FMT_PRECOMMIT) && !lvmetad_vg_update(vg))
 		return_0;
 
+	lockd_vg_update(vg);
+
 	cache_updated = _vg_commit_mdas(vg);
 
 	if (cache_updated) {
@@ -4329,6 +4333,9 @@ static int _access_vg_clustered(struct cmd_context *cmd, struct volume_group *vg
 static int _access_vg_lock_type(struct cmd_context *cmd, struct volume_group *vg)
 {
 	if (!is_real_vg(vg->name))
+		return 1;
+
+	if (cmd->lockd_vg_disable)
 		return 1;
 
 	if (is_lockd_type(vg->lock_type) && !find_config_tree_bool(cmd, global_use_lvmlockd_CFG, NULL)) {

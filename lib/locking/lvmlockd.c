@@ -679,6 +679,9 @@ int lockd_init_vg(struct cmd_context *cmd, struct volume_group *vg)
 
 int lockd_free_vg_before(struct cmd_context *cmd, struct volume_group *vg)
 {
+	if (cmd->lock_vg_mode && !strcmp(cmd->lock_vg_mode, "na"))
+		return 1;
+
 	switch (lock_type_to_num(vg->lock_type)) {
 	case LOCK_TYPE_NONE:
 	case LOCK_TYPE_CLVM:
@@ -697,6 +700,9 @@ int lockd_free_vg_before(struct cmd_context *cmd, struct volume_group *vg)
 
 void lockd_free_vg_final(struct cmd_context *cmd, struct volume_group *vg)
 {
+	if (cmd->lock_vg_mode && !strcmp(cmd->lock_vg_mode, "na"))
+		return;
+
 	switch (lock_type_to_num(vg->lock_type)) {
 	case LOCK_TYPE_NONE:
 		_free_vg_local(cmd, vg);
@@ -710,6 +716,9 @@ void lockd_free_vg_final(struct cmd_context *cmd, struct volume_group *vg)
 	default:
 		log_error("Unknown lock_type.");
 	}
+
+	/* The vg lock no longer exists, so don't bother trying to unlock. */
+	cmd->lockd_vg_disable = 1;
 }
 
 /*
@@ -751,11 +760,8 @@ int lockd_start_vg(struct cmd_context *cmd, struct volume_group *vg)
 
 	/* Skip starting the vg lockspace when the vg lock is skipped. */
 
-	/* Added in a later patch. */
-	/*
-	if (cmd_mode && !strcmp(cmd_mode, "na"))
+	if (cmd->lock_vg_mode && !strcmp(cmd->lock_vg_mode, "na"))
 		return 1;
-	*/
 
 	log_debug("lockd_start_vg %s lock_type %s", vg->name,
 		  vg->lock_type ? vg->lock_type : "empty");
@@ -1233,4 +1239,249 @@ int lockd_gl(struct cmd_context *cmd, const char *def_mode, uint32_t flags)
 	return 1;
 }
 
+int lockd_vg(struct cmd_context *cmd, const char *vg_name, const char *def_mode, uint32_t flags)
+{
+	const char *mode = NULL;
+	uint32_t result_flags;
+	int result;
+
+	if (!is_real_vg(vg_name))
+		return 1;
+
+	/*
+	 * Some special cases need to disable the vg lock.
+	 */
+	if (cmd->lockd_vg_disable)
+		return 1;
+
+	/*
+	 * LDVG_MODE_NOARG disables getting the mode from --lock-vg arg.
+	 */
+	if (!(flags & LDVG_MODE_NOARG) && cmd->lock_vg_mode) {
+		mode = cmd->lock_vg_mode;
+		if (mode && def_mode &&
+		    (_mode_compare(mode, def_mode) < 0) &&
+		    !find_config_tree_bool(cmd, global_allow_override_lock_modes_CFG, NULL)) {
+			log_error("Disallowed lock-vg mode \"%s\"", mode);
+			return 0;
+		}
+	}
+
+	/*
+	 * The default mode may not have been provided in the
+	 * function args.  This happens when lockd_vg is called
+	 * from a process_each function that handles different
+	 * commands.  Commands that only read/check/report/display
+	 * the vg have LOCKD_VG_SH set in commands.h, which is
+	 * copied to lockd_vg_default_sh.  Commands without this
+	 * set modify the vg and need ex.
+	 */
+	if (!mode)
+		mode = def_mode;
+	if (!mode)
+		mode = cmd->lockd_vg_default_sh ? "sh" : "ex";
+
+	if (!strcmp(mode, "ex") && find_config_tree_bool(cmd, global_read_only_lock_modes_CFG, NULL)) {
+		log_error("Disallow lock-vg ex with read_only_lock_modes");
+		return 0;
+	}
+
+	if (!_lockd_request(cmd, "lock_vg",
+			      vg_name, NULL, NULL, NULL, NULL, mode, NULL,
+			      &result, &result_flags)) {
+		/* No result from lvmlockd, it is probably not running. */
+
+		/*
+		 * See comment in lockd_gl() about these cases
+		 * where we keep going if the mode is "un" or "sh".
+		 */
+
+		if (!strcmp(mode, "un"))
+			return 1;
+
+		if (!strcmp(mode, "sh")) {
+			log_warn("Reading VG %s without shared lock.", vg_name);
+			return 1;
+		}
+
+		log_error("Locking failed for VG %s", vg_name);
+		return 0;
+	}
+
+	/*
+	 * result and result_flags were returned from lvmlockd.
+	 *
+	 * ENOLS: no lockspace for the VG was found, the VG may not
+	 * be started yet.  The VG should be started manually or by system,
+	 * e.g. vgchange --lock-start
+	 *
+	 * ESTARTING: the lockspace for the VG is starting and should
+	 * finish shortly.
+	 *
+	 * ELOCALVG: the VG is local and does not need locking.
+	 *
+	 * EOTHERVG:
+	 *
+	 * The VG is local and its system_id does not match
+	 * the local system_id saved in lvmlockd (lvmlockd
+	 * caches the names/system_ids of local VGs so it
+	 * can quickly avoid any distributed locking on them.)
+	 *
+	 * In many cases we could simply return 0 (a failure)
+	 * here, causing this VG to be skipped by the command
+	 * before it's even read.  But there are a couple of
+	 * reasons why we want to return 1 (success) here and
+	 * proceed through vg_read and get to access_vg_systemid:
+	 *
+	 * . The command may allow reading foreign VG's,
+	 *   i.e. vgs --foreign, which would not work if we
+	 *   skipped the VG here.
+	 *
+	 * . The local host may accept multiple system_ids,
+	 *   i.e. allow_system_id(), and lvmlockd does not
+	 *   know about all the allowed system_ids.
+	 *
+	 * If neither of these are true, then access_vg_systemid
+	 * will deny access, and the VG will be skipped at that
+	 * point.  So, to allow the two exceptions above, we
+	 * return success here and allow VG access to be
+	 * decided later in access_vg_systemid.
+	 */
+ 
+	if (result == -ELOCALVG || result == -EOTHERVG)
+		return 1;
+ 
+	if (result == -ENOLS || result == -ESTARTING) {
+		if (!strcmp(mode, "un"))
+			return 1;
+ 
+		if (strcmp(mode, "sh")) {
+			/*
+			 * An ex lock request always fails here.  Based on the
+			 * result number and result flags we can often print a
+			 * reason for the failure.
+			 *
+			 * (In the future we might want to continue through
+			 * vg_read without the lock, and add something after
+			 * vg_read to check if the lock request failed, and
+			 * fail at that point.  Going through the vg_read
+			 * before failing may provide more information about
+			 * the failure and the VG.) 
+			 */
+			if ((result == -ENOLS) && (result_flags & LD_RF_INACTIVE_LS)) {
+				if (result_flags & LD_RF_ADD_LS_ERROR)
+					log_error("VG %s lock failed: lock start error", vg_name);
+				else
+					log_error("VG %s lock failed: locking stopped", vg_name);
+ 
+			} else if (result == -ENOLS) {
+				log_error("VG %s lock failed: lock start required", vg_name);
+ 
+			} else if (result == -ESTARTING) {
+				log_error("VG %s lock failed: lock start in progress", vg_name);
+ 
+			} else {
+				log_error("VG %s lock failed: %d", vg_name, result);
+			}
+			return 0;
+		}
+ 
+		/*
+		 * When a sh lock failed we will allow the command to proceed
+		 * because there's little harm that it could do.  See the
+		 * reasoning above for proceeding after a failed gl sh lock.
+		 * Do we want to invalidate the cached VG in these cases to
+		 * force rereading from disk?
+		 */
+ 
+		if (result == -ESTARTING) {
+			log_warn("Skipping lock for VG %s: lock start in progress", vg_name);
+			return 1;
+		}
+ 
+		if ((result == -ENOLS) && (result_flags & LD_RF_ADD_LS_ERROR)) {
+			log_warn("Skipping lock for VG %s: lock start error", vg_name);
+			return 1;
+		}
+ 
+		if ((result == -ENOLS) && (result_flags & LD_RF_INACTIVE_LS)) {
+			log_warn("Skipping lock for VG %s: locking stopped", vg_name);
+			return 1;
+		}
+ 
+		if (result == -ENOLS) {
+			log_warn("Skipping lock for VG %s: lock start required", vg_name);
+			return 1;
+		}
+ 
+		log_error("VG %s shared lock error %d", vg_name, result);
+		return 0;
+	}
+ 
+	/*
+	 * A notice from lvmlockd that duplicate gl locks have been found.
+	 * It would be good for the user to disable one of them.
+	 */
+	if ((result_flags & LD_RF_DUP_GL_LS) && strcmp(mode, "un"))
+		log_warn("Duplicate sanlock global lock in VG %s", vg_name);
+ 
+	if (result < 0) {
+		if (ignorelockingfailure()) {
+			log_debug("Ignore failed locking for VG %s", vg_name);
+			return 1;
+		} else {
+			log_error("VG %s lock error: %d", vg_name, result);
+			return 0;
+		}
+	}
+ 
+	return 1;
+}
+
+/* A shortcut for back to back lockd_gl() + lockd_vg() */
+
+int lockd_gl_vg(struct cmd_context *cmd, const char *vg_name,
+		const char *def_gl_mode, const char *def_vg_mode,
+		uint32_t flags)
+{
+	if (!lockd_gl(cmd, def_gl_mode, flags))
+		return 0;
+
+	if (!lockd_vg(cmd, vg_name, def_vg_mode, flags)) {
+		lockd_gl(cmd, "un", LDGL_MODE_NOARG);
+		return 0;
+	}
+
+	return 1;
+}
+
+int lockd_vg_update(struct volume_group *vg)
+{
+	daemon_reply reply;
+	int result;
+	int ret;
+
+	if (!is_lockd_type(vg->lock_type))
+		return 1;
+
+	if (!_lvmlockd_active)
+		return 1;
+	if (!lvmlockd_connected())
+		return 0;
+
+	reply = _lockd_send("vg_update",
+				"pid = %d", getpid(),
+				"vg_name = %s", vg->name,
+				"version = %d", (int64_t)vg->seqno,
+				NULL);
+
+	if (!_lockd_result(reply, &result, NULL)) {
+		ret = 0;
+	} else {
+		ret = (result < 0) ? 0 : 1;
+	}
+
+	daemon_reply_destroy(reply);
+	return ret;
+}
 
