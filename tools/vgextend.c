@@ -165,6 +165,9 @@ int vgextend(struct cmd_context *cmd, int argc, char **argv)
 	 */
 	cmd->handles_missing_pvs = 1;
 
+	if (!lockd_gl(cmd, "ex", 0))
+		return_ECMD_FAILED;
+
 	ret = process_each_vg(cmd, argc, argv,
 			      READ_FOR_UPDATE | ONE_VGNAME_ARG, handle,
 			      restoremissing ? &_vgextend_restoremissing : &_vgextend_single);

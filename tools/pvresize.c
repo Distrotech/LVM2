@@ -36,6 +36,10 @@ static int _pvresize_single(struct cmd_context *cmd,
 	}
 	params->total++;
 
+	/* Convert sh to ex.  gl is only needed for orphans. */
+	if (is_orphan(pv) && !lockd_gl(cmd, "ex", 0))
+		return_ECMD_FAILED;
+
 	if (!pv_resize_single(cmd, vg, pv, params->new_size))
 		return_ECMD_FAILED;
 
@@ -75,6 +79,9 @@ int pvresize(struct cmd_context *cmd, int argc, char **argv)
 	}
 
 	handle->custom_handle = &params;
+
+	if (!lockd_gl(cmd, "sh", 0))
+		return_ECMD_FAILED;
 
 	ret = process_each_pv(cmd, argc, argv, NULL, READ_FOR_UPDATE, handle,
 			      _pvresize_single);

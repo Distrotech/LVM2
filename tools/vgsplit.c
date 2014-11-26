@@ -492,6 +492,9 @@ int vgsplit(struct cmd_context *cmd, int argc, char **argv)
 		return ECMD_FAILED;
 	}
 
+	if (!lockd_gl(cmd, "ex", LDGL_UPDATE_NAMES))
+		return_ECMD_FAILED;
+
 	if (arg_count(cmd, name_ARG))
 		lv_name = arg_value(cmd, name_ARG);
 	else
