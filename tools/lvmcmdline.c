@@ -761,7 +761,7 @@ void lvm_register_commands(void)
 					    yes_ARG, \
 					    quiet_ARG, config_ARG, \
 					    commandprofile_ARG, \
-					    lockgl_ARG, \
+					    lockgl_ARG, lockvg_ARG, \
 					    profile_ARG, -1);
 #include "commands.h"
 #undef xx
@@ -1043,6 +1043,10 @@ static int _get_settings(struct cmd_context *cmd)
 
 	if (arg_is_set(cmd, lockgl_ARG))
 		cmd->lock_gl_mode = arg_str_value(cmd, lockgl_ARG, NULL);
+	if (arg_is_set(cmd, lockvg_ARG))
+		cmd->lock_vg_mode = arg_str_value(cmd, lockvg_ARG, NULL);
+	if (cmd->command->flags & LOCKD_VG_SH)
+		cmd->lockd_vg_default_sh = 1;
 
 	cmd->partial_activation = 0;
 	cmd->degraded_activation = 0;
