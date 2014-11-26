@@ -2689,6 +2689,12 @@ static int _lvconvert_thin(struct cmd_context *cmd,
 		return 0;
 	}
 
+	if (is_lockd_type(lv->vg->lock_type)) {
+		log_error("Can't use lock_type %s LV as external origin.",
+			  lv->vg->lock_type);
+		return 0;
+	}
+
 	dm_list_init(&lvc.tags);
 
 	if (!pool_supports_external_origin(first_seg(pool_lv), lv))
@@ -2801,6 +2807,8 @@ static int _lvconvert_pool(struct cmd_context *cmd,
 {
 	int r = 0;
 	const char *old_name;
+	const char *lock_free_meta_name = NULL;
+	const char *lock_free_data_name = NULL;
 	struct lv_segment *seg;
 	struct volume_group *vg = pool_lv->vg;
 	struct logical_volume *data_lv;
@@ -3138,6 +3146,36 @@ static int _lvconvert_pool(struct cmd_context *cmd,
 	if (!attach_pool_data_lv(seg, data_lv))
 		return_0;
 
+	/*
+	 * A thin pool lv adopts the lock from the data lv, and the lock for
+	 * the meta lv is unlocked and freed.  A cache pool lv has no lock, and
+	 * the existing lock for both data and meta lvs are unlocked and freed.
+	 */
+	if (is_lockd_type(pool_lv->vg->lock_type)) {
+		if (lp->pool_metadata_name) {
+			char *c;
+			if ((c = strchr(lp->pool_metadata_name, '/')))
+				lock_free_meta_name = c + 1;
+			else
+				lock_free_meta_name = lp->pool_metadata_name;
+		}
+
+		if (segtype_is_cache_pool(lp->segtype)) {
+			lock_free_data_name = pool_lv->name;
+			pool_lv->lock_type = NULL;
+			pool_lv->lock_args = NULL;
+		} else  {
+			if (data_lv->lock_type)
+				pool_lv->lock_type = dm_pool_strdup(cmd->mem, data_lv->lock_type);
+			if (data_lv->lock_args)
+				pool_lv->lock_args = dm_pool_strdup(cmd->mem, data_lv->lock_args);
+		}
+		data_lv->lock_type = NULL;
+		data_lv->lock_args = NULL;
+		metadata_lv->lock_type = NULL;
+		metadata_lv->lock_args = NULL;
+	}
+
 	/* FIXME: revert renamed LVs in fail path? */
 	/* FIXME: any common code with metadata/thin_manip.c  extend_pool() ? */
 
@@ -3194,6 +3232,22 @@ out:
 					display_lvname(pool_lv),
 					(segtype_is_cache_pool(lp->segtype)) ?
 					"cache" : "thin");
+
+	if (lock_free_meta_name) {
+		if (!lockd_lv_name(cmd, pool_lv->vg, lock_free_meta_name, NULL, "un", LDLV_PERSISTENT)) {
+			log_error("Failed to unlock pool metadata LV %s/%s",
+				  pool_lv->vg->name, lock_free_meta_name);
+		}
+		lockd_free_lv(cmd, pool_lv->vg, lock_free_meta_name, NULL);
+	}
+
+	if (lock_free_data_name) {
+		if (!lockd_lv_name(cmd, pool_lv->vg, lock_free_data_name, NULL, "un", LDLV_PERSISTENT)) {
+			log_error("Failed to unlock pool data LV %s/%s",
+				  pool_lv->vg->name, lock_free_data_name);
+		}
+		lockd_free_lv(cmd, pool_lv->vg, lock_free_data_name, NULL);
+	}
 
 	return r;
 #if 0
@@ -3454,6 +3508,17 @@ static int lvconvert_single(struct cmd_context *cmd, struct lvconvert_params *lp
 		goto_out;
 
 	if (!(lv = get_vg_lock_and_logical_volume(cmd, lp->vg_name, lp->lv_name)))
+		goto_out;
+
+	/*
+	 * If the lv is inactive before and after the command, the
+	 * use of PERSISTENT here means the lv will remain locked as
+	 * an effect of running the lvconvert.
+	 * To unlock it, it would need to be activated+deactivated.
+	 * Or, we could identify the commands for which the lv remains
+	 * inactive, and not use PERSISTENT here for those cases.
+	 */
+	if (!lockd_lv(cmd, lv, "ex", LDLV_PERSISTENT))
 		goto_out;
 
 	/*
