@@ -194,6 +194,9 @@ int vgmerge(struct cmd_context *cmd, int argc, char **argv)
 		return EINVALID_CMD_LINE;
 	}
 
+	if (!lockd_gl(cmd, "ex", LDGL_UPDATE_NAMES))
+		return ECMD_FAILED;
+
 	vg_name_to = skip_dev_dir(cmd, argv[0], NULL);
 	argc--;
 	argv++;
