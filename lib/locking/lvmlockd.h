@@ -24,6 +24,9 @@
 #define LDGL_SKIP_CACHE_VALIDATE  0x00000002
 #define LDGL_UPDATE_NAMES         0x00000004
 
+/* lockd_vg flags */
+#define LDVG_MODE_NOARG           0x00000001
+
 /* lvmlockd result flags */
 #define LD_RF_NO_LOCKSPACES     0x00000001
 #define LD_RF_NO_GL_LS          0x00000002
@@ -100,6 +103,10 @@ int lockd_stop_vg(struct cmd_context *cmd, struct volume_group *vg);
 
 int lockd_gl_create(struct cmd_context *cmd, const char *def_mode, const char *vg_lock_type);
 int lockd_gl(struct cmd_context *cmd, const char *def_mode, uint32_t flags);
+int lockd_vg(struct cmd_context *cmd, const char *vg_name, const char *def_mode, uint32_t flags);
+int lockd_gl_vg(struct cmd_context *cmd, const char *vg_name,
+		const char *def_gl_mode, const char *def_vg_mode, uint32_t flags);
+int lockd_vg_update(struct volume_group *vg);
 
 #else /* LVMLOCKD_SUPPORT */
 
@@ -119,6 +126,9 @@ int lockd_gl(struct cmd_context *cmd, const char *def_mode, uint32_t flags);
 
 #define lockd_gl_create(cmd, def_mode, vg_lock_type) (1)
 #define lockd_gl(cmd, def_mode, flags) (1)
+#define lockd_vg(cmd, vg_name, def_mode, flags) (1)
+#define lockd_gl_vg(cmd, vg_name, def_gl_mode, def_vg_mode, flags) (1)
+#define lockd_vg_update(vg) (1)
 
 #endif /* LVMLOCKD_SUPPORT */
 
