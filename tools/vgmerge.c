@@ -25,6 +25,13 @@ static struct volume_group *_vgmerge_vg_read(struct cmd_context *cmd,
 		release_vg(vg);
 		return NULL;
 	}
+
+	if (is_lockd_type(vg->lock_type)) {
+		log_error("vgmerge not allowed for lock_type %s", vg->lock_type);
+		unlock_and_release_vg(cmd, vg, vg_name);
+		return NULL;
+	}
+
 	return vg;
 }
 
