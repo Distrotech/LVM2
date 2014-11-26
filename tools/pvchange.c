@@ -90,6 +90,10 @@ static int _pvchange_single(struct cmd_context *cmd, struct volume_group *vg,
 		}
 	}
 
+	/* Convert sh to ex.  gl only needed for orphans. */
+	if (is_orphan(pv) && !lockd_gl(cmd, "ex", 0))
+		return_ECMD_FAILED;
+
 	if (tagargs) {
 		/* tag or deltag */
 		if (arg_count(cmd, addtag_ARG) && !change_tag(cmd, NULL, NULL, pv, addtag_ARG))
@@ -175,6 +179,9 @@ int pvchange(struct cmd_context *cmd, int argc, char **argv)
 		log_error("Option --all and PhysicalVolumePath are exclusive.");
 		return EINVALID_CMD_LINE;
 	}
+
+	if (!lockd_gl(cmd, "sh", 0))
+		return_ECMD_FAILED;
 
 	params.done = 0;
 	params.total = 0;

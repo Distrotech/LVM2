@@ -224,6 +224,9 @@ static int _pvscan_lvmetad(struct cmd_context *cmd, int argc, char **argv)
 		return ECMD_FAILED;
 	}
 
+	if (!lockd_gl(cmd, "sh", 0))
+		return_ECMD_FAILED;
+
 	/* Scan everything? */
 	if (!argc && !devno_args) {
 		if (!lvmetad_pvscan_all_devs(cmd, handler))
