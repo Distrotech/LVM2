@@ -195,6 +195,9 @@ int vgreduce(struct cmd_context *cmd, int argc, char **argv)
 	init_ignore_suspended_devices(1);
 	cmd->handles_missing_pvs = 1;
 
+	if (!lockd_gl(cmd, "ex", 0))
+		return_ECMD_FAILED;
+
 	vg = vg_read_for_update(cmd, vg_name, NULL, READ_ALLOW_EXPORTED);
 	if (vg_read_error(vg) == FAILED_ALLOCATION ||
 	    vg_read_error(vg) == FAILED_NOTFOUND)
