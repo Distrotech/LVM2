@@ -124,6 +124,11 @@ int lvrename(struct cmd_context *cmd, int argc, char **argv)
 		goto bad;
 	}
 
+	if (is_lockd_type(vg->lock_type)) {
+		log_error("Cannot rename LV with lock_type %s", vg->lock_type);
+		goto bad;
+	}
+
 	if (!lv_rename(cmd, lvl->lv, lv_name_new))
 		goto_bad;
 
