@@ -570,6 +570,8 @@ static int _vgchange_lock_start(struct cmd_context *cmd, struct volume_group *vg
 
 static int _vgchange_lock_stop(struct cmd_context *cmd, struct volume_group *vg)
 {
+	/* Disable the unlock in toollib because it's pointless after the stop. */
+	cmd->lockd_vg_disable = 1;
 	return lockd_stop_vg(cmd, vg);
 }
 
@@ -698,8 +700,45 @@ static int vgchange_single(struct cmd_context *cmd, const char *vg_name,
         return ret;
 }
 
+/*
+ * vgchange can do different things that require different
+ * locking, so look at each of those things here.
+ *
+ * Set up overrides for the default VG locking for various special cases.
+ * The VG lock will be acquired in process_each_vg.
+ *
+ * Acquire the gl lock according to which kind of vgchange command this is.
+ */
+
 static int lockd_vgchange(struct cmd_context *cmd, int argc, char **argv)
 {
+	/* The default vg lock mode is ex, but these options only need sh. */
+
+	if (arg_is_set(cmd, activate_ARG) || arg_is_set(cmd, refresh_ARG))
+		cmd->lockd_vg_default_sh = 1;
+
+	/* Starting a vg lockspace means there are no locks available yet. */
+
+	if (arg_is_set(cmd, lockstart_ARG))
+		cmd->lockd_vg_disable = 1;
+
+	/*
+	 * In most cases, lockd_vg does not apply when changing lock type.
+	 * (We don't generally allow changing *from* lockd type yet.)
+	 * lockd_vg could be called within _vgchange_locktype as needed.
+	 */
+
+	if (arg_is_set(cmd, locktype_ARG))
+		cmd->lockd_vg_disable = 1;
+
+	/*
+	 * Changing system_id or lock_type must only be done on explicitly
+	 * named vgs.
+	 */
+
+	if (arg_is_set(cmd, systemid_ARG) || arg_is_set(cmd, locktype_ARG))
+		cmd->command->flags &= ~ALL_VGS_IS_DEFAULT;
+
 	if (!argc || arg_tag_count(argc, argv) || arg_is_set(cmd, lockstart_ARG)) {
 		/*
 		 * The first two standard conditions want the current
