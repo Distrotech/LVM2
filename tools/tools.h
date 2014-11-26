@@ -111,6 +111,8 @@ struct arg_value_group_list {
 #define ONE_VGNAME_ARG		0x00000010
 /* Command is allowed to read foreign VGs. */
 #define ENABLE_FOREIGN_VGS	0x00000020
+/* Command does not modify a VG. */
+#define LOCKD_VG_SH		0x00000040
  
 /* a register of the lvm commands */
 struct command {
