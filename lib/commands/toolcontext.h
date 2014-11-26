@@ -99,6 +99,7 @@ struct cmd_context {
 	unsigned unknown_system_id:1;
 	unsigned include_foreign_vgs:1;
 	unsigned lockd_vg_disable:1;
+	unsigned lockd_lv_disable:1;
 	unsigned lockd_vg_default_sh:1;
 
 	struct dev_types *dev_types;
@@ -145,6 +146,7 @@ struct cmd_context {
 	/* Locking */
 	const char *lock_gl_mode; /* gl mode, from --lock-gl */
 	const char *lock_vg_mode; /* vg mode, from --lock-vg */
+	const char *lock_lv_mode; /* lv mode, from --lock-lv */
 
 	const char *lib_dir;		/* Cache value global/library_dir */
 	char system_dir[PATH_MAX];
