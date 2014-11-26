@@ -34,6 +34,14 @@ static inline void lvmlockd_close(daemon_handle h)
 }
 
 /*
+ * Errors returned as the lvmlockd result value.
+ */
+#define ENOLS     210 /* lockspace not found */
+#define ELOCALVG  211 /* vg is local */
+#define EOTHERVG  212 /* vg sysid specifies other host */
+#define ESTARTING 213 /* lockspace is starting */
+
+/*
  * Also see lvmlockd-sanlock GL_LOCK_BEGIN, VG_LOCK_BEGIN, LV_LOCK_BEGIN.
  * gl lock at sanlock lease area 65
  * vg lock at sanlock lease area 66

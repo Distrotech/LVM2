@@ -105,8 +105,26 @@ void lvmlockd_set_socket(const char *sock)
 	_lvmlockd_socket = sock;
 }
 
+/* Translate the result strings from lvmlockd to bit flags. */
 static void _result_str_to_flags(const char *str, uint32_t *flags)
 {
+	if (strstr(str, "NO_LOCKSPACES"))
+		*flags |= LD_RF_NO_LOCKSPACES;
+
+	if (strstr(str, "NO_GL_LS"))
+		*flags |= LD_RF_NO_GL_LS;
+
+	if (strstr(str, "LOCAL_LS"))
+		*flags |= LD_RF_LOCAL_LS;
+
+	if (strstr(str, "DUP_GL_LS"))
+		*flags |= LD_RF_DUP_GL_LS;
+
+	if (strstr(str, "INACTIVE_LS"))
+		*flags |= LD_RF_INACTIVE_LS;
+
+	if (strstr(str, "ADD_LS_ERROR"))
+		*flags |= LD_RF_ADD_LS_ERROR;
 }
 
 /*
@@ -197,7 +215,6 @@ static daemon_reply _lockd_send(const char *req_name, ...)
  */
 
 static int _lockd_request(struct cmd_context *cmd,
-		          const char *cmd_name,
 		          const char *req_name,
 		          const char *vg_name,
 		          const char *vg_lock_type,
@@ -209,6 +226,7 @@ static int _lockd_request(struct cmd_context *cmd,
 		          int *result,
 		          uint32_t *result_flags)
 {
+	const char *cmd_name = "unknown"; /* FIXME: setting this would help debugging */
 	daemon_reply reply;
 	int pid = getpid();
 
@@ -530,8 +548,8 @@ static int _free_vg_dlm(struct cmd_context *cmd, struct volume_group *vg)
 	 */
 
 	/* Equivalent to a standard unlock. */
-	ret = _lockd_request(cmd, "vgremove", "lock_vg", vg->name,
-			     NULL, NULL, NULL, NULL, "un", NULL,
+	ret = _lockd_request(cmd, "lock_vg",
+			     vg->name, NULL, NULL, NULL, NULL, "un", NULL,
 			     &result, &result_flags);
 
 	if (!ret || result < 0) {
@@ -857,4 +875,356 @@ out:
 
 	return ret;
 }
+
+static int _mode_num(const char *mode)
+{
+	if (!strcmp(mode, "na"))
+		return -2;
+	if (!strcmp(mode, "un"))
+		return -1;
+	if (!strcmp(mode, "nl"))
+		return 0;
+	if (!strcmp(mode, "sh"))
+		return 1;
+	if (!strcmp(mode, "ex"))
+		return 2;
+	return -3;
+}
+
+/* same rules as strcmp */
+static int _mode_compare(const char *m1, const char *m2)
+{
+	int n1 = _mode_num(m1);
+	int n2 = _mode_num(m2);
+
+	if (n1 < n2)
+		return -1;
+	if (n1 == n2)
+		return 0;
+	if (n1 > n2)
+		return 1;
+	return -2;
+}
+
+/*
+ * Mode is selected by:
+ * 1. mode from command line option (only taken if allow_override is set)
+ * 2. the function arg passed by the calling command (def_mode)
+ * 3. look up a default mode for the command
+ *    (cases where the caller doesn't know a default)
+ *
+ * MODE_NOARG: don't use mode from command line option
+ */
+
+/*
+ * lockd_gl_create() is used by vgcreate to acquire and/or create the
+ * global lock.  vgcreate will have a lock_type for the new vg which
+ * lockd_gl_create() can provide in the lock-gl call.
+ *
+ * lockd_gl() and lockd_gl_create() differ in the specific cases where
+ * ENOLS (no lockspace found) is overriden.  In the vgcreate case, the
+ * override cases are related to sanlock bootstrap, and the lock_type of
+ * the vg being created is needed.
+ *
+ * 1. vgcreate of the first lockd-type vg calls lockd_gl_create()
+ *    to acquire the global lock.
+ *
+ * 2. vgcreate/lockd_gl_create passes gl lock request to lvmlockd,
+ *    along with lock_type of the new vg.
+ *
+ * 3. lvmlockd finds no global lockspace/lock.
+ *
+ * 4. dlm:
+ *    If the lock_type from vgcreate is dlm, lvmlockd creates the
+ *    dlm global lockspace, and queues the global lock request
+ *    for vgcreate.  lockd_gl_create returns sucess with the gl held.
+ *
+ *    sanlock:
+ *    If the lock_type from vgcreate is sanlock, lvmlockd returns -ENOLS
+ *    with the NO_GL_LS flag.  lvmlockd cannot create or acquire a sanlock
+ *    global lock until the VG exists on disk (the locks live within the VG).
+ *
+ *    lockd_gl_create sees sanlock/ENOLS/NO_GL_LS (and optionally the
+ *    "enable" lock-gl arg), determines that this is the sanlock
+ *    bootstrap special case, and returns success without the global lock.
+ *   
+ *    vgcreate creates the VG on disk, and calls lockd_init_vg() which
+ *    initializes/enables a global lock on the new VG's internal sanlock lv.
+ *    Future lockd_gl/lockd_gl_create calls will acquire the existing gl.
+ */
+
+int lockd_gl_create(struct cmd_context *cmd, const char *def_mode, const char *vg_lock_type)
+{
+	const char *mode = NULL;
+	uint32_t result_flags;
+	int result;
+
+	if (cmd->lock_gl_mode) {
+		mode = cmd->lock_gl_mode;
+		if (mode && def_mode && strcmp(mode, "enable") &&
+		    (_mode_compare(mode, def_mode) < 0) &&
+		    !find_config_tree_bool(cmd, global_allow_override_lock_modes_CFG, NULL)) {
+			log_error("Disallowed lock-gl mode \"%s\"", mode);
+			return 0;
+		}
+	}
+
+	if (!mode)
+		mode = def_mode;
+	if (!mode) {
+		log_error("Unknown lock-gl mode");
+		return 0;
+	}
+
+	if (!strcmp(mode, "ex") && find_config_tree_bool(cmd, global_read_only_lock_modes_CFG, NULL)) {
+		log_error("Disallow lock-gl ex with read_only_lock_modes");
+		return 0;
+	}
+
+	if (!_lockd_request(cmd, "lock_gl",
+			      NULL, vg_lock_type, NULL, NULL, NULL, mode, "update_names",
+			      &result, &result_flags)) {
+		/* No result from lvmlockd, it is probably not running. */
+		log_error("Locking failed for global lock");
+		return 0;
+	}
+
+	/*
+	 * result and result_flags were returned from lvmlockd.
+	 *
+	 * ENOLS: no lockspace was found with a global lock.
+	 * It may not exist (perhaps this command is creating the first),
+	 * or it may not be visible or started on the system yet.
+	 */
+
+	if (result == -ENOLS) {
+		if (!strcmp(mode, "un"))
+			return 1;
+
+		/*
+		 * This is the explicit sanlock bootstrap condition for
+		 * proceding without the global lock: a chicken/egg case
+		 * for the first sanlock VG that is created.
+		 *
+		 * When creating the first sanlock VG, there is no global
+		 * lock to acquire because the gl will exist in the VG
+		 * being created.  The "enable" option makes explicit that
+		 * this is expected:
+		 *
+		 * vgcreate --lock-type sanlock --lock-gl enable
+		 *
+		 * There are three indications that this is the unique
+		 * first-sanlock-vg bootstrap case:
+		 *
+		 * - result from lvmlockd is -ENOLS because lvmlockd found
+		 *   no lockspace for this VG; expected because it's being
+		 *   created here.
+		 *
+		 * - result flag LD_RF_NO_GL_LS from lvmlockd means that
+		 *   lvmlockd has seen no other lockspace with a global lock.
+		 *   This implies that this is probably the first sanlock vg
+		 *   to be created.  If other sanlock vgs exist, the global
+		 *   lock should be available from one of them.
+		 *
+		 * - command line lock-gl arg is "enable" which means the
+		 *   user expects this to be the first sanlock vg, and the
+		 *   global lock should be enabled in it.
+		 */
+
+		if ((result_flags & LD_RF_NO_GL_LS) &&
+		    !strcmp(vg_lock_type, "sanlock") &&
+		    !strcmp(mode, "enable")) {
+			log_debug("Enabling sanlock global lock");
+			lvmetad_validate_global_cache(cmd, 1);
+			return 1;
+		}
+
+		/*
+		 * This is an implicit sanlock bootstrap condition for
+		 * proceeding without the global lock.  The command line does
+		 * not indicate explicitly that this is a bootstrap situation
+		 * (via "enable"), but it seems likely to be because lvmlockd
+		 * has seen no lockd-type vgs.  It is possible that a global
+		 * lock does exist in a vg that has not yet been seen.  If that
+		 * vg appears after this creates a new vg with a new enabled
+		 * gl, then there will be two enabled global locks, and one
+		 * will need to be disabled.  (We could instead return an error
+		 * here and insist with an error message that the --lock-gl
+		 * enable option be used to exercise the explicit case above.)
+		 */
+
+		if ((result_flags & LD_RF_NO_GL_LS) &&
+		    (result_flags & LD_RF_NO_LOCKSPACES) &&
+		    !strcmp(vg_lock_type, "sanlock")) {
+			log_print_unless_silent("Enabling sanlock global lock");
+			lvmetad_validate_global_cache(cmd, 1);
+			return 1;
+		}
+
+		/*
+		 * Allow non-lockd-type vgs to be created even when the global
+		 * lock is not available.  Once created, these vgs will only be
+		 * accessible to the local system_id, and not protected by
+		 * locks, so allowing the creation without a lock is a very
+		 * minor exception to normal locking.
+		 */
+
+		if ((result_flags & LD_RF_NO_GL_LS) &&
+		    (!strcmp(vg_lock_type, "none"))) {
+			lvmetad_validate_global_cache(cmd, 1);
+			return 1;
+		}
+
+		log_error("Global lock %s error %d", mode, result);
+		return 0;
+	}
+
+	if (result < 0) {
+		log_error("Global lock %s error %d", mode, result);
+		return 0;
+	}
+
+	lvmetad_validate_global_cache(cmd, 1);
+
+	return 1;
+}
+
+int lockd_gl(struct cmd_context *cmd, const char *def_mode, uint32_t flags)
+{
+	const char *mode = NULL;
+	const char *opts = NULL;
+	uint32_t result_flags;
+	int result;
+
+	if (!(flags & LDGL_MODE_NOARG) && cmd->lock_gl_mode) {
+		mode = cmd->lock_gl_mode;
+		if (mode && def_mode &&
+		    (_mode_compare(mode, def_mode) < 0) &&
+		    !find_config_tree_bool(cmd, global_allow_override_lock_modes_CFG, NULL)) {
+			log_error("Disallowed lock-gl mode \"%s\"", mode);
+			return 0;
+		}
+	}
+
+	if (!mode)
+		mode = def_mode;
+	if (!mode) {
+		log_error("Unknown lock-gl mode");
+		return 0;
+	}
+
+	if (!strcmp(mode, "ex") && find_config_tree_bool(cmd, global_read_only_lock_modes_CFG, NULL)) {
+		log_error("Disallow lock-gl ex with read_only_lock_modes");
+		return 0;
+	}
+
+	/*
+	 * The lockd_gl() caller uses this flag when it is going to change the
+	 * VG namesapce.  lvmlockd uses this to encode extra information in the
+	 * global lock data (a separate version number in the lvb) about what
+	 * was changed.  Other hosts will see this extra information in the gl
+	 * data and know that the VG namespace changed, which determines the
+	 * kind of cache refresh they need to do.
+	 */
+	if (flags & LDGL_UPDATE_NAMES)
+		opts = "update_names";
+
+	if (!_lockd_request(cmd, "lock_gl",
+			    NULL, NULL, NULL, NULL, NULL, mode, opts,
+			    &result, &result_flags)) {
+		/* No result from lvmlockd, it is probably not running. */
+
+		/*
+		 * We don't care if an unlock operation fails in this case, and
+		 * we can allow a shared lock request to succeed without any
+		 * serious harm.  To disallow basic reading/reporting when
+		 * lvmlockd is stopped is too strict, unnecessary, and
+		 * inconvenient.  We force a global cache validation in this
+		 * case.
+		 */
+
+		if (!strcmp(mode, "un"))
+			return 1;
+
+		if (!strcmp(mode, "sh")) {
+			log_warn("Reading without shared global lock.");
+			lvmetad_validate_global_cache(cmd, 1);
+			return 1;
+		}
+
+		log_error("Locking failed for global lock");
+		return 0;
+	}
+
+	/*
+	 * result and result_flags were returned from lvmlockd.
+	 *
+	 * ENOLS: no lockspace was found with a global lock.
+	 * The VG with the global lock may not be visible or started yet,
+	 * this should be a temporary condition.
+	 *
+	 * ESTARTING: the lockspace with the gl is starting.
+	 * The VG with the global lock is starting and should finish shortly.
+	 */
+
+	if (result == -ENOLS || result == -ESTARTING) {
+		if (!strcmp(mode, "un"))
+			return 1;
+
+		/*
+		 * This is a general condition for allowing the command to
+		 * proceed without a shared global lock when the global lock is
+		 * not found or ready.  This should not be a persistent
+		 * condition.  The VG containing the global lock should appear
+		 * on the system, or the global lock should be enabled in
+		 * another VG, or the the lockspace with the gl should finish
+		 * starting.
+		 *
+		 * Same reasons as above for allowing the command to proceed
+		 * with the shared gl.  We force a global cache validation and
+		 * print a warning.
+		 */
+
+		if (strcmp(mode, "sh")) {
+			log_error("Global lock %s error %d", mode, result);
+			return 0;
+		}
+
+		if (result == -ESTARTING) {
+			log_warn("Skipping global lock: lockspace is starting");
+			lvmetad_validate_global_cache(cmd, 1);
+			return 1;
+		}
+
+		if ((result_flags & LD_RF_NO_GL_LS) ||
+		    (result_flags & LD_RF_NO_LOCKSPACES)) {
+			log_warn("Skipping global lock: not found");
+			lvmetad_validate_global_cache(cmd, 1);
+			return 1;
+		}
+
+		log_error("Global lock %s error %d", mode, result);
+		return 0;
+	}
+
+	if ((result_flags & LD_RF_DUP_GL_LS) && strcmp(mode, "un"))
+		log_warn("Duplicate sanlock global locks should be corrected");
+
+	if (result < 0) {
+		if (ignorelockingfailure()) {
+			log_debug("Ignore failed locking for global lock");
+			lvmetad_validate_global_cache(cmd, 1);
+			return 1;
+		} else {
+			log_error("Global lock %s error %d", mode, result);
+			return 0;
+		}
+	}
+
+	if (!(flags & LDGL_SKIP_CACHE_VALIDATE))
+		lvmetad_validate_global_cache(cmd, 0);
+
+	return 1;
+}
+
 
