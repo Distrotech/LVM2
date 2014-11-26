@@ -1207,6 +1207,14 @@ int lvchange(struct cmd_context *cmd, int argc, char **argv)
 		}
 	}
 
+	/*
+	 * The default vg lock mode for lvchange is ex, but these options
+	 * are cases where lvchange does not modify the vg, so they can use
+	 * the sh lock mode.
+	 */
+	if (arg_count(cmd, activate_ARG) || arg_count(cmd, refresh_ARG))
+		cmd->lockd_vg_default_sh = 1;
+
 	if (arg_tag_count(argc, argv) && !lockd_gl(cmd, "sh", 0))
 		return_ECMD_FAILED;
 
