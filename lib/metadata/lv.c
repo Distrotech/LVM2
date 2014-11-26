@@ -20,6 +20,7 @@
 #include "toolcontext.h"
 #include "segtype.h"
 #include "str_list.h"
+#include "lvmlockd.h"
 
 #include <time.h>
 #include <sys/utsname.h>
@@ -880,6 +881,19 @@ static int _lv_is_exclusive(struct logical_volume *lv)
 int lv_active_change(struct cmd_context *cmd, struct logical_volume *lv,
 		     enum activation_change activate, int needs_exclusive)
 {
+	const char *ay_with_mode = NULL;
+
+	if (activate == CHANGE_ASY)
+		ay_with_mode = "sh";
+	if (activate == CHANGE_AEY)
+		ay_with_mode = "ex";
+	
+	if (is_change_activating(activate) &&
+	    !lockd_lv(cmd, lv, ay_with_mode, LDLV_PERSISTENT)) {
+		log_error("Failed to lock logical volume %s/%s", lv->vg->name, lv->name);
+		return 0;
+	}
+
 	switch (activate) {
 	case CHANGE_AN:
 deactivate:
@@ -922,13 +936,19 @@ exclusive:
 		if (!activate_lv_excl(cmd, lv))
 			return_0;
 		break;
-	default: /* CHANGE_AY */
+	case CHANGE_ASY:
+	case CHANGE_AY:
+	default:
 		if (needs_exclusive || _lv_is_exclusive(lv))
 			goto exclusive;
 		log_verbose("Activating logical volume \"%s\".", lv->name);
 		if (!activate_lv(cmd, lv))
 			return_0;
 	}
+
+	if (!is_change_activating(activate) &&
+	    !lockd_lv(cmd, lv, "un", LDLV_PERSISTENT))
+		log_error("Failed to unlock logical volume %s/%s", lv->vg->name, lv->name);
 
 	return 1;
 }
