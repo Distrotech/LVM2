@@ -1238,6 +1238,9 @@ int lvchange(struct cmd_context *cmd, int argc, char **argv)
 	if (arg_is_set(cmd, activate_ARG))
 		cmd->include_active_foreign_vgs = 1;
 
+	if (arg_tag_count(argc, argv) && !lockd_gl(cmd, "sh", 0))
+		return_ECMD_FAILED;
+
 	return process_each_lv(cmd, argc, argv,
 			       update ? READ_FOR_UPDATE : 0, NULL,
 			       &_lvchange_single);
