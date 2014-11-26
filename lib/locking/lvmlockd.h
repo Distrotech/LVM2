@@ -27,6 +27,11 @@
 /* lockd_vg flags */
 #define LDVG_MODE_NOARG           0x00000001
 
+/* lockd_lv flags */
+#define LDLV_MODE_NOARG           0x00000001
+#define LDLV_MODE_NO_SH           0x00000002
+#define LDLV_PERSISTENT           0x00000004
+
 /* lvmlockd result flags */
 #define LD_RF_NO_LOCKSPACES     0x00000001
 #define LD_RF_NO_GL_LS          0x00000002
@@ -108,6 +113,19 @@ int lockd_gl_vg(struct cmd_context *cmd, const char *vg_name,
 		const char *def_gl_mode, const char *def_vg_mode, uint32_t flags);
 int lockd_vg_update(struct volume_group *vg);
 
+int lockd_lv_name(struct cmd_context *cmd, struct volume_group *vg,
+		  const char *lv_name, const char *lock_args,
+		  const char *def_mode, uint32_t flags);
+int lockd_lv(struct cmd_context *cmd, struct logical_volume *lv,
+	     const char *def_mode, uint32_t flags);
+
+/* lvcreate/lvremove use init/free */
+
+int lockd_init_lv(struct cmd_context *cmd, struct volume_group *vg,
+		  struct lvcreate_params *lp);
+int lockd_free_lv(struct cmd_context *cmd, struct volume_group *vg,
+		  const char *lv_name, const char *lock_args);
+
 #else /* LVMLOCKD_SUPPORT */
 
 #define lvmlockd_init(cmd)          do { } while (0)
@@ -129,6 +147,12 @@ int lockd_vg_update(struct volume_group *vg);
 #define lockd_vg(cmd, vg_name, def_mode, flags) (1)
 #define lockd_gl_vg(cmd, vg_name, def_gl_mode, def_vg_mode, flags) (1)
 #define lockd_vg_update(vg) (1)
+
+#define lockd_lv_name(cmd, vg, lv_name, lock_args, def_mode, flags) (1)
+#define lockd_lv(cmd, lv, def_mode, flags) (1)
+
+#define lockd_init_lv(cmd, vg, lp) (1)
+#define lockd_free_lv(cmd, vg, lv_name, lock_args) (1)
 
 #endif /* LVMLOCKD_SUPPORT */
 

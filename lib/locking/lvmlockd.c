@@ -1496,3 +1496,401 @@ int lockd_vg_update(struct volume_group *vg)
 	return ret;
 }
 
+/*
+ * When this is called directly (as opposed to being called from
+ * lockd_lv), the caller knows that the LV has a lock.
+ */
+
+int lockd_lv_name(struct cmd_context *cmd, struct volume_group *vg,
+		  const char *lv_name, const char *lock_args,
+		  const char *def_mode, uint32_t flags)
+{
+	const char *mode = NULL;
+	const char *opts = NULL;
+	uint32_t result_flags;
+	int result;
+
+	if (cmd->lockd_lv_disable)
+		return 1;
+
+	/*
+	 * For lvchange/vgchange activation, def_mode is "sh" or "ex"
+	 * according to the specific -a{e,s}y mode designation.
+	 * No e,s designation gives NULL def_mode.
+	 *
+	 * The --lock-lv option is saved in cmd->lock_lv_mode.
+	 */
+
+	if (cmd->lock_lv_mode && def_mode && strcmp(cmd->lock_lv_mode, "na") &&
+	    strcmp(cmd->lock_lv_mode, def_mode)) {
+		log_error("Different LV lock modes from activation %s and lock-lv %s",
+			  def_mode, cmd->lock_lv_mode);
+		return 0;
+	}
+
+	if (cmd->lock_lv_mode && (_mode_compare(cmd->lock_lv_mode, "sh") < 0) &&
+	    !find_config_tree_bool(cmd, global_allow_override_lock_modes_CFG, NULL)) {
+		log_error("Disallowed lock-lv mode \"%s\"", cmd->lock_lv_mode);
+		return 0;
+	}
+
+	if (cmd->lock_lv_mode)
+		mode = cmd->lock_lv_mode;
+	else if (def_mode)
+		mode = def_mode;
+
+	if (mode && !strcmp(mode, "sh") && (flags & LDLV_MODE_NO_SH)) {
+		log_error("Shared activation not compatible with LV type: %s/%s",
+			  vg->name, lv_name);
+		return 0;
+	}
+
+	if (!mode)
+		mode = "ex";
+
+	if (flags & LDLV_PERSISTENT)
+		opts = "persistent";
+
+	if (!_lockd_request(cmd, "lock_lv",
+			       vg->name, vg->lock_type, vg->lock_args,
+			       lv_name, lock_args, mode, opts,
+			       &result, &result_flags)) {
+		/* No result from lvmlockd, it is probably not running. */
+		log_error("Locking failed for LV %s/%s", vg->name, lv_name);
+		return 0;
+	}
+
+	/* The lv was not active/locked. */
+	if (result == -ENOENT && !strcmp(mode, "un"))
+		return 1;
+
+	if (result == -EALREADY)
+		return 1;
+
+	if (result == -EAGAIN) {
+		log_error("LV locked by other host: %s/%s", vg->name, lv_name);
+		return 0;
+	}
+
+	if (result < 0) {
+		log_error("LV lock %s error %d: %s/%s", mode, result, vg->name, lv_name);
+		return 0;
+	}
+
+	return 1;
+}
+
+/*
+ * Direct the lock request to the pool LV.
+ * For a thin pool and all its thin volumes, one ex lock is used.
+ * It is the one specified in metadata of the pool data lv.
+ */
+
+static int _lockd_lv_thin(struct cmd_context *cmd, struct logical_volume *lv,
+			  const char *def_mode, uint32_t flags)
+{
+	struct logical_volume *pool_lv;
+
+	if (lv_is_thin_volume(lv)) {
+		struct lv_segment *pool_seg = first_seg(lv);
+		pool_lv = pool_seg ? pool_seg->pool_lv : NULL;
+
+	} else if (lv_is_thin_pool(lv)) {
+		pool_lv = lv;
+
+	} else {
+		/* This should not happen AFAIK. */
+		log_error("Lock on incorrect thin lv type %s/%s",
+			  lv->vg->name, lv->name);
+		return 0;
+	}
+
+	if (!pool_lv) {
+		/* This should not happen. */
+		log_error("Cannot find thin pool for %s/%s",
+			  lv->vg->name, lv->name);
+		return 0;
+	}
+
+	/*
+	 * Locking a locked lv (pool in this case) is a no-op.
+	 * Unlock when the pool is no longer active.
+	 */
+
+	if (def_mode && !strcmp(def_mode, "un") && pool_is_active(pool_lv))
+		return 1;
+
+	flags |= LDLV_MODE_NO_SH;
+
+	return lockd_lv_name(cmd, pool_lv->vg, pool_lv->name, pool_lv->lock_args,
+			     def_mode, flags);
+}
+
+/*
+ * If the VG has no lock_type, then this function can return immediately.
+ * The LV itself may have no lock (NULL lv->lock_type), but the lock request
+ * may be directed to another lock, e.g. the pool LV lock in _lockd_lv_thin.
+ * If the lock request is not directed to another LV, and the LV has no
+ * lock_type set, it means that the LV has no lock, and no locking is done
+ * for it.
+ */
+
+int lockd_lv(struct cmd_context *cmd, struct logical_volume *lv,
+	     const char *def_mode, uint32_t flags)
+{
+	if (!is_lockd_type(lv->vg->lock_type))
+		return 1;
+
+	if (lv_is_thin_type(lv))
+		return _lockd_lv_thin(cmd, lv, def_mode, flags);
+
+	if (!is_lockd_type(lv->lock_type))
+		return 1;
+
+	/*
+	 * LV type cannot be active concurrently on multiple hosts,
+	 * so shared mode activation is not allowed.
+	 */
+	if (lv_is_external_origin(lv) ||
+	    lv_is_thin_type(lv) ||
+	    lv_is_mirror_type(lv) ||
+	    lv_is_raid_type(lv) ||
+	    lv_is_cache_type(lv)) {
+		flags |= LDLV_MODE_NO_SH;
+	}
+
+	return lockd_lv_name(cmd, lv->vg, lv->name, lv->lock_args, def_mode, flags);
+}
+
+static int _init_lv_sanlock(struct cmd_context *cmd, struct volume_group *vg,
+			    const char *lv_name, const char **lock_args_ret)
+{
+	daemon_reply reply;
+	const char *reply_str;
+	const char *lv_lock_args = NULL;
+	int result;
+	int ret;
+
+	if (!_lvmlockd_active)
+		return 1;
+	if (!lvmlockd_connected())
+		return 0;
+
+	reply = _lockd_send("init_lv",
+				"pid = %d", getpid(),
+				"vg_name = %s", vg->name,
+				"lv_name = %s", lv_name,
+				"vg_lock_type = %s", "sanlock",
+				"vg_lock_args = %s", vg->lock_args,
+				NULL);
+
+	if (!_lockd_result(reply, &result, NULL)) {
+		ret = 0;
+	} else {
+		ret = (result < 0) ? 0 : 1;
+	}
+
+	if (result == -EEXIST) {
+		log_error("Lock already exists for LV %s/%s", vg->name, lv_name);
+		goto out;
+	}
+
+	if (!ret) {
+		log_error("_init_lv_sanlock lvmlockd result %d", result);
+		goto out;
+	}
+
+	reply_str = daemon_reply_str(reply, "lv_lock_args", NULL);
+	if (!reply_str) {
+		log_error("lv_lock_args not returned");
+		ret = 0;
+		goto out;
+	}
+
+	lv_lock_args = dm_pool_strdup(cmd->mem, reply_str);
+	if (!lv_lock_args) {
+		log_error("lv_lock_args allocation failed");
+		ret = 0;
+	}
+out:
+	daemon_reply_destroy(reply);
+
+	*lock_args_ret = lv_lock_args;
+	return ret;
+}
+
+static int _free_lv_sanlock(struct cmd_context *cmd, struct volume_group *vg,
+			    const char *lv_name, const char *lock_args)
+{
+	daemon_reply reply;
+	int result;
+	int ret;
+
+	if (!_lvmlockd_active)
+		return 1;
+	if (!lvmlockd_connected())
+		return 0;
+
+	reply = _lockd_send("free_lv",
+				"pid = %d", getpid(),
+				"vg_name = %s", vg->name,
+				"lv_name = %s", lv_name,
+				"vg_lock_type = %s", "sanlock",
+				"vg_lock_args = %s", vg->lock_args,
+				"lv_lock_args = %s", lock_args ?: "none",
+				NULL);
+
+	if (!_lockd_result(reply, &result, NULL)) {
+		ret = 0;
+	} else {
+		ret = (result < 0) ? 0 : 1;
+	}
+
+	if (!ret) {
+		log_error("_free_lv_sanlock lvmlockd result %d", result);
+	}
+
+	daemon_reply_destroy(reply);
+
+	return ret;
+}
+
+/*
+ * lvcreate
+ *
+ * lvcreate sets lp lock_type to the vg lock_type, so any lv
+ * created in a lockd vg will inherit the lock_type of the vg.
+ * In some cases, e.g. thin lvs, this function may decide
+ * that the lv should not be given a lock, in which case it
+ * sets lp lock_type to NULL, which will cause the lv to not
+ * have a lock_type set in its metadata.  A lockd_lv() request
+ * on an lv with no lock_type will do nothing (unless the lv
+ * type causes the lock request to be directed to another lv
+ * with a lock, e.g. to the thin pool LV for thin LVs.)
+ *
+ * Current limitations:
+ * - cache-type LV's in a lockd VG must be created with lvconvert.
+ * - creating a thin pool and thin lv in one command is not allowed.
+ */
+
+int lockd_init_lv(struct cmd_context *cmd, struct volume_group *vg,
+		     struct lvcreate_params *lp)
+{
+	const char *lv_name;
+	int lock_type_num = lock_type_to_num(lp->lock_type);
+
+	if (cmd->lock_lv_mode && !strcmp(cmd->lock_lv_mode, "na"))
+		return 1;
+
+	switch (lock_type_num) {
+	case LOCK_TYPE_NONE:
+	case LOCK_TYPE_CLVM:
+		return 1;
+	case LOCK_TYPE_SANLOCK:
+	case LOCK_TYPE_DLM:
+		break;
+	default:
+		log_error("lockd_init_lv: unknown lock_type.");
+		return 0;
+	}
+
+	if (seg_is_cache(lp) || seg_is_cache_pool(lp)) {
+		log_error("Use lvconvert for cache with lock type %s", lp->lock_type);
+		return 0;
+
+	} else if (!seg_is_thin_volume(lp) && lp->snapshot) {
+		struct logical_volume *origin_lv;
+
+		/*
+		 * COW snapshots are associated with their origin LV,
+		 * and only the origin LV needs its own lock, which
+		 * represents itself and all associated cow snapshots.
+		 */
+
+		if (!(origin_lv = find_lv(vg, lp->origin_name))) {
+			log_error("Failed to find origin LV %s/%s", vg->name, lp->origin_name);
+			return 0;
+		}
+		if (!lockd_lv(cmd, origin_lv, "ex", LDLV_PERSISTENT)) {
+			log_error("Failed to lock origin LV %s/%s", vg->name, lp->origin_name);
+			return 0;
+		}
+		lp->lock_type = NULL;
+		return 1;
+
+	} else if (seg_is_thin(lp)) {
+		if ((seg_is_thin_volume(lp) && !lp->create_pool) ||
+		    (!seg_is_thin_volume(lp) && lp->snapshot)) {
+			struct lv_list *lvl;
+
+			/*
+			 * Creating a new thin lv or snapshot.  These lvs do not get
+			 * their own lock but use the pool lock.  If an lv does not
+			 * use its own lock, its lock_type is set to NULL.
+			 */
+
+			if (!(lvl = find_lv_in_vg(vg, lp->pool_name))) {
+				log_error("Failed to find thin pool %s/%s", vg->name, lp->pool_name);
+				return 0;
+			}
+			if (!lockd_lv(cmd, lvl->lv, "ex", LDLV_PERSISTENT)) {
+				log_error("Failed to lock thin pool %s/%s", vg->name, lp->pool_name);
+				return 0;
+			}
+			lp->lock_type = NULL;
+			return 1;
+
+		} else if (seg_is_thin_volume(lp) && lp->create_pool) {
+			/*
+			 * Creating a thin pool and a thin lv in it.  We could
+			 * probably make this work by setting lp->lock_type and
+			 * lp->lock_args to NULL in lv_create_single after
+			 * creating the pool lv.  Then we would just set
+			 * lv_name = lp->pool_name here.  Stop it at least for now
+			 * to try to slow down some of the unnecessary complexity.
+			 */
+			log_error("Create thin pool and thin lv separately with lock type %s",
+				  lp->lock_type);
+			return 0;
+
+		} else if (!seg_is_thin_volume(lp) && lp->create_pool) {
+			/* Creating a thin pool only. */
+			lv_name = lp->pool_name;
+
+		} else {
+			log_error("Unknown thin options for lock init.");
+			return 0;
+		}
+
+	} else {
+		/* Creating a normal lv. */
+		lv_name = lp->lv_name;
+	}
+
+	if (lock_type_num == LOCK_TYPE_SANLOCK)
+		return _init_lv_sanlock(cmd, vg, lv_name, &lp->lock_args);
+
+	return 1;
+}
+
+/* lvremove */
+
+int lockd_free_lv(struct cmd_context *cmd, struct volume_group *vg,
+		  const char *lv_name, const char *lock_args)
+{
+	if (cmd->lock_lv_mode && !strcmp(cmd->lock_lv_mode, "na"))
+		return 1;
+
+	switch (lock_type_to_num(vg->lock_type)) {
+	case LOCK_TYPE_NONE:
+	case LOCK_TYPE_CLVM:
+	case LOCK_TYPE_DLM:
+		return 1;
+	case LOCK_TYPE_SANLOCK:
+		return _free_lv_sanlock(cmd, vg, lv_name, lock_args);
+	default:
+		log_error("lockd_free_lv: unknown lock_type.");
+		return 0;
+	}
+}
+
