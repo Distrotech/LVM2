@@ -207,6 +207,9 @@ int vgrename(struct cmd_context *cmd, int argc, char **argv)
 		return EINVALID_CMD_LINE;
 	}
 
+	if (!lockd_gl(cmd, "ex", LDGL_UPDATE_NAMES))
+		return_ECMD_FAILED;
+
 	if (!vg_rename_path(cmd, argv[0], argv[1]))
 		return_ECMD_FAILED;
 
