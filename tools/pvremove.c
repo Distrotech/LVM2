@@ -30,6 +30,9 @@ int pvremove(struct cmd_context *cmd, int argc, char **argv)
 	force_count = arg_count(cmd, force_ARG);
 	prompt = arg_count(cmd, yes_ARG);
 
+	if (!lockd_gl(cmd, "ex", 0))
+		return_ECMD_FAILED;
+
 	for (i = 0; i < argc; i++) {
 		dm_unescape_colons_and_at_signs(argv[i], NULL, NULL);
 		if (!pvremove_single(cmd, argv[i], NULL, force_count, prompt)) {
