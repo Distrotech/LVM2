@@ -160,6 +160,8 @@ daemon_reply daemon_send_simple(daemon_handle h, const char *id, ...)
 
 void daemon_close(daemon_handle h)
 {
+	if (h.socket_fd >= 0 && close(h.socket_fd))
+		log_sys_error("close", "daemon_close");
 	dm_free((char *)h.protocol);
 }
 
