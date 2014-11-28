@@ -1709,6 +1709,7 @@ int process_each_vg(struct cmd_context *cmd, int argc, char **argv,
 		    uint32_t flags, struct processing_handle *handle,
 		    process_single_vg_fn_t process_single_vg)
 {
+	int handle_supplied = handle != NULL;
 	struct dm_list arg_tags;		/* str_list */
 	struct dm_list arg_vgnames;		/* str_list */
 	struct dm_list vgnameids_on_system;	/* vgnameid_list */
@@ -1725,10 +1726,8 @@ int process_each_vg(struct cmd_context *cmd, int argc, char **argv,
 	/*
 	 * Find any VGs or tags explicitly provided on the command line.
 	 */
-	if ((ret = _get_arg_vgnames(cmd, argc, argv, &arg_vgnames, &arg_tags)) != ECMD_PROCESSED) {
-		stack;
-		return ret;
-	}
+	if ((ret = _get_arg_vgnames(cmd, argc, argv, &arg_vgnames, &arg_tags)) != ECMD_PROCESSED)
+		goto_out;
 
 	/*
 	 * Obtain the complete list of VGs present on the system if it is needed because:
@@ -1736,15 +1735,14 @@ int process_each_vg(struct cmd_context *cmd, int argc, char **argv,
 	 *   no VG names were given and the command defaults to processing all VGs.
 	 */
 	if (((dm_list_empty(&arg_vgnames) && enable_all_vgs) || !dm_list_empty(&arg_tags)) &&
-	    ((ret = _get_vgnameids_on_system(cmd, &vgnameids_on_system, NULL, 0)) != ECMD_PROCESSED)) {
-		stack;
-		return ret;
-	}
+	    ((ret = _get_vgnameids_on_system(cmd, &vgnameids_on_system, NULL, 0)) != ECMD_PROCESSED))
+		goto_out;
 
 	if (dm_list_empty(&arg_vgnames) && dm_list_empty(&vgnameids_on_system)) {
 		/* FIXME Should be log_print, but suppressed for reporting cmds */
 		log_verbose("No volume groups found.");
-		return ECMD_PROCESSED;
+		ret = ECMD_PROCESSED;
+		goto out;
 	}
 
 	/*
@@ -1753,13 +1751,22 @@ int process_each_vg(struct cmd_context *cmd, int argc, char **argv,
 	 */
 	if (!dm_list_empty(&vgnameids_on_system))
 		dm_list_splice(&vgnameids_to_process, &vgnameids_on_system);
-	else if ((ret = _copy_str_to_vgnameid_list(cmd, &arg_vgnames, &vgnameids_to_process)) != ECMD_PROCESSED) {
-		stack;
-		return ret;
-	}
+	else if ((ret = _copy_str_to_vgnameid_list(cmd, &arg_vgnames, &vgnameids_to_process)) != ECMD_PROCESSED)
+		goto_out;
 
-	return _process_vgnameid_list(cmd, flags, &vgnameids_to_process,
-				      &arg_vgnames, &arg_tags, handle, process_single_vg);
+	if (!handle && !(handle = init_processing_handle(cmd)))
+		goto_out;
+
+	if (!handle->skip_selection && !handle->selection_handle &&
+	    !init_selection_handle(cmd, handle))
+		goto_out;
+
+	ret = _process_vgnameid_list(cmd, flags, &vgnameids_to_process,
+				     &arg_vgnames, &arg_tags, handle, process_single_vg);
+out:
+	if (!handle_supplied)
+		destroy_processing_handle(cmd, handle);
+	return ret;
 }
 
 int process_each_lv_in_vg(struct cmd_context *cmd, struct volume_group *vg,
@@ -1770,6 +1777,7 @@ int process_each_lv_in_vg(struct cmd_context *cmd, struct volume_group *vg,
 {
 	int ret_max = ECMD_PROCESSED;
 	int ret = 0;
+	int handle_supplied = handle != NULL;
 	unsigned process_lv;
 	unsigned process_all = 0;
 	unsigned tags_supplied = 0;
@@ -1777,14 +1785,27 @@ int process_each_lv_in_vg(struct cmd_context *cmd, struct volume_group *vg,
 	struct lv_list *lvl;
 	struct dm_str_list *sl;
 
-	if (!vg_check_status(vg, EXPORTED_VG))
-		return_ECMD_FAILED;
+	if (!vg_check_status(vg, EXPORTED_VG)) {
+		ret_max = ECMD_FAILED;
+		goto_out;
+	}
 
 	if (tags_in && !dm_list_empty(tags_in))
 		tags_supplied = 1;
 
 	if (arg_lvnames && !dm_list_empty(arg_lvnames))
 		lvargs_supplied = 1;
+
+	if (!handle && !(handle = init_processing_handle(cmd))) {
+		ret_max = ECMD_FAILED;
+		goto_out;
+	}
+
+	if (!handle->skip_selection && !handle->selection_handle &&
+	    !init_selection_handle(cmd, handle)) {
+		ret_max = ECMD_FAILED;
+		goto_out;
+	}
 
 	/* Process all LVs in this VG if no restrictions given 
 	 * or if VG tags match. */
@@ -1797,8 +1818,10 @@ int process_each_lv_in_vg(struct cmd_context *cmd, struct volume_group *vg,
 	 * but it works since entries are allocated from vg mem pool.
 	 */
 	dm_list_iterate_items(lvl, &vg->lvs) {
-		if (sigint_caught())
-			return_ECMD_FAILED;
+		if (sigint_caught()) {
+			ret_max = ECMD_FAILED;
+			goto_out;
+		}
 
 		if (lvl->lv->status & SNAPSHOT)
 			continue;
@@ -1845,8 +1868,10 @@ int process_each_lv_in_vg(struct cmd_context *cmd, struct volume_group *vg,
 
 		process_lv = process_lv && select_match_lv(cmd, handle, vg, lvl->lv);
 
-		if (sigint_caught())
-			return_ECMD_FAILED;
+		if (sigint_caught()) {
+			ret_max = ECMD_FAILED;
+			goto_out;
+		}
 
 		if (!process_lv)
 			continue;
@@ -1860,7 +1885,7 @@ int process_each_lv_in_vg(struct cmd_context *cmd, struct volume_group *vg,
 			ret_max = ret;
 
 		if (stop_on_error && ret != ECMD_PROCESSED)
-			return ret_max;
+			goto_out;
 	}
 
 	if (lvargs_supplied) {
@@ -1875,7 +1900,9 @@ int process_each_lv_in_vg(struct cmd_context *cmd, struct volume_group *vg,
 				ret_max = ECMD_FAILED;
 		}
 	}
-
+out:
+	if (!handle_supplied)
+		destroy_processing_handle(cmd, handle);
 	return ret_max;
 }
 
@@ -2074,6 +2101,7 @@ static int _process_lv_vgnameid_list(struct cmd_context *cmd, uint32_t flags,
 int process_each_lv(struct cmd_context *cmd, int argc, char **argv, uint32_t flags,
 		    struct processing_handle *handle, process_single_lv_fn_t process_single_lv)
 {
+	int handle_supplied = handle != NULL;
 	struct dm_list arg_tags;		/* str_list */
 	struct dm_list arg_vgnames;		/* str_list */
 	struct dm_list arg_lvnames;		/* str_list */
@@ -2092,26 +2120,30 @@ int process_each_lv(struct cmd_context *cmd, int argc, char **argv, uint32_t fla
 	/*
 	 * Find any LVs, VGs or tags explicitly provided on the command line.
 	 */
-	if ((ret = _get_arg_lvnames(cmd, argc, argv, &arg_vgnames, &arg_lvnames, &arg_tags) != ECMD_PROCESSED)) {
-		stack;
-		return ret;
-	}
+	if ((ret = _get_arg_lvnames(cmd, argc, argv, &arg_vgnames, &arg_lvnames, &arg_tags) != ECMD_PROCESSED))
+		goto_out;
+
+	if (!handle && !(handle = init_processing_handle(cmd)))
+		goto_out;
+
+	if (!handle->skip_selection && !handle->selection_handle &&
+	    !init_selection_handle(cmd, handle))
+		goto_out;
 
 	/*
 	 * Obtain the complete list of VGs present on the system if it is needed because:
 	 *   any tags were supplied and need resolving; or
 	 *   no VG names were given and the command defaults to processing all VGs.
 	*/
-	if (((dm_list_empty(&arg_vgnames) && enable_all_vgs) || !dm_list_empty(&arg_tags)) &&
-	    (ret = _get_vgnameids_on_system(cmd, &vgnameids_on_system, NULL, 0) != ECMD_PROCESSED)) {
-		stack;
-		return ret;
-	}
+	if (((dm_list_empty(&arg_vgnames) && (enable_all_vgs || !handle->skip_selection)) || !dm_list_empty(&arg_tags)) &&
+	    (ret = _get_vgnameids_on_system(cmd, &vgnameids_on_system, NULL, 0) != ECMD_PROCESSED))
+		goto_out;
 
 	if (dm_list_empty(&arg_vgnames) && dm_list_empty(&vgnameids_on_system)) {
 		/* FIXME Should be log_print, but suppressed for reporting cmds */
 		log_verbose("No volume groups found.");
-		return ECMD_PROCESSED;
+		ret = ECMD_PROCESSED;
+		goto out;
 	}
 
 	/*
@@ -2120,13 +2152,15 @@ int process_each_lv(struct cmd_context *cmd, int argc, char **argv, uint32_t fla
 	 */
 	if (!dm_list_empty(&vgnameids_on_system))
 		dm_list_splice(&vgnameids_to_process, &vgnameids_on_system);
-	else if ((ret = _copy_str_to_vgnameid_list(cmd, &arg_vgnames, &vgnameids_to_process)) != ECMD_PROCESSED) {
-		stack;
-		return ret;
-	}
+	else if ((ret = _copy_str_to_vgnameid_list(cmd, &arg_vgnames, &vgnameids_to_process)) != ECMD_PROCESSED)
+		goto_out;
 
-	return _process_lv_vgnameid_list(cmd, flags, &vgnameids_to_process, &arg_vgnames, &arg_lvnames,
-					 &arg_tags, handle, process_single_lv);
+	ret = _process_lv_vgnameid_list(cmd, flags, &vgnameids_to_process, &arg_vgnames, &arg_lvnames,
+					&arg_tags, handle, process_single_lv);
+out:
+	if (!handle_supplied)
+		destroy_processing_handle(cmd, handle);
+	return ret;
 }
 
 static int _get_arg_pvnames(struct cmd_context *cmd,
@@ -2261,6 +2295,7 @@ static int _process_pvs_in_vg(struct cmd_context *cmd,
 			      struct processing_handle *handle,
 			      process_single_pv_fn_t process_single_pv)
 {
+	int handle_supplied = handle != NULL;
 	struct physical_volume *pv;
 	struct pv_list *pvl;
 	const char *pv_name;
@@ -2269,9 +2304,22 @@ static int _process_pvs_in_vg(struct cmd_context *cmd,
 	int ret_max = ECMD_PROCESSED;
 	int ret = 0;
 
+	if (!handle && (!(handle = init_processing_handle(cmd)))) {
+		ret_max = ECMD_FAILED;
+		goto_out;
+	}
+
+	if (!handle->skip_selection && !handle->selection_handle &&
+	    !init_selection_handle(cmd, handle)) {
+		ret_max = ECMD_FAILED;
+		goto_out;
+	}
+
 	dm_list_iterate_items(pvl, &vg->pvs) {
-		if (sigint_caught())
-			return_ECMD_FAILED;
+		if (sigint_caught()) {
+			ret_max = ECMD_FAILED;
+			goto_out;
+		}
 
 		pv = pvl->pv;
 		pv_name = pv_dev_name(pv);
@@ -2330,7 +2378,9 @@ static int _process_pvs_in_vg(struct cmd_context *cmd,
 		if (!process_all && dm_list_empty(arg_tags) && dm_list_empty(arg_pvnames))
 			break;
 	}
-
+out:
+	if (!handle_supplied)
+		destroy_processing_handle(cmd, handle);
 	return ret_max;
 }
 
