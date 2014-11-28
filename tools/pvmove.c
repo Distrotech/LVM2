@@ -678,8 +678,6 @@ static int _set_up_pvmove(struct cmd_context *cmd, const char *pv_name,
 			goto_out;
 	}
 
-	if (!(*vgid = id_format_and_copy(cmd->mem, &vg->id)))
-		goto out;
 
 	/* Lock lvs_changed and activate (with old metadata) */
 	if (!activate_lvs(cmd, lvs_changed, exclusive))
@@ -827,6 +825,13 @@ int pvmove(struct cmd_context *cmd, int argc, char **argv)
 			  "detected in your kernel");
 		return ECMD_FAILED;
 	}
+
+	if (!(lvid = dm_pool_alloc(cmd->mem, sizeof(*lvid)))) {
+		log_error("Failed to alloc lvid");
+		return ECMD_FAILED;
+	}
+
+	memset(lvid, 0, sizeof(*lvid));
 
 	if (argc) {
 		if (!(lvid = dm_pool_alloc(cmd->mem, sizeof(*lvid)))) {

@@ -18,6 +18,7 @@
 #include "tools.h"
 #include "polldaemon.h"
 #include "lvm2cmdline.h"
+#include "lvmpolld-client.h"
 
 #define WAIT_AT_LEAST_NANOSECS 100000
 
@@ -352,13 +353,14 @@ err:
 }
 
 static void _poll_for_all_vgs(struct cmd_context *cmd,
-			      struct processing_handle *handle)
+			      struct processing_handle *handle,
+			      process_single_vg_fn_t process_single_vg)
 {
 	struct daemon_parms *parms = (struct daemon_parms *) handle->custom_handle;
 
 	while (1) {
 		parms->outstanding_count = 0;
-		process_each_vg(cmd, 0, NULL, READ_FOR_UPDATE, handle, _poll_vg);
+		process_each_vg(cmd, 0, NULL, READ_FOR_UPDATE, handle, process_single_vg);
 		if (!parms->outstanding_count)
 			break;
 		_nanosleep(parms->interval, 1);
@@ -421,6 +423,7 @@ static int _poll_daemon(struct cmd_context *cmd, struct poll_operation_id *id,
 	}
 
 	destroy_processing_handle(cmd, handle);
+
 	return ret;
 }
 
@@ -466,4 +469,45 @@ int poll_daemon(struct cmd_context *cmd, unsigned background,
 	/* classical polling allows only PMVOVE or 0 values */
 	parms.lv_type &= PVMOVE;
 	return _poll_daemon(cmd, id, &parms);
+}
+
+/*
+ * NOTE: Commented out sections related to foreground polling.
+ * 	 It doesn't work anyway right now.
+ *
+ * TODO: investigate whether this branch is accessed from
+ * 	 other command than pvmove.
+ */
+static int _lvmpolld_poll_vg(struct cmd_context *cmd,
+			      const char *vgname __attribute__((unused)),
+			      struct volume_group *vg, void *handle)
+{
+	const char *name;
+	struct lv_list *lvl;
+	struct logical_volume *lv;
+	union lvid lvid;
+	struct daemon_parms *parms = (struct daemon_parms *) handle;
+
+	dm_list_iterate_items(lvl, &vg->lvs) {
+		lv = lvl->lv;
+		if (!(lv->status & parms->lv_type))
+			continue;
+
+		memset(&lvid, 0, sizeof(union lvid));
+
+		name = parms->poll_fns->get_copy_name_from_lv(lv);
+
+		memcpy(lvid.id, &vg->id, sizeof(*(lvid.id)));
+
+		if (!lvid.s) {
+			log_print_unless_silent("Failed to extract vgid from VG including PV: %s", name);
+			continue;
+		}
+
+		/* ret_code != 0 means we found the request polling operation and it's active */
+		if (lvmpolld(name, lvid.s, parms->background, parms->lv_type, parms->progress_title, 0, parms->interval))
+			parms->outstanding_count++;
+	}
+
+	return ECMD_PROCESSED;
 }

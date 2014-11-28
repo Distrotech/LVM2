@@ -938,6 +938,9 @@ global {
 	# Comments starting with the character # are ignored.
 	# This configuration option does not have a default value defined.
 	# system_id_file = ""
+
+	# TODO: add description
+	use_lvmpolld = 0
 }
 
 # Configuration section activation.
