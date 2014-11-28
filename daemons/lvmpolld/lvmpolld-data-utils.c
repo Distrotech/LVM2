@@ -15,46 +15,59 @@
 #include "libdevmapper.h"
 #include "lvmpolld-data-utils.h"
 
-static void pdvg_destroy(lvmpolld_vg_t *pdvg)
+static void pdlv_destroy(lvmpolld_lv_t *pdlv)
 {
-	if (pdvg->vgid)
-		dm_free((void *)pdvg->vgid);
+	if (pdlv->lvid)
+		dm_free((void *)pdlv->lvid);
 
-	pthread_mutex_destroy(&pdvg->lock);
+	pthread_mutex_destroy(&pdlv->lock);
 
-	dm_free((void *)pdvg);
+	pthread_cond_destroy(&pdlv->cond_update);
+
+	dm_free((void *)pdlv);
 }
 
-lvmpolld_vg_t *pdvg_create(struct lvmpolld_state *ls, const char *vgid, const enum poll_type type)
+lvmpolld_lv_t *pdlv_create(struct lvmpolld_state *ls, const char *lvid, enum poll_type type)
 {
-	lvmpolld_vg_t *pdvg = (lvmpolld_vg_t *) dm_malloc(sizeof(lvmpolld_vg_t));
-	if (!pdvg)
+	lvmpolld_lv_t *pdlv = (lvmpolld_lv_t *) dm_malloc(sizeof(lvmpolld_lv_t));
+	if (!pdlv)
 		return NULL;
 
-	pdvg->use_count = 1;
+	pdlv->lvid = dm_strdup(lvid);
+	if (!pdlv->lvid)
+		goto lvid_err;
 
-	pdvg->type = type;
+	if (pthread_mutex_init(&pdlv->lock, NULL))
+		goto mutex_err;
 
-	pdvg->ds = ls;
+	if (pthread_cond_init(&pdlv->cond_update, NULL))
+		goto cond_err;
 
-	if (!(pdvg->vgid = dm_strdup(vgid)))
-		goto err;
+	pdlv->type = type;
+	pdlv->cmd_state.ret_code = 1;
+	pdlv->cmd_state.signal = 0;
+	pdlv->percent = DM_PERCENT_0; /* ??? */
+	pdlv->use_count = 1;
+	pdlv->ls = ls;
+	pdlv->polling_finished = 0;
 
-	if (pthread_mutex_init(&pdvg->lock, NULL))
-		goto err;
+	return pdlv;
+cond_err:
+	pthread_mutex_destroy(&pdlv->lock);
+mutex_err:
+	dm_free((void *)pdlv->lvid);
+lvid_err:
+	dm_free((void *)pdlv);
 
-	return pdvg;
-err:
-	pdvg_destroy(pdvg);
 	return NULL;
 }
 
-/* with vgid_to_pdvg lock held only */
-void pdvg_get(lvmpolld_vg_t *pdvg)
+/* with lvid_to_pdlv lock held only */
+void pdlv_get(lvmpolld_lv_t *pdlv)
 {
-	pthread_mutex_lock(&pdvg->lock);
-	pdvg->use_count++;
-	pthread_mutex_unlock(&pdvg->lock);
+	pthread_mutex_lock(&pdlv->lock);
+	pdlv->use_count++;
+	pthread_mutex_unlock(&pdlv->lock);
 }
 
 /*
@@ -63,17 +76,55 @@ void pdvg_get(lvmpolld_vg_t *pdvg)
  *
  *  Otherwise we have race use_count == 0 vs use_count == 1
  */
-void pdvg_put(lvmpolld_vg_t *pdvg)
+void pdlv_put(lvmpolld_lv_t *pdlv)
 {
-	pthread_mutex_lock(&pdvg->lock);
+	pthread_mutex_lock(&pdlv->lock);
 
-	/* pdvg->use_count--; */
+	//DEBUGLOG(pdlv->ls, "%s: %s %d", "LVMPOLLD","going to decrease use_count with value", pdlv->use_count);
+	//pdlv->use_count--;
+	//DEBUGLOG(pdlv->ls, "%s: %s %d", "LVMPOLLD","new value", pdlv->use_count);
 
-	if (!--pdvg->use_count) {
-		pthread_mutex_unlock(&pdvg->lock);
-		pdvg_destroy(pdvg);
+	if (!--pdlv->use_count) {
+		pthread_mutex_unlock(&pdlv->lock);
+		//DEBUGLOG(pdlv->ls, "%s: %s", "LVMPOLLD","Going to destroy the pdlv");
+		pdlv_destroy(pdlv);
 		return;
 	}
 
-	pthread_mutex_unlock(&pdvg->lock);
+	pthread_mutex_unlock(&pdlv->lock);
+}
+
+void pdlv_set_percents(lvmpolld_lv_t *pdlv, dm_percent_t percent)
+{
+	pthread_mutex_lock(&pdlv->lock);
+
+	pdlv->percent = percent;
+
+	pthread_cond_broadcast(&pdlv->cond_update);
+
+	pthread_mutex_unlock(&pdlv->lock);
+}
+
+void pdlv_set_cmd_state(lvmpolld_lv_t *pdlv, lvmpolld_cmd_stat_t *cmd_state)
+{
+	pthread_mutex_lock(&pdlv->lock);
+
+	pdlv->cmd_state = *cmd_state;
+
+	pdlv->polling_finished = 1;
+
+	pthread_cond_broadcast(&pdlv->cond_update);
+
+	pthread_mutex_unlock(&pdlv->lock);
+}
+
+dm_percent_t pdlv_get_percents(lvmpolld_lv_t *pdlv)
+{
+	dm_percent_t p;
+
+	pthread_mutex_lock(&pdlv->lock);
+	p = pdlv->percent;
+	pthread_mutex_unlock(&pdlv->lock);
+
+	return p;
 }

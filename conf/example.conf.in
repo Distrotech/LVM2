@@ -809,6 +809,9 @@ global {
     # See cache_check_executable how to obtain binaries.
     #
     # cache_dump_executable = "@CACHE_DUMP_CMD@"
+
+    # TODO: add description
+    use_lvmpolld = 0
 }
 
 activation {

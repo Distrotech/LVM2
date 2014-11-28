@@ -806,17 +806,22 @@ void lv_spawn_background_polling(struct cmd_context *cmd,
 				 struct logical_volume *lv)
 {
 	const char *pvname;
+	union lvid lvid;
+
+	memset(&lvid, 0, sizeof(lvid));
 
 	if (lv_is_pvmove(lv) &&
 	    (pvname = get_pvmove_pvname_from_lv_mirr(lv))) {
 		log_verbose("Spawning background pvmove process for %s",
 			    pvname);
-		pvmove_poll(cmd, pvname, 1);
+		memcpy(&lvid, &lv->vg->id, sizeof(lvid.id[0]));
+		pvmove_poll(cmd, pvname, lvid.s, 1);
 	} else if (lv_is_locked(lv) &&
 		   (pvname = get_pvmove_pvname_from_lv(lv))) {
 		log_verbose("Spawning background pvmove process for %s",
 			    pvname);
-		pvmove_poll(cmd, pvname, 1);
+		memcpy(&lvid, &lv->vg->id, sizeof(lvid.id[0]));
+		pvmove_poll(cmd, pvname, lvid.s, 1);
 	}
 
 	if (lv_is_converting(lv) || lv_is_merging(lv)) {

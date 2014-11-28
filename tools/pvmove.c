@@ -583,7 +583,7 @@ out:
 }
 
 static int _set_up_pvmove(struct cmd_context *cmd, const char *pv_name,
-			  int argc, char **argv, char **vgid)
+			  int argc, char **argv, union lvid *lvid)
 {
 	const char *lv_name = NULL;
 	char *pv_name_arg;
@@ -675,8 +675,6 @@ static int _set_up_pvmove(struct cmd_context *cmd, const char *pv_name,
 			goto_out;
 	}
 
-	if (!(*vgid = id_format_and_copy(cmd->mem, &vg->id)))
-		goto out;
 
 	/* Lock lvs_changed and activate (with old metadata) */
 	if (!activate_lvs(cmd, lvs_changed, exclusive))
@@ -693,6 +691,8 @@ static int _set_up_pvmove(struct cmd_context *cmd, const char *pv_name,
 		    (cmd, vg, lv_mirr, lvs_changed, flags))
 			goto_out;
 	}
+
+	memcpy(&lvid->id, &vg->id, sizeof(struct id));
 
 	/* LVs are all in status LOCKED */
 	r = ECMD_PROCESSED;
@@ -733,20 +733,21 @@ static struct poll_functions _pvmove_fns = {
 };
 
 int pvmove_poll(struct cmd_context *cmd, const char *pv_name,
-		unsigned background)
+		const char *uuid, unsigned background)
 {
 	if (test_mode())
 		return ECMD_PROCESSED;
 
-	return poll_daemon(cmd, pv_name, NULL, background, PVMOVE, &_pvmove_fns,
+	return poll_daemon(cmd, pv_name, uuid, background, PVMOVE, &_pvmove_fns,
 			   "Moved");
 }
 
 int pvmove(struct cmd_context *cmd, int argc, char **argv)
 {
 	char *pv_name = NULL;
-	char *colon, *vgid;
+	char *colon;
 	int ret;
+	union lvid *lvid;
 
 	/* dm raid1 target must be present in every case */
 	if (!_pvmove_target_present(cmd, 0)) {
@@ -754,6 +755,13 @@ int pvmove(struct cmd_context *cmd, int argc, char **argv)
 			  "detected in your kernel");
 		return ECMD_FAILED;
 	}
+
+	if (!(lvid = dm_pool_alloc(cmd->mem, sizeof(*lvid)))) {
+		log_error("Failed to alloc lvid");
+		return ECMD_FAILED;
+	}
+
+	memset(lvid, 0, sizeof(*lvid));
 
 	if (argc) {
 		if (!(pv_name = dm_pool_strdup(cmd->mem, argv[0]))) {
@@ -768,12 +776,12 @@ int pvmove(struct cmd_context *cmd, int argc, char **argv)
 			*colon = '\0';
 
 		if (!arg_count(cmd, abort_ARG) &&
-		    (ret = _set_up_pvmove(cmd, pv_name, argc, argv, &vgid)) !=
+		    (ret = _set_up_pvmove(cmd, pv_name, argc, argv, lvid)) !=
 		    ECMD_PROCESSED) {
 			stack;
 			return ret;
 		}
 	}
 
-	return pvmove_poll(cmd, pv_name, arg_is_set(cmd, background_ARG));
+	return pvmove_poll(cmd, pv_name, lvid->s, arg_is_set(cmd, background_ARG));
 }

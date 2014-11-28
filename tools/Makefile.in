@@ -21,6 +21,7 @@ SOURCES =\
 	formats.c \
 	lvchange.c \
 	lvconvert.c \
+	lvconvert_core.c \
 	lvcreate.c \
 	lvdisplay.c \
 	lvextend.c \
@@ -58,7 +59,7 @@ SOURCES =\
 	vgimport.c \
 	vgmerge.c \
 	vgmknodes.c \
-	vgpoll.c \
+	lvpoll.c \
 	vgreduce.c \
 	vgremove.c \
 	vgrename.c \

@@ -16,6 +16,7 @@
 #include "tools.h"
 #include "polldaemon.h"
 #include "lvm2cmdline.h"
+#include "lvmpolld-client.h"
 
 progress_t poll_mirror_progress(struct cmd_context *cmd,
 				struct logical_volume *lv, const char *name,
@@ -50,10 +51,10 @@ progress_t poll_mirror_progress(struct cmd_context *cmd,
 }
 
 int check_lv_status(struct cmd_context *cmd,
-			    struct volume_group *vg,
-			    struct logical_volume *lv,
-			    const char *name, struct daemon_parms *parms,
-			    int *finished)
+		    struct volume_group *vg,
+		    struct logical_volume *lv,
+		    const char *name, struct daemon_parms *parms,
+		    int *finished)
 {
 	struct dm_list *lvs_changed;
 	progress_t progress;
@@ -227,11 +228,12 @@ static int _poll_vg(struct cmd_context *cmd, const char *vgname,
 }
 
 static void _poll_for_all_vgs(struct cmd_context *cmd,
-			      struct daemon_parms *parms)
+			      struct daemon_parms *parms,
+			      process_single_vg_fn_t process_single_vg)
 {
 	while (1) {
 		parms->outstanding_count = 0;
-		process_each_vg(cmd, 0, NULL, READ_FOR_UPDATE, parms, _poll_vg);
+		process_each_vg(cmd, 0, NULL, READ_FOR_UPDATE, parms, process_single_vg);
 		if (!parms->outstanding_count)
 			break;
 		sleep(parms->interval);
@@ -244,10 +246,10 @@ static void _poll_for_all_vgs(struct cmd_context *cmd,
  * - 'background' is advisory so a child polldaemon may not be used even
  *   if it was requested.
  */
-int poll_daemon(struct cmd_context *cmd, const char *name, const char *uuid,
-		unsigned background,
-		uint64_t lv_type, struct poll_functions *poll_fns,
-		const char *progress_title)
+static int _poll_daemon(struct cmd_context *cmd, const char *name,
+			const char *uuid, unsigned background, uint64_t lv_type,
+			struct poll_functions *poll_fns,
+			const char *progress_title)
 {
 	struct daemon_parms parms;
 	int daemon_mode = 0;
@@ -301,7 +303,7 @@ int poll_daemon(struct cmd_context *cmd, const char *name, const char *uuid,
 			ret = ECMD_FAILED;
 		}
 	} else
-		_poll_for_all_vgs(cmd, &parms);
+		_poll_for_all_vgs(cmd, &parms, _poll_vg);
 
 	if (parms.background && daemon_mode == 1) {
 		/*
@@ -317,7 +319,69 @@ int poll_daemon(struct cmd_context *cmd, const char *name, const char *uuid,
 	return ret;
 }
 
-inline int poll_vg(struct cmd_context *cmd, const char *vgname, struct volume_group *vg, void *handle)
+/*
+ * NOTE: Commented out sections related to foreground polling.
+ * 	 It doesn't work anyway right now.
+ *
+ * TODO: investigate whether this branch is accessed from
+ * 	 other command than pvmove.
+ */
+static int _lvmpolld_poll_vg(struct cmd_context *cmd,
+			      const char *vgname __attribute__((unused)),
+			      struct volume_group *vg, void *handle)
 {
-	return _poll_vg(cmd, vgname, vg, handle);
+	const char *name;
+	struct lv_list *lvl;
+	struct logical_volume *lv;
+	union lvid lvid;
+	struct daemon_parms *parms = (struct daemon_parms *) handle;
+
+	dm_list_iterate_items(lvl, &vg->lvs) {
+		lv = lvl->lv;
+		if (!(lv->status & parms->lv_type))
+			continue;
+
+		memset(&lvid, 0, sizeof(union lvid));
+
+		name = parms->poll_fns->get_copy_name_from_lv(lv);
+
+		memcpy(lvid.id, &vg->id, sizeof(*(lvid.id)));
+
+		if (!lvid.s) {
+			log_print_unless_silent("Failed to extract vgid from VG including PV: %s", name);
+			continue;
+		}
+
+		/* ret_code != 0 means we found the request polling operation and it's active */
+		if (lvmpolld(name, lvid.s, parms->background, parms->lv_type, parms->progress_title, 0))
+			parms->outstanding_count++;
+	}
+
+	return ECMD_PROCESSED;
+}
+
+int poll_daemon(struct cmd_context *cmd, const char *name, const char *uuid,
+		unsigned background,
+		uint64_t lv_type, struct poll_functions *poll_fns,
+		const char *progress_title)
+{
+	struct daemon_parms parms = { 0 };
+
+	if (lvmpolld_use())
+		if (name || uuid)
+			return lvmpolld(name, uuid, background, lv_type, progress_title, 1) ? ECMD_PROCESSED : ECMD_FAILED;
+		else {
+			parms.poll_fns = poll_fns;
+			parms.background = background;
+			parms.lv_type = lv_type;
+			parms.progress_title = progress_title;
+
+			_poll_for_all_vgs(cmd, &parms, _lvmpolld_poll_vg);
+
+			return ECMD_PROCESSED;
+		}
+	else
+		/* lv_type & PVMOVE - classical interpretation */
+		return _poll_daemon(cmd, name, uuid, background, lv_type & PVMOVE,
+				    poll_fns, progress_title);
 }

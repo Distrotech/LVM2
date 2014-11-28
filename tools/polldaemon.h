@@ -17,6 +17,7 @@
 #define _LVM_TOOL_POLLDAEMON_H
 
 #include "metadata-exported.h"
+#include "polling_ops.h"
 
 typedef enum {
 	PROGRESS_CHECK_FAILED = 0,

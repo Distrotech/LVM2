@@ -20,28 +20,50 @@
 struct lvmpolld_state;
 
 enum poll_type {
-	PVMOVE,
-	CONVERT
+	PVMOVE = 0,
+	CONVERT,
+	MERGE,
+	MERGE_THIN,
+
+	POLL_TYPE_MAX	/* keep this last one */
 };
 
 typedef struct {
-	enum poll_type type; /* PVMOVE, CONVERT */
-	char *vgid;
+	int ret_code;
+	int signal;
+} lvmpolld_cmd_stat_t;
+
+typedef struct {
+	struct lvmpolld_state *ls;
+
+	enum poll_type type;
+	/* full lvid vguuid+lvuuid. may be vguuid+zeroes */
+	const char *lvid;
+	/* either fullname vg/lv or vgname only */
+	const char *name;
 
 	pthread_t tid;
-
 	pthread_mutex_t lock; /* accesed from client threads and monitoring threads */
+	pthread_cond_t cond_update; /* wait until poll command updates percentage or cmd state */
 
-	struct lvmpolld_state *ds;
+	lvmpolld_cmd_stat_t cmd_state;
+	dm_percent_t percent;
 
 	unsigned int use_count;
-} lvmpolld_vg_t;
+	unsigned polling_finished:1;
+} lvmpolld_lv_t;
 
-/* pdvg structure has use_count == 1 after create */
-lvmpolld_vg_t *pdvg_create(struct lvmpolld_state *ls, const char *vgid, const enum poll_type type);
+/* pdlv structure has use_count == 1 after create */
+lvmpolld_lv_t *pdlv_create(struct lvmpolld_state *ls, const char *lvid, const enum poll_type type);
 
 /* use count must not reach 0 when structure is inside hash table */
-void pdvg_put(lvmpolld_vg_t *pdvg);
-void pdvg_get(lvmpolld_vg_t *pdvg);
+void pdlv_put(lvmpolld_lv_t *pdlv);
+void pdlv_get(lvmpolld_lv_t *pdlv);
+
+void pdlv_set_percents(lvmpolld_lv_t *pdlv, dm_percent_t percent);
+
+void pdlv_set_cmd_state(lvmpolld_lv_t *pdlv, lvmpolld_cmd_stat_t *cmd_state);
+
+dm_percent_t pdlv_get_percents(lvmpolld_lv_t *pdlv);
 
 #endif /* _LVM_LVMPOLLD_DATA_UTILS_H */

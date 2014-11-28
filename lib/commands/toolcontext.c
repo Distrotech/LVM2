@@ -30,6 +30,7 @@
 #include "lvmcache.h"
 #include "lvmetad.h"
 #include "archiver.h"
+#include "lvmpolld-client.h"
 
 #ifdef HAVE_LIBDL
 #include "sharedlib.h"
@@ -313,6 +314,7 @@ static int _process_config(struct cmd_context *cmd)
 	const struct dm_config_value *cv;
 	int64_t pv_min_kb;
 	const char *lvmetad_socket;
+	const char *lvmpolld_socket;
 	int udev_disabled = 0;
 	char sysfs_dir[PATH_MAX];
 
@@ -446,6 +448,7 @@ static int _process_config(struct cmd_context *cmd)
 		(find_config_tree_bool(cmd, global_detect_internal_vg_cache_corruption_CFG, NULL));
 
 	lvmetad_disconnect();
+	lvmpolld_disconnect();
 
 	lvmetad_socket = getenv("LVM_LVMETAD_SOCKET");
 	if (!lvmetad_socket)
@@ -468,6 +471,12 @@ static int _process_config(struct cmd_context *cmd)
 		lvmetad_set_active(NULL, find_config_tree_bool(cmd, global_use_lvmetad_CFG, NULL));
 
 	lvmetad_init(cmd);
+
+	lvmpolld_socket = getenv("LVM_LVMPOLLD_SOCKET");
+	if (!lvmpolld_socket)
+		lvmpolld_socket = DEFAULT_RUN_DIR "/lvmpolld.socket";
+
+	lvmpolld_set_active(find_config_tree_bool(cmd, global_use_lvmpolld_CFG, NULL));
 
 	return 1;
 }
@@ -1864,6 +1873,7 @@ void destroy_toolcontext(struct cmd_context *cmd)
 
 	lvmetad_release_token();
 	lvmetad_disconnect();
+	lvmpolld_disconnect();
 
 	release_log_memory();
 	activation_exit();

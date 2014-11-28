@@ -1,6 +1,7 @@
 @top_srcdir@/daemons/clvmd/clvm.h
 @top_srcdir@/daemons/dmeventd/libdevmapper-event.h
 @top_srcdir@/daemons/lvmetad/lvmetad-client.h
+@top_srcdir@/daemons/lvmpolld/lvmpolld-client.h
 @top_srcdir@/liblvm/lvm2app.h
 @top_srcdir@/lib/activate/activate.h
 @top_srcdir@/lib/activate/targets.h
@@ -69,3 +70,4 @@
 @top_srcdir@/libdm/misc/kdev_t.h
 @top_srcdir@/po/pogen.h
 @top_srcdir@/tools/lvm2cmd.h
+@top_srcdir@/tools/polling_ops.h
