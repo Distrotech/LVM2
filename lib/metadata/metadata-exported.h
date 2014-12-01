@@ -73,7 +73,7 @@
 #define MIRROR_IMAGE		UINT64_C(0x0000000000040000)	/* LV - Internal use only */
 
 #define LV_NOTSYNCED		UINT64_C(0x0000000000080000)	/* LV */
-#define LV_REBUILD		UINT64_C(0x0000000000100000)	/* LV */
+#define LV_REBUILD		UINT64_C(0x0000000000100000)	/* LV rebuild flag for RAID */
 //#define PRECOMMITTED		UINT64_C(0x0000000000200000)	/* VG - internal use only */
 #define CONVERTING		UINT64_C(0x0000000000400000)	/* LV */
 
@@ -119,7 +119,10 @@
 
 #define LV_PENDING_DELETE	UINT64_C(0x0004000000000000)    /* LV - Internal use only */
 
-/* Next unused flag:		UINT64_C(0x0008000000000000)    */
+#define LV_RESHAPE_DELTA_DISKS_PLUS		UINT64_C(0x0008000000000000)    /* LV reshape flag delta disks plus image(s) */
+#define LV_RESHAPE_DELTA_DISKS_MINUS		UINT64_C(0x0010000000000000)    /* LV reshape flag delta disks minus image(s) */
+
+/* Next unused flag:		UINT64_C(0x0020000000000000)    */
 
 /* Format features flags */
 #define FMT_SEGMENTS		0x00000001U	/* Arbitrary segment params? */
@@ -1072,6 +1075,7 @@ struct logical_volume *first_replicator_dev(const struct logical_volume *lv);
 /* --  metadata/replicator_manip.c */
 
 /* ++  metadata/raid_manip.c */
+uint32_t raid_rmeta_extents(struct cmd_context *cmd, uint32_t rimage_extents, uint32_t region_size, uint32_t extent_size);
 int lv_is_raid_with_tracking(const struct logical_volume *lv);
 uint32_t lv_raid_image_count(const struct logical_volume *lv);
 int lv_raid_change_image_count(struct logical_volume *lv,

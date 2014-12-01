@@ -238,6 +238,7 @@ static int _check_conversion_type(struct cmd_context *cmd, const char *type_str)
 
 	/* FIXME: Check thin-pool and thin more thoroughly! */
 	if (!strcmp(type_str, "snapshot") ||
+	    !strcmp(type_str, "linear") ||
 	    !strcmp(type_str, "striped") ||
 	    !strncmp(type_str, "raid", 4) ||
 	    !strcmp(type_str, "cache-pool") || !strcmp(type_str, "cache") ||
@@ -380,16 +381,20 @@ static int _read_params(struct cmd_context *cmd, int argc, char **argv,
 	if (!_check_conversion_type(cmd, type_str))
 		return_0;
 
+#if 1
 	/* FIXME: TESTME */
-	if (!arg_count(cmd, type_ARG) &&
-	    !get_stripe_params(cmd, &lp->stripes, &lp->stripe_size))
+	if (arg_count(cmd, type_ARG) &&
+	    !(lp->segtype = get_segtype_from_string(cmd, arg_str_value(cmd, type_ARG, NULL))))
 		return_0;
+	if (!get_stripe_params(cmd, &lp->stripes, &lp->stripe_size))
+		return_0;
+#endif
 
 	if (arg_count(cmd, repair_ARG) &&
 	    arg_outside_list_is_set(cmd, "cannot be used with --repair",
 				    repair_ARG,
 				    alloc_ARG, use_policies_ARG,
-				    stripes_long_ARG, stripesize_ARG,
+				    stripes_ARG, stripes_long_ARG, stripesize_ARG,
 				    force_ARG, noudevsync_ARG, test_ARG,
 				    -1))
 		return_0;
@@ -447,7 +452,7 @@ static int _read_params(struct cmd_context *cmd, int argc, char **argv,
 
 	if ((arg_count(cmd, stripes_long_ARG) || arg_count(cmd, stripesize_ARG)) &&
 #if 1
-	    (!_mirror_or_raid_type_requested(cmd, type_str) ||
+	    (_mirror_or_raid_type_requested(cmd, type_str) ||
 #endif
 	     arg_count(cmd, repair_ARG) ||
 	     arg_count(cmd, thinpool_ARG))) {
@@ -679,8 +684,7 @@ static int _read_params(struct cmd_context *cmd, int argc, char **argv,
 
 		if (arg_count(cmd, mirrors_ARG) && !lp->mirrors) {
 			/* down-converting to linear/stripe? */
-			if (!(lp->segtype =
-			      get_segtype_from_string(cmd, "striped")))
+			if (!(lp->segtype = get_segtype_from_string(cmd, "striped")))
 				return_0;
 		} else if (arg_count(cmd, type_ARG)) {
 			/* changing mirror type? */
@@ -1431,7 +1435,7 @@ static int _lvconvert_mirrors_aux(struct cmd_context *cmd,
 	if ((lp->mirrors == 1) && !lv_is_mirrored(lv)) {
 		log_warn("Logical volume %s is already not mirrored.",
 			 lv->name);
-		return 1;
+		return 2; /* Indicate fact it's already converted to caller */
 	}
 
 	region_size = adjusted_mirror_region_size(lv->vg->extent_size,
@@ -1753,7 +1757,7 @@ static int _lvconvert_mirrors(struct cmd_context *cmd,
 			      struct logical_volume *lv,
 			      struct lvconvert_params *lp)
 {
-	int repair = arg_count(cmd, repair_ARG);
+	int r, repair = arg_count(cmd, repair_ARG);
 	uint32_t old_mimage_count;
 	uint32_t old_log_count;
 	uint32_t new_mimage_count;
@@ -1804,11 +1808,11 @@ static int _lvconvert_mirrors(struct cmd_context *cmd,
 	if (repair)
 		return _lvconvert_mirrors_repair(cmd, lv, lp);
 
-	if (!_lvconvert_mirrors_aux(cmd, lv, lp, NULL,
-				    new_mimage_count, new_log_count))
+	if (!(r = _lvconvert_mirrors_aux(cmd, lv, lp, NULL,
+					 new_mimage_count, new_log_count)))
 		return 0;
 
-	if (!lp->need_polling)
+	if (r != 2 && !lp->need_polling)
 		log_print_unless_silent("Logical volume %s converted.", lv->name);
 
 	backup(lv->vg);
@@ -1816,7 +1820,7 @@ static int _lvconvert_mirrors(struct cmd_context *cmd,
 }
 
 static int _is_valid_raid_conversion(const struct segment_type *from_segtype,
-				    const struct segment_type *to_segtype)
+				     const struct segment_type *to_segtype)
 {
 	if (from_segtype == to_segtype)
 		return 1;
@@ -1846,6 +1850,11 @@ static int _is_valid_raid_conversion(const struct segment_type *from_segtype,
 
 	if (segtype_is_raid1(from_segtype) &&
 	    segtype_is_striped(to_segtype))
+		return 1;
+
+	/* From mirror to raid1 */
+	if (segtype_is_mirror(from_segtype) &&
+	    segtype_is_raid1(to_segtype))
 		return 1;
 
 	/* From raid to raid */
@@ -1885,7 +1894,7 @@ static void _lvconvert_raid_repair_ask(struct cmd_context *cmd,
 
 static int _lvconvert_raid(struct logical_volume *lv, struct lvconvert_params *lp)
 {
-	int replace = 0, image_count = 0, reshape_args = 0;
+	int replace = 0, image_count = 0;
 	struct dm_list *failed_pvs;
 	struct cmd_context *cmd = lv->vg->cmd;
 	struct lv_segment *seg = first_seg(lv);
@@ -1944,22 +1953,26 @@ static int _lvconvert_raid(struct logical_volume *lv, struct lvconvert_params *l
 		return lv_raid_split(lv, lp->lv_split_name,
 				     image_count, lp->pvh);
 
-	if (arg_count(cmd, mirrors_ARG))
+	/* HM FIXME: lv_raid_reshape to cope with changing raid1 image counts too* */
+	if (arg_count(cmd, mirrors_ARG)) {
+		if (seg_is_linear(seg))
+			seg->region_size = lp->region_size;
+printf("%s %u region_size=%u\n", __func__, __LINE__, seg->region_size);
 		return lv_raid_change_image_count(lv, image_count, lp->pvh);
+	}
 
-	if (!arg_count(cmd, stripes_long_ARG))
-		lp->stripes = seg->area_count - seg->segtype->parity_devs;
-	else
-		reshape_args++;
-
-	/* FIXME: stripesize arg alone does not work */
-	if (!arg_count(cmd, stripesize_ARG))
-		lp->stripe_size = seg->stripe_size;
-	else
-		reshape_args++;
-
-	if (arg_count(cmd, type_ARG) || reshape_args)
+printf("%s %u lp->stripes=%u\n", __func__, __LINE__, lp->stripes);
+	if ((seg_is_striped(seg) || lv_is_raid(lv)) &&
+	    (arg_count(cmd, type_ARG) ||
+	     arg_count(cmd, stripes_ARG) ||
+	     arg_count(cmd, stripes_long_ARG) ||
+	     arg_count(cmd, stripesize_ARG)))
+{
+printf("%s %u lp->segtype=%s\n", __func__, __LINE__, lp->segtype->name);
 		return lv_raid_reshape(lv, lp->segtype, lp->stripes, lp->stripe_size, lp->pvh);
+}
+printf("%s %u Hrmpf!\n", __func__, __LINE__);
+
 
 	if (arg_count(cmd, replace_ARG))
 		return lv_raid_replace(lv, lp->replace_pvh, lp->pvh);
@@ -3422,8 +3435,10 @@ static int _lvconvert_single(struct cmd_context *cmd, struct logical_volume *lv,
 		if (!archive(lv->vg))
 			return_ECMD_FAILED;
 
-		if (!_lvconvert_raid(lv, lp))
+		if (!_lvconvert_raid(lv, lp)) {
+			log_error("Failed to convert LV %s", lv->name);
 			return_ECMD_FAILED;
+		}
 
 		if (!(failed_pvs = _failed_pv_list(lv->vg)))
 			return_ECMD_FAILED;

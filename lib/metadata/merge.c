@@ -137,7 +137,8 @@ int check_lv_segments(struct logical_volume *lv, int complete_vg)
 			inc_error_count;
 		}
 
-		area_multiplier = seg_is_striped(seg) ? seg->area_count : 1;
+		area_multiplier = seg_is_striped(seg) ? seg->area_count - seg->segtype->parity_devs : 1;
+		// HM FIXME: area_multiplier = seg_is_striped(seg) || (seg_is_raid(seg) && !seg_is_raid1(seg)) ? seg->area_count - seg->segtype->parity_devs : 1;
 
 		if (seg->area_len * area_multiplier != seg->len) {
 printf("segtype=%s area_len=%d area_len*mp=%u seg->len=%u\n", seg->segtype->name, seg->area_len, seg->area_len * area_multiplier, seg->len);

@@ -749,6 +749,8 @@ struct dm_tree_node_raid_params {
 	uint32_t region_size;
 	uint32_t stripe_size;
 
+	int delta_disks;
+
 	/*
 	 * 'rebuilds' and 'writemostly' are bitfields that signify
 	 * which devices in the array are to be rebuilt or marked

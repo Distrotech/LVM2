@@ -195,6 +195,7 @@ static int _raid_add_target_line(struct dev_manager *dm __attribute__((unused)),
 				 struct dm_tree_node *node, uint64_t len,
 				 uint32_t *pvmove_mirror_count __attribute__((unused)))
 {
+	int delta_disks = 0;
 	uint32_t s;
 	uint64_t flags = 0;
 	uint64_t rebuilds = 0;
@@ -227,19 +228,33 @@ static int _raid_add_target_line(struct dev_manager *dm __attribute__((unused)),
 			return 0;
 		}
 
-		for (s = 0; s < seg->area_count; s++)
-			if (seg_lv(seg, s)->status & LV_REBUILD)
-				rebuilds |= 1ULL << s;
+		for (s = 0; s < seg->area_count; s++) {
+			uint64_t status = seg_lv(seg, s)->status;
 
-		for (s = 0; s < seg->area_count; s++)
-			if (seg_lv(seg, s)->status & LV_WRITEMOSTLY)
+			if (status & LV_REBUILD)
+				rebuilds |= 1ULL << s;
+			if (status & LV_RESHAPE_DELTA_DISKS_PLUS) {
+printf("%s %u s=%u\n", __func__, __LINE__, s);
+				if (status & LV_RESHAPE_DELTA_DISKS_MINUS) {
+					log_error(INTERNAL_ERROR "delta disks minus when delta disks plus requested!");
+					return 0;
+				}
+
+				delta_disks++;
+			} else if (status & LV_RESHAPE_DELTA_DISKS_MINUS)
+				delta_disks--;
+
+			if (status & LV_WRITEMOSTLY)
 				writemostly |= 1ULL << s;
+		}
 
 		if (mirror_in_sync())
 			flags = DM_NOSYNC;
 	}
 
+printf("%s %u delta_disks=%d\n", __func__, __LINE__, delta_disks);
 	params.raid_type = lvseg_name(seg);
+
 	if (seg->segtype->parity_devs) {
 		/* RAID 4/5/6 */
 		params.mirrors = 1;
@@ -257,19 +272,24 @@ static int _raid_add_target_line(struct dev_manager *dm __attribute__((unused)),
 		params.mirrors = seg->area_count;
 		params.stripes = 1;
 		params.writebehind = seg->writebehind;
+		params.writemostly = writemostly;
 	}
 
 	/* RAID 0 doesn't have a bitmap, thus no region_size etc. */
 	if (!seg_is_raid0(seg)) {
 		params.region_size = seg->region_size;
 		params.rebuilds = rebuilds;
-		params.writemostly = writemostly;
 		params.min_recovery_rate = seg->min_recovery_rate;
 		params.max_recovery_rate = seg->max_recovery_rate;
+		params.delta_disks = delta_disks;
 	}
 
 	params.stripe_size = seg->stripe_size;
 	params.flags = flags;
+
+printf("%s %u stripes=%u stripe_size=%d delta_disks=%d\n", __func__, __LINE__,
+       params.stripes, params.stripe_size, params.delta_disks);
+
 
 	if (!dm_tree_node_add_raid_target_with_params(node, len, &params))
 		return_0;
