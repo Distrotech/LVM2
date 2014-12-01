@@ -208,6 +208,7 @@ struct load_segment {
 	struct dm_tree_node *replicator;/* Replicator-dev */
 	uint64_t rdevice_index;		/* Replicator-dev */
 
+	int delta_disks;		/* raid */
 	uint64_t rebuilds;		/* raid */
 	uint64_t writemostly;		/* raid */
 	uint32_t writebehind;		/* raid */
@@ -2332,7 +2333,8 @@ static int _raid_emit_segment_line(struct dm_task *dmt, uint32_t major,
 	if ((seg->flags & DM_NOSYNC) || (seg->flags & DM_FORCESYNC))
 		param_count++;
 
-	param_count += _add_2_if_value(seg->region_size) +
+	param_count += _add_2_if_value(seg->delta_disks) +
+		       _add_2_if_value(seg->region_size) +
 		       _add_2_if_value(seg->writebehind) +
 		       _add_2_if_value(seg->min_recovery_rate) +
 		       _add_2_if_value(seg->max_recovery_rate);
@@ -2348,6 +2350,7 @@ static int _raid_emit_segment_line(struct dm_task *dmt, uint32_t major,
 	if ((seg->type == SEG_RAID1) && seg->stripe_size)
 		log_error("WARNING: Ignoring RAID1 stripe size");
 
+printf("%s %u stripe_size=%u\n", __func__, __LINE__,  seg->stripe_size);
 	EMIT_PARAMS(pos, "%s %d %u", _dm_segtypes[seg->type].target,
 		    param_count, seg->stripe_size);
 
@@ -2358,6 +2361,9 @@ static int _raid_emit_segment_line(struct dm_task *dmt, uint32_t major,
 
 	if (seg->region_size)
 		EMIT_PARAMS(pos, " region_size %u", seg->region_size);
+
+	if (seg->delta_disks)
+		EMIT_PARAMS(pos, " delta_disks %d", seg->delta_disks);
 
 	for (i = 0; i < (seg->area_count / 2); i++)
 		if (seg->rebuilds & (1ULL << i))
@@ -3228,6 +3234,7 @@ int dm_tree_node_add_raid_target_with_params(struct dm_tree_node *node,
 	seg->region_size = p->region_size;
 	seg->stripe_size = p->stripe_size;
 	seg->area_count = 0;
+	seg->delta_disks = p->delta_disks;
 	seg->rebuilds = p->rebuilds;
 	seg->writemostly = p->writemostly;
 	seg->writebehind = p->writebehind;

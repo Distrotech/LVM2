@@ -38,9 +38,6 @@ typedef enum {
 	NEXT_AREA
 } area_use_t;
 
-/* FIXME: remove RAID_METADATA_AREA_LEN macro after defining 'raid_log_extents'*/
-#define RAID_METADATA_AREA_LEN 1
-
 /* FIXME These ended up getting used differently from first intended.  Refactor. */
 /* Only one of A_CONTIGUOUS_TO_LVSEG, A_CLING_TO_LVSEG, A_CLING_TO_ALLOCED may be set */
 #define A_CONTIGUOUS_TO_LVSEG	0x01	/* Must be contiguous to an existing segment */
@@ -1078,8 +1075,16 @@ static int _release_and_discard_lv_segment_area(struct lv_segment *seg, uint32_t
 	if (lv_is_raid_image(lv)) {
 		uint32_t len = seg_is_raid0(seg) ? lv->le_count : seg->area_len;
 
-		/* FIXME: support shrinking of raid volumes */
+		/* HM FIXME: support shrinking of raid volumes */
 		if (area_reduction == len) {
+#if 0
+			/* HM FIMXE: CODEME */
+			if (!lv_raid_resize(lv, )) {
+				log_error("Failed to reduce RAID set %s in kernel", lv->name);
+				return 0;
+			}
+#endif
+
 			if (!lv_reduce(lv, lv->le_count)) {
 				log_error("Failed to remove RAID image %s", lv->name);
 				return 0;
@@ -1545,7 +1550,7 @@ static uint32_t _calc_area_multiple(const struct segment_type *segtype,
 }
 
 /*
- * Returns log device size in extents, algorithm from kernel code
+ * Returns mirror log device size in extents, algorithm from dm-raid1 ("mirror" target) kernel code
  */
 #define BYTE_SHIFT 3
 static uint32_t mirror_log_extents(uint32_t region_size, uint32_t pe_size, uint32_t area_len)
@@ -1577,6 +1582,20 @@ static uint32_t mirror_log_extents(uint32_t region_size, uint32_t pe_size, uint3
 	 */
 	return (log_size > (region_size / pe_size)) ? log_size :
 		(region_size / pe_size);
+}
+
+/*
+ * Returns raid metadata device size in extents, algorithm from dm-raid ("raid" target) kernel code
+ */
+uint32_t raid_rmeta_extents(struct cmd_context *cmd,
+			    uint32_t rimage_extents, uint32_t region_size, uint32_t extent_size)
+{
+	uint64_t bytes, sectors, size = rimage_extents;
+
+	bytes = dm_div_up(size * extent_size / region_size, 8);
+	sectors = dm_div_up(bytes, 512);
+
+	return 1 + dm_div_up(sectors, extent_size);
 }
 
 /*
@@ -1616,9 +1635,9 @@ static struct alloc_handle *_alloc_init(struct cmd_context *cmd,
 
 	/*
 	 * It is a requirement that RAID 4/5/6 are created with a number of
-	 * stripes that is greater than the number of parity devices.  (e.g
-	 * RAID4/5 must have at least 2 stripes and RAID6 must have at least
-	 * 3.)  It is also a constraint that, when replacing individual devices
+	 * stripes that is greater or equal than the number of parity devices.
+	 * (e.g RAID4/5/6 must have at least 2 stripes)
+	 * It is also a constraint that, when replacing individual devices
 	 * in a RAID 4/5/6 array, no more devices can be replaced than
 	 * there are parity devices.  (Otherwise, there would not be enough
 	 * redundancy to maintain the array.)  Understanding these two
@@ -1691,9 +1710,10 @@ static struct alloc_handle *_alloc_init(struct cmd_context *cmd,
 				log_error(INTERNAL_ERROR
 					  "Bad metadata_area_count");
 			ah->metadata_area_count = area_count;
-			ah->alloc_and_split_meta = 1;
-
-			ah->log_len = RAID_METADATA_AREA_LEN;
+			ah->log_len = (existing_extents ? 0 : 1) +
+				      raid_rmeta_extents(cmd, existing_extents + new_extents, region_size, extent_size) -
+				      raid_rmeta_extents(cmd, existing_extents, region_size, extent_size);
+			ah->alloc_and_split_meta = ah->log_len ? 1 : 0;
 
 			/*
 			 * We need 'log_len' extents for each
@@ -1770,7 +1790,7 @@ static int _sufficient_pes_free(struct alloc_handle *ah, struct dm_list *pvms,
 {
 	uint32_t area_extents_needed = (extents_still_needed - allocated) * ah->area_count / ah->area_multiple;
 	uint32_t parity_extents_needed = (extents_still_needed - allocated) * ah->parity_count / ah->area_multiple;
-	uint32_t metadata_extents_needed = (ah->alloc_and_split_meta) ? 0 : ah->metadata_area_count * RAID_METADATA_AREA_LEN; /* One each */
+	uint32_t metadata_extents_needed = (ah->alloc_and_split_meta) ? 0 : ah->metadata_area_count * ah->log_len;
 	uint32_t total_extents_needed = area_extents_needed + parity_extents_needed + metadata_extents_needed;
 	uint32_t free_pes = pv_maps_size(pvms);
 
@@ -2024,6 +2044,7 @@ static int _alloc_parallel_area(struct alloc_handle *ah, uint32_t max_to_allocat
 			consume_pv_area(pva, ah->log_len);
 			dm_list_add(&ah->alloced_areas[smeta], &aa[smeta].list);
 		}
+
 		aa[s].len = (ah->alloc_and_split_meta && !ah->split_metadata_is_allocated) ? len - ah->log_len : len;
 		/* Skip empty allocations */
 		if (!aa[s].len)
@@ -3565,6 +3586,55 @@ static int _lv_insert_empty_sublvs(struct logical_volume *lv,
 	return 1;
 }
 
+/* Wipe first sector of all metadata LVs of @lv) */
+static int _clear_metadata(struct logical_volume *lv)
+{
+	unsigned s;
+	struct lv_segment *seg = first_seg(lv);
+	struct logical_volume *meta_lv;
+	struct volume_group *vg = lv->vg;
+
+	/* Should be ensured by caller, but.. */
+	if (!seg->meta_areas)
+		return 0;
+
+	for (s = 0; s < seg->area_count; s++) {
+		meta_lv = seg_metalv(seg, s);
+
+		if (test_mode()) {
+			lv_set_hidden(meta_lv);
+			continue;
+		}
+
+		/* For clearing, simply activate locally */
+		if (!activate_lv_local(vg->cmd, meta_lv)) {
+			log_error("Failed to activate %s/%s for clearing", vg->name, meta_lv->name);
+			return 0;
+		}
+
+		log_verbose("Clearing metadata area of %s/%s", vg->name, meta_lv->name);
+
+		/*
+		 * Rather than wiping meta_lv->size, we can simply
+		 * wipe '1' to remove the superblock of any previous
+		 * RAID devices.  It is much quicker.
+		 */
+		if (!wipe_lv(meta_lv, (struct wipe_params) { .do_zero = 1, .zero_sectors = 1 })) {
+			log_error("Failed to zero %s/%s", vg->name, meta_lv->name);
+			return 0;
+		}
+
+		if (!deactivate_lv(vg->cmd, meta_lv)) {
+			log_error("Failed to deactivate %s/%s", vg->name, meta_lv->name);
+			return 0;
+		}
+
+		lv_set_hidden(meta_lv);
+	}
+
+	return 1;
+}
+
 static int _lv_extend_layered_lv(struct alloc_handle *ah,
 				 struct logical_volume *lv,
 				 uint32_t extents, uint32_t first_area,
@@ -3572,9 +3642,11 @@ static int _lv_extend_layered_lv(struct alloc_handle *ah,
 {
 	const struct segment_type *segtype;
 	struct logical_volume *sub_lv, *meta_lv;
-	struct lv_segment *seg;
+	struct lv_segment *seg = first_seg(lv);
 	uint32_t fa, s;
-	int clear_metadata = 0;
+	int clear_metadata = lv->le_count ? 0 : 1;
+
+printf("clear_metadata=%d\n", clear_metadata);
 
 	segtype = get_segtype_from_string(lv->vg->cmd, "striped");
 
@@ -3583,12 +3655,11 @@ static int _lv_extend_layered_lv(struct alloc_handle *ah,
 	 * LV.  However, RAID has an LV for each device - making the
 	 * 'stripes' and 'stripe_size' parameters meaningless.
 	 */
-	if (seg_is_raid(first_seg(lv))) {
+	if (seg_is_raid(seg)) {
 		stripes = 1;
 		stripe_size = 0;
 	}
 
-	seg = first_seg(lv);
 	for (fa = first_area, s = 0; s < seg->area_count; s++) {
 		if (is_temporary_mirror_layer(seg_lv(seg, s))) {
 			if (!_lv_extend_layered_lv(ah, seg_lv(seg, s), extents,
@@ -3602,76 +3673,40 @@ static int _lv_extend_layered_lv(struct alloc_handle *ah,
 		if (!lv_add_segment(ah, fa, stripes, sub_lv, segtype,
 				    stripe_size, sub_lv->status, 0)) {
 			log_error("Aborting. Failed to extend %s in %s.",
-				  sub_lv->name, lv->name);
+			  	sub_lv->name, lv->name);
 			return 0;
 		}
 
-		/* Extend metadata LVs if any only on initial creation */
-		if (seg_is_raid(seg) && !lv->le_count) {
- 			if (seg->meta_areas) {
-				meta_lv = seg_metalv(seg, s);
-				if (meta_lv) {
-					if (!lv_add_segment(ah, fa + seg->area_count, 1,
-							    meta_lv, segtype, 0,
-							    meta_lv->status, 0)) {
-						log_error("Failed to extend %s in %s.",
-							  meta_lv->name, lv->name);
-						return 0;
-					}
-	
-					lv_set_visible(meta_lv);
-					clear_metadata = 1;
+		/* HM FIXME: TESTME: extension on existing sets */
+		/* Extend metadata LVs if any */
+		if (seg_is_raid(seg) &&
+ 		    seg->meta_areas) {
+			if ((meta_lv = seg_metalv(seg, s))) {
+				if (!lv_add_segment(ah, fa + seg->area_count, 1,
+						    meta_lv, segtype, 0,
+						    meta_lv->status, 0)) {
+					log_error("Failed to extend %s in %s.",
+						  meta_lv->name, lv->name);
+					return 0;
 				}
+
+				if (clear_metadata)
+					lv_set_visible(meta_lv);
 			}
 		}
 
 		fa += stripes;
 	}
 
-	if (clear_metadata) {
-		/*
-		 * We must clear the metadata areas upon creation.
-		 */
-		if (!vg_write(lv->vg) || !vg_commit(lv->vg))
-			return_0;
+	if (!vg_write(lv->vg) || !vg_commit(lv->vg))
+		return_0;
 
-		for (s = 0; s < seg->area_count; s++) {
-			meta_lv = seg_metalv(seg, s);
-
-			if (test_mode()) {
-				lv_set_hidden(meta_lv);
-				continue;
-			}
-
-			/* For clearing, simply activate locally */
-			if (!activate_lv_local(meta_lv->vg->cmd, meta_lv)) {
-				log_error("Failed to activate %s/%s for clearing",
-					  meta_lv->vg->name, meta_lv->name);
-				return 0;
-			}
-
-			log_verbose("Clearing metadata area of %s/%s",
-				    meta_lv->vg->name, meta_lv->name);
-			/*
-			 * Rather than wiping meta_lv->size, we can simply
-			 * wipe '1' to remove the superblock of any previous
-			 * RAID devices.  It is much quicker.
-			 */
-			if (!wipe_lv(meta_lv, (struct wipe_params)
-				     { .do_zero = 1, .zero_sectors = 1 })) {
-				log_error("Failed to zero %s/%s",
-					  meta_lv->vg->name, meta_lv->name);
-				return 0;
-			}
-
-			if (!deactivate_lv(meta_lv->vg->cmd, meta_lv)) {
-				log_error("Failed to deactivate %s/%s",
-					  meta_lv->vg->name, meta_lv->name);
-				return 0;
-			}
-			lv_set_hidden(meta_lv);
-		}
-	}
+	/*
+	 * We must clear the metadata areas upon creation.
+	 */
+	if (clear_metadata &&
+	    !_clear_metadata(lv))
+		return 0;
 
 	seg->area_len += extents;
 	seg->len += extents;
@@ -3723,17 +3758,16 @@ int lv_extend(struct logical_volume *lv,
 	if (segtype_is_virtual(segtype))
 		return lv_add_virtual_segment(lv, 0u, extents, segtype);
 
-	if (!lv->le_count) {
-		if (segtype_is_pool(segtype)) {
-			/*
-			 * Thinpool and cache_pool allocations treat the metadata
-			 * device like a mirror log.
-			 */
-			/* FIXME Support striped metadata pool */
-			log_count = 1;
-		} else if (segtype_is_raid(segtype))
-			log_count = mirrors * stripes;
-	}
+	if (segtype_is_pool(segtype) && !lv->le_count) {
+		/*
+		 * Thinpool and cache_pool allocations treat the metadata
+		 * device like a mirror log.
+		 */
+		/* FIXME Support striped metadata pool */
+		log_count = 1;
+	} else if (segtype_is_raid(segtype))
+		log_count = mirrors * stripes;
+
 	/* FIXME log_count should be 1 for mirrors */
 
 	if (!(ah = allocate_extents(lv->vg, lv, segtype, stripes, mirrors,
@@ -4950,7 +4984,7 @@ static struct logical_volume *_lvresize_volume(struct cmd_context *cmd,
 				log_error("Filesystem check failed.");
 				return NULL;
 			}
-			/* some filesystems supports online resize */
+			/* some filesystems support online resize */
 		}
 
 		/* FIXME forks here */
