@@ -1678,13 +1678,14 @@ static struct alloc_handle *_alloc_init(struct cmd_context *cmd,
 	if (segtype_is_raid(segtype)) {
 		if (metadata_area_count) {
 			if (metadata_area_count != area_count)
-				log_error(INTERNAL_ERROR
-					  "Bad metadata_area_count");
+				log_error(INTERNAL_ERROR "Bad metadata_area_count");
 			ah->metadata_area_count = area_count;
 			ah->log_len = (existing_extents ? 0 : 1) +
 				      raid_rmeta_extents(cmd, existing_extents + new_extents, region_size, extent_size) -
 				      raid_rmeta_extents(cmd, existing_extents, region_size, extent_size);
 			ah->alloc_and_split_meta = ah->log_len ? 1 : 0;
+printf("%s %u exisiting_extents=%u new_extents=%u ah->log_len=%u, ah->alloc...=%u\n", __func__, __LINE__,
+       existing_extents, new_extents, ah->log_len, ah->alloc_and_split_meta);
 
 			/*
 			 * We need 'log_len' extents for each
@@ -1970,6 +1971,7 @@ static int _alloc_parallel_area(struct alloc_handle *ah, uint32_t max_to_allocat
 		if (area_len > alloc_state->areas[s].used)
 			area_len = alloc_state->areas[s].used;
 
+	/* HM FIXME: ah->split_metadata_is_allocated superfluous because of metadata area extension support */
 	len = (ah->alloc_and_split_meta && !ah->split_metadata_is_allocated) ? total_area_count * 2 : total_area_count;
 	len *= sizeof(*aa);
 	if (!(aa = dm_pool_alloc(ah->mem, len))) {
@@ -1995,6 +1997,8 @@ static int _alloc_parallel_area(struct alloc_handle *ah, uint32_t max_to_allocat
 			 * The metadata area goes at the front of the allocated
 			 * space for now, but could easily go at the end (or
 			 * middle!).
+			 * Extensions to the metadata area will follow the given
+			 * image area in case the followup area is free.
 			 *
 			 * Even though we split these two from the same
 			 * allocation, we store the images at the beginning

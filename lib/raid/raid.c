@@ -211,10 +211,9 @@ static int _raid_add_target_line(struct dev_manager *dm __attribute__((unused)),
 	}
 
 	/*
-	 * 64 device restriction imposed by kernel as well.  It is
-	 * not strictly a userspace limitation.
+	 * 64 device restriction imposed by kernel as well due to bitfield limitation in superblock.
+	 * It is not strictly a userspace limitation.
 	 */
-	/* FIXME: HM: is this actually a constraint still (253 seems to be the limit)? */
 	if (seg->area_count > 64) {
 		log_error("Unable to handle more than 64 devices in a "
 			  "single RAID array");

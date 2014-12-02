@@ -408,8 +408,7 @@ printf("segtype=%s area_len=%d area_len*mp=%u seg->len=%u\n", seg->segtype->name
 				seg_found++;
 
 			/* HM FIXME: TESTME */
-			// if (seg_is_raid(seg) && seg->meta_areas && lv == seg_metalv(seg, s))
-			if (seg->meta_areas && lv == seg_metalv(seg, s))
+			if (seg_is_raid(seg) && seg->meta_areas && lv == seg_metalv(seg, s))
 				seg_found++;
 		}
 		if (seg_is_replicator_dev(seg)) {

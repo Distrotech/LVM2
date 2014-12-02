@@ -2132,6 +2132,7 @@ static int _emit_areas_line(struct dm_task *dmt __attribute__((unused)),
 				EMIT_PARAMS(*pos, " -");
 				break;
 			}
+
 			if (!_build_dev_string(devbuf, sizeof(devbuf), area->dev_node))
 				return_0;
 
@@ -2327,6 +2328,7 @@ static int _raid_emit_segment_line(struct dm_task *dmt, uint32_t major,
 				   size_t paramsize)
 {
 	uint32_t i;
+	uint32_t area_count = seg->area_count / 2;
 	int param_count = 1; /* mandatory 'chunk size'/'stripe size' arg */
 	int pos = 0;
 
@@ -2350,7 +2352,6 @@ static int _raid_emit_segment_line(struct dm_task *dmt, uint32_t major,
 	if ((seg->type == SEG_RAID1) && seg->stripe_size)
 		log_error("WARNING: Ignoring RAID1 stripe size");
 
-printf("%s %u stripe_size=%u\n", __func__, __LINE__,  seg->stripe_size);
 	EMIT_PARAMS(pos, "%s %d %u", _dm_segtypes[seg->type].target,
 		    param_count, seg->stripe_size);
 
@@ -2365,11 +2366,11 @@ printf("%s %u stripe_size=%u\n", __func__, __LINE__,  seg->stripe_size);
 	if (seg->delta_disks)
 		EMIT_PARAMS(pos, " delta_disks %d", seg->delta_disks);
 
-	for (i = 0; i < (seg->area_count / 2); i++)
+	for (i = 0; i < area_count; i++)
 		if (seg->rebuilds & (1ULL << i))
 			EMIT_PARAMS(pos, " rebuild %u", i);
 
-	for (i = 0; i < (seg->area_count / 2); i++)
+	for (i = 0; i < area_count; i++)
 		if (seg->writemostly & (1ULL << i))
 			EMIT_PARAMS(pos, " write_mostly %u", i);
 
@@ -2385,7 +2386,7 @@ printf("%s %u stripe_size=%u\n", __func__, __LINE__,  seg->stripe_size);
 			    seg->max_recovery_rate);
 
 	/* Print number of metadata/data device pairs */
-	EMIT_PARAMS(pos, " %u", seg->area_count / 2);
+	EMIT_PARAMS(pos, " %u", area_count);
 
 	if (_emit_areas_line(dmt, seg, params, paramsize, &pos) <= 0)
 		return_0;
@@ -4033,6 +4034,7 @@ static int _add_area(struct dm_tree_node *node, struct load_segment *seg, struct
 
 	dm_list_add(&seg->areas, &area->list);
 	seg->area_count++;
+printf("%s %u dev_node=%p\n", __func__, __LINE__, area->dev_node);
 
 	return 1;
 }
@@ -4046,6 +4048,7 @@ int dm_tree_node_add_target_area(struct dm_tree_node *node,
 	struct stat info;
 	struct dm_tree_node *dev_node;
 
+printf("%s %u\n", __func__, __LINE__);
 	if ((!dev_name || !*dev_name) && (!uuid || !*uuid)) {
 		log_error("dm_tree_node_add_target_area called without device");
 		return 0;
@@ -4094,6 +4097,7 @@ int dm_tree_node_add_null_area(struct dm_tree_node *node, uint64_t offset)
 
 	seg = dm_list_item(dm_list_last(&node->props.segs), struct load_segment);
 
+printf("%s %u\n", __func__, __LINE__);
 	switch (seg->type) {
 	case SEG_RAID0:
 	case SEG_RAID1:

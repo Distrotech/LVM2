@@ -1953,10 +1953,11 @@ static int _lvconvert_raid(struct logical_volume *lv, struct lvconvert_params *l
 		return lv_raid_split(lv, lp->lv_split_name,
 				     image_count, lp->pvh);
 
-	/* HM FIXME: lv_raid_reshape to cope with changing raid1 image counts too* */
+	/* HM FIXME: lv_raid_reshape to cope with changing raid1 image counts too? */
 	if (arg_count(cmd, mirrors_ARG)) {
 		if (seg_is_linear(seg))
 			seg->region_size = lp->region_size;
+
 printf("%s %u region_size=%u\n", __func__, __LINE__, seg->region_size);
 		return lv_raid_change_image_count(lv, image_count, lp->pvh);
 	}
@@ -1968,6 +1969,9 @@ printf("%s %u lp->stripes=%u\n", __func__, __LINE__, lp->stripes);
 	     arg_count(cmd, stripes_long_ARG) ||
 	     arg_count(cmd, stripesize_ARG)))
 {
+		if (seg_is_striped(seg))
+			seg->region_size = lp->region_size;
+
 printf("%s %u lp->segtype=%s\n", __func__, __LINE__, lp->segtype->name);
 		return lv_raid_reshape(lv, lp->segtype, lp->stripes, lp->stripe_size, lp->pvh);
 }
