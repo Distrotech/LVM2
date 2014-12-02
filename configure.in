@@ -1837,6 +1837,7 @@ daemons/dmeventd/plugins/mirror/Makefile
 daemons/dmeventd/plugins/snapshot/Makefile
 daemons/dmeventd/plugins/thin/Makefile
 daemons/lvmetad/Makefile
+daemons/lvmlockd/Makefile
 conf/Makefile
 conf/example.conf
 conf/command_profile_template.profile
