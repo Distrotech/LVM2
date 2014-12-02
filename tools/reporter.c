@@ -32,7 +32,10 @@ static int _vgs_single(struct cmd_context *cmd __attribute__((unused)),
 		       const char *vg_name, struct volume_group *vg,
 		       struct processing_handle *handle)
 {
-	if (!report_object(handle->custom_handle, vg, NULL, NULL, NULL, NULL, NULL, NULL, NULL))
+	struct selection_handle *sh = handle->selection_handle;
+
+	if (!report_object(sh ? : handle->custom_handle, sh != NULL, vg,
+			   NULL, NULL, NULL, NULL, NULL, NULL, NULL))
 		return_ECMD_FAILED;
 
 	check_current_backup(vg);
@@ -89,15 +92,15 @@ static int _do_lvs_with_info_and_status_single(struct cmd_context *cmd,
 					       int do_info, int do_status,
 					       struct processing_handle *handle)
 {
+	struct selection_handle *sh = handle->selection_handle;
 	struct lvinfo lvinfo;
 	struct lv_seg_status lv_seg_status;
 	int r = ECMD_FAILED;
 
 	_do_info_and_status(cmd, lv, &lvinfo, NULL, &lv_seg_status, do_info, do_status);
-	if (!report_object(handle->custom_handle, lv->vg, lv, NULL, NULL, NULL,
-			   do_info ? &lvinfo : NULL,
-			   do_status ? &lv_seg_status : NULL,
-			   NULL))
+	if (!report_object(sh ? : handle->custom_handle, sh != NULL,
+			   lv->vg, lv, NULL, NULL, NULL, do_info ? &lvinfo : NULL,
+			   do_status ? &lv_seg_status : NULL, NULL))
 		goto out;
 
 	r = ECMD_PROCESSED;
@@ -136,15 +139,16 @@ static int _do_segs_with_info_and_status_single(struct cmd_context *cmd,
 						int do_info, int do_status,
 						struct processing_handle *handle)
 {
+	struct selection_handle *sh = handle->selection_handle;
 	struct lvinfo lvinfo;
 	struct lv_seg_status lv_seg_status;
 	int r = ECMD_FAILED;
 
 	_do_info_and_status(cmd, seg->lv, &lvinfo, seg, &lv_seg_status, do_info, do_status);
-	if (!report_object(handle->custom_handle, seg->lv->vg, seg->lv, NULL, seg, NULL,
+	if (!report_object(sh ? : handle->custom_handle, sh != NULL,
+			   seg->lv->vg, seg->lv, NULL, seg, NULL,
 			   do_info ? &lvinfo : NULL,
-			   do_status ? &lv_seg_status : NULL,
-			   NULL))
+			   do_status ? &lv_seg_status : NULL, NULL))
 		goto out;
 
 	r = ECMD_PROCESSED;
@@ -221,6 +225,7 @@ static int _do_pvsegs_sub_single(struct cmd_context *cmd,
 				 int do_status,
 				 struct processing_handle *handle)
 {
+	struct selection_handle *sh = handle->selection_handle;
 	int ret = ECMD_PROCESSED;
 	struct lv_segment *seg = pvseg->lvseg;
 	struct lvinfo lvinfo = { .exists = 0 };
@@ -263,7 +268,8 @@ static int _do_pvsegs_sub_single(struct cmd_context *cmd,
 	if (seg)
 		_do_info_and_status(cmd, seg->lv, &lvinfo, seg, &lv_seg_status, do_info, do_status);
 
-	if (!report_object(handle->custom_handle, vg, seg ? seg->lv : &_free_logical_volume, pvseg->pv,
+	if (!report_object(sh ? : handle->custom_handle, sh != NULL,
+			   vg, seg ? seg->lv : &_free_logical_volume, pvseg->pv,
 			   seg ? : &_free_lv_segment, pvseg, &lvinfo, &lv_seg_status,
 			   pv_label(pvseg->pv))) {
 		ret = ECMD_FAILED;
@@ -344,7 +350,10 @@ static int _pvs_single(struct cmd_context *cmd, struct volume_group *vg,
 		       struct physical_volume *pv,
 		       struct processing_handle *handle)
 {
-	if (!report_object(handle->custom_handle, vg, NULL, pv, NULL, NULL, NULL, NULL, NULL))
+	struct selection_handle *sh = handle->selection_handle;
+
+	if (!report_object(sh ?: handle->custom_handle, sh != NULL,
+			   vg, NULL, pv, NULL, NULL, NULL, NULL, NULL))
 		return_ECMD_FAILED;
 
 	return ECMD_PROCESSED;
@@ -353,7 +362,10 @@ static int _pvs_single(struct cmd_context *cmd, struct volume_group *vg,
 static int _label_single(struct cmd_context *cmd, struct label *label,
 		         struct processing_handle *handle)
 {
-	if (!report_object(handle->custom_handle, NULL, NULL, NULL, NULL, NULL, NULL, NULL, label))
+	struct selection_handle *sh = handle->selection_handle;
+
+	if (!report_object(sh ? : handle->custom_handle, sh != NULL,
+			   NULL, NULL, NULL, NULL, NULL, NULL, NULL, label))
 		return_ECMD_FAILED;
 
 	return ECMD_PROCESSED;
