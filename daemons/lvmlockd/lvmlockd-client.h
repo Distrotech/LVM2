@@ -13,13 +13,15 @@
 
 #include "daemon-client.h"
 
+#define LVMLOCKD_SOCKET DEFAULT_RUN_DIR "/lvmlockd.socket"
+
 /* Wrappers to open/close connection */
 
 static inline daemon_handle lvmlockd_open(const char *socket)
 {
 	daemon_info lvmlockd_info = {
 		.path = "lvmlockd",
-		.socket = socket ?: DEFAULT_RUN_DIR "/lvmlockd.socket",
+		.socket = socket ?: LVMLOCKD_SOCKET,
 		.protocol = "lvmlockd",
 		.protocol_version = 1,
 		.autostart = 0
