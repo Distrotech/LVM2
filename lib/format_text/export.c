@@ -573,8 +573,8 @@ int out_areas(struct formatter *f, const struct lv_segment *seg,
 			}
 
 			outf(f, "\"%s\", \"%s\"%s",
-			     (seg->meta_areas && seg_metalv(seg, s)) ? seg_metalv(seg, s)->name : "-", seg_lv(seg, s)->name,
-			     (s == seg->area_count - 1) ? "" : ",");
+			     (seg->meta_areas && seg_metalv(seg, s)) ? seg_metalv(seg, s)->name : "-",
+			     seg_lv(seg, s)->name, (s == seg->area_count - 1) ? "" : ",");
 
 			break;
 		case AREA_UNASSIGNED:

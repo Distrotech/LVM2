@@ -45,7 +45,7 @@ static void _ensure_min_region_size(struct logical_volume *lv)
 }
 
 /* Default region_size on @lv unless already set */
-static void __init_region_size(struct logical_volume *lv)
+static void __check_and_init_region_size(struct logical_volume *lv)
 {
 	struct lv_segment *seg = first_seg(lv);
 
@@ -370,7 +370,9 @@ static int _shift_image_components(struct lv_segment *seg)
 					 seg_lv(seg, s)->name, missing);
 
 			seg->areas[s - missing] = seg->areas[s];
-			seg->meta_areas[s - missing] = seg->meta_areas[s];
+
+			if (seg->meta_areas)
+				seg->meta_areas[s - missing] = seg->meta_areas[s];
 		}
 	}
 
@@ -499,8 +501,7 @@ static int __add_sublvs_to_lv(struct logical_volume *lv, int delete_from_list,
  * Create an LV of specified type.  Set visible after creation.
  * This function does not make metadata changes.
  */
-static struct logical_volume *_alloc_image_component(struct logical_volume *lv,
-						     const char *alt_base_name,
+static struct logical_volume *_alloc_image_component(struct logical_volume *lv, const char *alt_base_name,
 						     struct alloc_handle *ah, uint32_t first_area,
 						     uint64_t type)
 {
@@ -551,9 +552,11 @@ static struct logical_volume *_alloc_image_component(struct logical_volume *lv,
 
 static uint32_t __calc_rmeta_extents(struct logical_volume *lv)
 {
-printf("seg->region_size=%u\n", first_seg(lv)->region_size);
-	return raid_rmeta_extents(lv->vg->cmd, lv->size / lv->vg->extent_size,
+	uint32_t r;
+	r = raid_rmeta_extents(lv->vg->cmd, lv->le_count,
 				  first_seg(lv)->region_size, lv->vg->extent_size);
+printf("%s %u seg->region_size=%u r=%u\n", __func__, __LINE__, first_seg(lv)->region_size, r);
+	return r;
 }
 
 /*
@@ -580,7 +583,7 @@ static int _alloc_rmeta_for_lv(struct logical_volume *data_lv,
 		return 0;
 	}
 
-	__init_region_size(data_lv);
+	__check_and_init_region_size(data_lv);
 
 	(void) dm_strncpy(base_name, data_lv->name, sizeof(base_name));
 	if ((p = strstr(base_name, "_mimage_")) ||
@@ -594,10 +597,9 @@ static int _alloc_rmeta_for_lv(struct logical_volume *data_lv,
 		return 0;
 	}
 
-printf("%s %u\n", __func__, __LINE__);
+printf("%s %u rmeta_extents=%u\n", __func__, __LINE__, __calc_rmeta_extents(data_lv));
 	if (!(ah = allocate_extents(data_lv->vg, NULL, seg->segtype, 0, 1, 0,
-				    seg->region_size,
-				    __calc_rmeta_extents(data_lv),
+				    seg->region_size, __calc_rmeta_extents(data_lv),
 				    &allocatable_pvs, data_lv->alloc, 0, NULL)))
 		return_0;
 
@@ -646,16 +648,6 @@ static int __alloc_rmeta_devs_for_rimage_devs(struct logical_volume *lv,
 	return 1;
 }
 
-
-static void __alloc_destroy(struct alloc_handle *ah_metadata, struct alloc_handle *ah_data)
-{
-	if (ah_metadata)
-		alloc_destroy(ah_metadata);
-
-	if (ah_data)
-		alloc_destroy(ah_data);
-}
-
 /*
  * Create @count new image component pairs for @lv and return them in
  * @new_meta_lvs and @new_data_lvs allocating space if @allocate is set.
@@ -671,7 +663,7 @@ static int _alloc_image_components(struct logical_volume *lv, int allocate,
 	uint32_t extents;
 	struct lv_segment *seg = first_seg(lv);
 	const struct segment_type *segtype;
-	struct alloc_handle *ah_metadata = NULL, *ah_data = NULL;
+	struct alloc_handle *ah = NULL;
 	struct dm_list *parallel_areas;
 	struct lv_list *lvl_array;
 
@@ -684,43 +676,32 @@ static int _alloc_image_components(struct logical_volume *lv, int allocate,
 	if (!(parallel_areas = build_parallel_areas_from_lv(lv, 0, 1)))
 		return_0;
 
-	__init_region_size(lv);
+	__check_and_init_region_size(lv);
 
 	if (seg_is_raid(seg))
 		segtype = seg->segtype;
-	/* HM FIXME: still needed? */
+	/* Needed for 'linear' to 'raid1' conversions */
 	else if (!(segtype = get_segtype_from_string(lv->vg->cmd, SEG_TYPE_NAME_RAID1)))
 		return_0;
 
-printf("%s %u segtype=%s seg->segtype=%s\n", __func__, __LINE__, segtype->name, seg->segtype->name);
 	/*
 	 * The number of extents is based on the RAID type.  For RAID1/10,
 	 * each of the rimages is the same size - 'le_count'.  However
 	 * for RAID 0/4/5/6, the stripes add together (NOT including the parity
 	 * devices) to equal 'le_count'.  Thus, when we are allocating
-	 * individual devies, we must specify how large the individual device
+	 * individual devices, we must specify how large the individual device
 	 * is along with the number we want ('count').
 	 */
 	if (allocate) {
-		if (new_meta_lvs) {
-			/* Allocate one extent for the rmeta device(s) */
-			if (!(ah_metadata = allocate_extents(lv->vg, NULL, segtype, 0, count, count,
-							     seg->region_size, __calc_rmeta_extents(lv), pvs,
-							     lv->alloc, 0, parallel_areas)))
-				return_0;
-		}
-
-		if (new_data_lvs) {
-			/* And the appropriate amount of extents for the rimage device(s) */
+		if (new_meta_lvs || new_data_lvs) {
+			/* Amount of extents for the rimage device(s) */
 			extents = (segtype_is_raid0(segtype) || segtype->parity_devs) ?
 				  lv->le_count / (seg->area_count - segtype->parity_devs) : lv->le_count;
 
-			if (!(ah_data = allocate_extents(lv->vg, NULL, segtype, 0, count, count,
-							 seg->region_size, extents, pvs,
-							 lv->alloc, 0, parallel_areas))) {
-				__alloc_destroy(ah_metadata, ah_data);
+			if (!(ah = allocate_extents(lv->vg, NULL, segtype, 0, count, count,
+						    seg->region_size, extents,
+						    pvs, lv->alloc, 0, parallel_areas)))
 				return_0;
-			}
 		}
 	}
 
@@ -733,32 +714,29 @@ printf("%s %u segtype=%s seg->segtype=%s\n", __func__, __LINE__, segtype->name, 
 		 */
 
 		/*
-		 * If the segtype is raid0, we may avoid allocating metadata
-		 * LV to accompany the data LV by not passing in @new_meta_lvs
+		 * If the segtype is raid0, we may avoid allocating metadata LVs
+		 * to accompany the data LVs by not passing in @new_meta_lvs
 		 */
 		if (new_meta_lvs) {
-			if (!(lvl_array[s + count].lv =
-			      _alloc_image_component(lv, NULL, ah_metadata, s + count, RAID_META))) {
-				__alloc_destroy(ah_metadata, ah_data);
-				return_0;
-			}
+			if (!(lvl_array[s + count].lv = _alloc_image_component(lv, NULL, ah, s + count, RAID_META)))
+				goto err;
 
 			dm_list_add(new_meta_lvs, &(lvl_array[s + count].list));
 		}
 
 		if (new_data_lvs) {
-			if (!(lvl_array[s].lv = _alloc_image_component(lv, NULL, ah_data, s, RAID_IMAGE))) {
-				__alloc_destroy(ah_data, ah_data);
-				return_0;
-			}
+			if (!(lvl_array[s].lv = _alloc_image_component(lv, NULL, ah, s, RAID_IMAGE)))
+				goto err;
 
 			dm_list_add(new_data_lvs, &(lvl_array[s].list));
 		}
 	}
 
-	__alloc_destroy(ah_metadata, ah_data);
-
+	alloc_destroy(ah);
 	return 1;
+err:
+	alloc_destroy(ah);
+	return_0;
 }
 
 /* Cleanly remove newly-allocated LVs that failed insertion attempt */
@@ -814,24 +792,54 @@ printf("%s %u\n", __func__, __LINE__);
 	return 1;
 }
 
+static unsigned __unsigned_str_len(unsigned idx)
+{
+	unsigned r = 0;
+
+	do  {
+		r++;
+	} while ((idx /= 10));
+
+	return r;
+}
+
+/* Insert RAID layer on top of @lv with suffix counter @idx */
+static int __insert_raid_layer_for_lv(struct logical_volume *lv, unsigned idx)
+{
+	uint64_t flags = RAID | LVM_READ | LVM_WRITE;
+	const char *type = "_rimage";
+	size_t len = strlen(type) + __unsigned_str_len(idx) + 1;
+	char *suffix;
+
+	if (!(suffix = dm_pool_alloc(lv->vg->vgmem, len))) {
+		log_error("Failed to allocate name suffix.");
+		return 0;
+	}
+
+	if (dm_snprintf(suffix, len, "%s%u", type, idx) < 0)
+		return_0;
+
+	if (!insert_layer_for_lv(lv->vg->cmd, lv, flags, suffix))
+		return 0;
+
+	seg_lv(first_seg(lv), 0)->status |= RAID_IMAGE | flags;
+
+	return 1;
+}
+
 /* Convert linear @lv to raid1 */
 static int __convert_linear_to_raid1(struct logical_volume *lv)
 {
-	struct lv_segment *seg = first_seg(lv);;
+	struct lv_segment *seg = first_seg(lv);
 	uint32_t region_size = seg->region_size;
 
-printf("%s %u\n", __func__, __LINE__);
-	seg->status |= RAID_IMAGE;
-	if (!insert_layer_for_lv(lv->vg->cmd, lv,
-				 RAID | LVM_READ | LVM_WRITE,
-				 "_rimage_0"))
-		return_0;
+	if (!__insert_raid_layer_for_lv(lv, 0))
+		return 0;
 
-	lv->status |= RAID;
 	seg = first_seg(lv);
 	seg_lv(seg, 0)->status |= RAID_IMAGE | LVM_READ | LVM_WRITE;
 	seg->region_size = region_size;
-	__init_region_size(lv);
+	__check_and_init_region_size(lv);
 
 	if (!(seg->segtype = get_segtype_from_string(lv->vg->cmd, SEG_TYPE_NAME_RAID1)))
 		return_0;
@@ -926,7 +934,11 @@ static int _raid_add_images(struct logical_volume *lv, struct segment_type *segt
 	/* Allocate the additional meta and data lvs requested */
 	if (!_alloc_image_components(lv, 1, pvs, count, &meta_lvs, &data_lvs))
 		return_0;
-
+{
+	struct lv_list *lvl;
+	dm_list_iterate_items(lvl, &meta_lvs)
+		printf("mlv->le_count=%u\n", lvl->lv->le_count);
+}
 	/*
 	 * If linear, we must correct data LV names.  They are off-by-one
 	 * because the linear volume hasn't taken its proper name of "_rimage_0"
@@ -942,7 +954,7 @@ static int _raid_add_images(struct logical_volume *lv, struct segment_type *segt
 
 	/* We are converting from linear to raid1 */
 	if (linear) {
-		if (!__convert_linear_to_raid1(lv))
+	    	if (!__convert_linear_to_raid1(lv))
 			return 0;
 
 		seg = first_seg(lv);
@@ -997,9 +1009,12 @@ printf("%s %d %u\n", __func__, __LINE__, s);
 printf("%s %d le_count=%u old_count=%u les=%u\n", __func__, __LINE__, lv->le_count, old_count, les);
 	}
 
+printf("%s %d %s\n", __func__, __LINE__, segtype ? segtype->name : NULL);
+printf("%s %d %s\n", __func__, __LINE__, seg->segtype ? seg->segtype->name : NULL);
 	/* HM FIXME: really needed? */
 	if (!linear && segtype)
 		seg->segtype = segtype;
+printf("%s %d %s\n", __func__, __LINE__, seg->segtype ? seg->segtype->name : NULL);
 
 #if 0
 	/* HM FIXME: change LV size for delta_disks plus/minus */
@@ -1880,13 +1895,16 @@ static int _convert_striped_to_raid0(struct logical_volume *lv,
 	struct lv_segment *seg = first_seg(lv), *seg1;
 	struct dm_list new_meta_lvs;
 	struct dm_list new_data_lvs;
+	struct dm_list data_lvs;
+	struct lv_list *lvl_array;
 	unsigned area_count = seg->area_count;
 
 	dm_list_init(&new_meta_lvs);
 	dm_list_init(&new_data_lvs);
+	dm_list_init(&data_lvs);
 
 	if (!seg_is_striped(seg) ||
-	     seg->area_count < 2)
+	     area_count < 2)
 		return 0;
 
 	/* Check for non-supported varying area_count on multi-segment striped LVs */
@@ -1900,13 +1918,29 @@ static int _convert_striped_to_raid0(struct logical_volume *lv,
 	if (!archive(lv->vg))
 		return_0;
 
+	seg->segtype = new_segtype;
+
+#if 1
+	if (!(lvl_array = dm_pool_alloc(lv->vg->vgmem, area_count * sizeof(*lvl_array))))
+		return_0;
+
+	for (a = 0; a < area_count; a++) {
+		struct logical_volume *slv = seg_lv(seg, a);
+
+		if (!__insert_raid_layer_for_lv(slv, a))
+			return 0;
+
+		lvl_array[a].lv = slv;
+		dm_list_add(&data_lvs, &lvl_array[a].list);
+	}
+#else
 	/* Allocate rimage components in order to be able to support multi-segment "striped" LVs */
 	if (!_alloc_image_components(lv, 0, NULL, area_count, NULL, &new_data_lvs)) {
 		log_error("Failed to allocate image components for raid0 LV %s.", lv->name);
 		return_0;
 	}
 
-	/* Image components are being allocated with LV_REBUILD preset and we don't need it for 'striped' */
+	/* Image components are being allocated with LV_REBUILD preset and we don't need it for raid0 */
 	for (a = 0; a < area_count; a++)
 		seg_lv(seg, a)->status &= LV_REBUILD;
 
@@ -1923,17 +1957,24 @@ static int _convert_striped_to_raid0(struct logical_volume *lv,
 		return_0;
 	}
 
+	seg = first_seg(lv); 
+#endif
+	seg->segtype = new_segtype;
+
+	/* Allocate a new metadata device for each of the raid0 stripe LVs */
+	if (alloc_metadata_devs &&
+#if 0
+	    !__alloc_rmeta_devs_for_rimage_devs(lv, &new_data_lvs, &new_meta_lvs))
+#else
+	    !__alloc_rmeta_devs_for_rimage_devs(lv, &data_lvs, &new_meta_lvs))
+#endif
+		return 0;
+#if 0
+	/* Add data lvs to the top-level lv */
+	if (!__add_sublvs_to_lv(lv, 1, 0, &new_data_lvs, 0))
+		return 0;
+#endif
 	if (alloc_metadata_devs) {
-		seg = first_seg(lv);
-
-		/* Allocate a new metadata device for each of the raid0 stripe LVs */
-		if (!__alloc_rmeta_devs_for_rimage_devs(lv, &new_data_lvs, &new_meta_lvs))
-			return 0;
-
-		/* Now that we allocated the rmeta_devs based on the new_data_lvs list , add to the top-level LV */
-		if (!__add_sublvs_to_lv(lv, 1, 0, &new_data_lvs, 0))
-			return 0;
-
 		/* Metadata LVs must be cleared before being added to the array */
 		log_debug_metadata("Clearing newly allocated metadata LVs");
 		if (!_clear_lvs(&new_meta_lvs)) {
@@ -1941,16 +1982,17 @@ static int _convert_striped_to_raid0(struct logical_volume *lv,
 			return 0;
 		}
 
+		/* Allocate meta_areas for new raid0 lv */
 		if (!__realloc_seg_areas(lv, seg, area_count, &seg->meta_areas))
 			return 0;
 
 		seg->area_count = area_count;
 
+		/* Add metadata lvs to the top-level lv */
 		if (!__add_sublvs_to_lv(lv, 1, 0, &new_meta_lvs, 0))
 			return_0;
 
-	} else if (!__add_sublvs_to_lv(lv, 1, 0, &new_data_lvs, 0))
-		return 0;
+	}
 
 	if (!lv_update_and_reload(lv))
 		return_0;
@@ -2090,6 +2132,8 @@ static int _convert_raid0_to_striped(struct logical_volume *lv,
 		log_error("Failed to retrieve raid0 segments from %s.", lv->name);
 		return_0;
 	}
+
+	seg->segtype = new_segtype;
 
 	if (!lv_update_and_reload(lv))
 		return_0;
@@ -2407,7 +2451,7 @@ static int _convert_raid_to_raid(struct logical_volume *lv,
 		new_count = seg->area_count + 1;
 
 		/* Make sure to set default region size on takeover from raid0 */
-		__init_region_size(lv);
+		__check_and_init_region_size(lv);
 
 		/*
 		 * In case of raid1 -> raid5, takeover will run a degraded 2 disk raid5 set
@@ -2496,7 +2540,6 @@ int lv_raid_reshape(struct logical_volume *lv,
 {
 	struct lv_segment *seg = first_seg(lv);
 
-printf("%s %u\n", __func__, __LINE__);
 	if (!new_segtype) {
 		log_error(INTERNAL_ERROR "New segtype not specified");
 		return 0;
@@ -2546,7 +2589,7 @@ printf("%s %u\n", __func__, __LINE__);
 
 	/* Striped -> RAID0 conversion */
 	if (seg_is_striped(seg) && segtype_is_raid0(new_segtype))
-		return _convert_striped_to_raid0(lv, new_segtype, 1 /* -> alloc_metadata_devs */);
+		return _convert_striped_to_raid0(lv, new_segtype, 0 /* -> alloc_metadata_devs */);
 		// return _convert_striped_to_raid0(lv, new_segtype, segtype_is_raid0_with_rmeta(new_segtype));
 
 	/* RAID0 <-> striped conversion */
