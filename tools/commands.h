@@ -796,7 +796,7 @@ xx(pvmove,
 
 xx(lvpoll,
    "Poll operation initiated before by either pvmove or lvconvert",
-   0,
+   ALL_VGS_IS_DEFAULT,
    "\t[-d|--debug]\n "
    "\t[-h|-?|--help]\n"
    "\t[-i|--interval seconds]\n"

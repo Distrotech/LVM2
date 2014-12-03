@@ -17,17 +17,17 @@
 
 static void pdlv_destroy(lvmpolld_lv_t *pdlv)
 {
-	if (pdlv->lvid)
-		dm_free((void *)pdlv->lvid);
+	dm_free((void *)pdlv->lvid);
+	dm_free((void *)pdlv->sinterval);
 
 	pthread_mutex_destroy(&pdlv->lock);
-
 	pthread_cond_destroy(&pdlv->cond_update);
 
 	dm_free((void *)pdlv);
 }
 
-lvmpolld_lv_t *pdlv_create(struct lvmpolld_state *ls, const char *lvid, enum poll_type type)
+lvmpolld_lv_t *pdlv_create(struct lvmpolld_state *ls, const char *lvid,
+			   enum poll_type type, const char *sinterval)
 {
 	lvmpolld_lv_t *pdlv = (lvmpolld_lv_t *) dm_malloc(sizeof(lvmpolld_lv_t));
 	if (!pdlv)
@@ -37,24 +37,32 @@ lvmpolld_lv_t *pdlv_create(struct lvmpolld_state *ls, const char *lvid, enum pol
 	if (!pdlv->lvid)
 		goto lvid_err;
 
+	pdlv->sinterval = NULL;
+	if (sinterval && !(pdlv->sinterval = dm_strdup(sinterval)))
+		goto sint_err;
+
 	if (pthread_mutex_init(&pdlv->lock, NULL))
 		goto mutex_err;
 
 	if (pthread_cond_init(&pdlv->cond_update, NULL))
 		goto cond_err;
 
+	pdlv->lvmcmd = 0;
 	pdlv->type = type;
-	pdlv->cmd_state.ret_code = 1;
+	pdlv->cmd_state.ret_code = 1; /* ??? */
 	pdlv->cmd_state.signal = 0;
 	pdlv->percent = DM_PERCENT_0; /* ??? */
 	pdlv->use_count = 1;
 	pdlv->ls = ls;
 	pdlv->polling_finished = 0;
+	pdlv->internal_error = 0;
 
 	return pdlv;
 cond_err:
 	pthread_mutex_destroy(&pdlv->lock);
 mutex_err:
+	dm_free((void *)pdlv->sinterval);
+sint_err:
 	dm_free((void *)pdlv->lvid);
 lvid_err:
 	dm_free((void *)pdlv);
@@ -127,4 +135,16 @@ dm_percent_t pdlv_get_percents(lvmpolld_lv_t *pdlv)
 	pthread_mutex_unlock(&pdlv->lock);
 
 	return p;
+}
+
+void pdlv_set_internal_error(lvmpolld_lv_t *pdlv, unsigned error)
+{
+	pthread_mutex_lock(&pdlv->lock);
+
+	pdlv->internal_error = error;
+	pdlv->polling_finished = 1;
+
+	pthread_cond_broadcast(&pdlv->cond_update);
+
+	pthread_mutex_unlock(&pdlv->lock);
 }

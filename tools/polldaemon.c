@@ -247,49 +247,20 @@ static void _poll_for_all_vgs(struct cmd_context *cmd,
  *   if it was requested.
  */
 static int _poll_daemon(struct cmd_context *cmd, const char *name,
-			const char *uuid, unsigned background, uint64_t lv_type,
-			struct poll_functions *poll_fns,
-			const char *progress_title)
+			const char *uuid, struct daemon_parms *parms)
 {
-	struct daemon_parms parms;
 	int daemon_mode = 0;
 	int ret = ECMD_PROCESSED;
-	sign_t interval_sign;
 
-	parms.aborting = arg_is_set(cmd, abort_ARG);
-	parms.background = background;
-	interval_sign = arg_sign_value(cmd, interval_ARG, SIGN_NONE);
-	if (interval_sign == SIGN_MINUS) {
-		log_error("Argument to --interval cannot be negative");
-		return EINVALID_CMD_LINE;
-	}
-	parms.interval = arg_uint_value(cmd, interval_ARG,
-					find_config_tree_int(cmd, activation_polling_interval_CFG, NULL));
-	parms.wait_before_testing = (interval_sign == SIGN_PLUS);
-	parms.progress_display = 1;
-	parms.progress_title = progress_title;
-	parms.lv_type = lv_type;
-	parms.poll_fns = poll_fns;
+	/* lv_type & PVMOVE - classical interpretation */
+	parms->lv_type &= PVMOVE;
 
-	if (parms.interval && !parms.aborting)
-		log_verbose("Checking progress %s waiting every %u seconds",
-			    (parms.wait_before_testing ? "after" : "before"),
-			    parms.interval);
-
-	if (!parms.interval) {
-		parms.progress_display = 0;
-
-		/* FIXME Disabled multiple-copy wait_event */
-		if (!name)
-			parms.interval = find_config_tree_int(cmd, activation_polling_interval_CFG, NULL);
-	}
-
-	if (parms.background) {
+	if (parms->background) {
 		daemon_mode = become_daemon(cmd, 0);
 		if (daemon_mode == 0)
 			return ECMD_PROCESSED;	    /* Parent */
 		else if (daemon_mode == 1)
-			parms.progress_display = 0; /* Child */
+			parms->progress_display = 0; /* Child */
 		/* FIXME Use wait_event (i.e. interval = 0) and */
 		/*       fork one daemon per copy? */
 	}
@@ -298,14 +269,14 @@ static int _poll_daemon(struct cmd_context *cmd, const char *name,
 	 * Process one specific task or all incomplete tasks?
 	 */
 	if (name) {
-		if (!_wait_for_single_lv(cmd, name, uuid, &parms)) {
+		if (!_wait_for_single_lv(cmd, name, uuid, parms)) {
 			stack;
 			ret = ECMD_FAILED;
 		}
 	} else
-		_poll_for_all_vgs(cmd, &parms, _poll_vg);
+		_poll_for_all_vgs(cmd, parms, _poll_vg);
 
-	if (parms.background && daemon_mode == 1) {
+	if (parms->background && daemon_mode == 1) {
 		/*
 		 * child was successfully forked:
 		 * background polldaemon must not return to the caller
@@ -353,7 +324,7 @@ static int _lvmpolld_poll_vg(struct cmd_context *cmd,
 		}
 
 		/* ret_code != 0 means we found the request polling operation and it's active */
-		if (lvmpolld(name, lvid.s, parms->background, parms->lv_type, parms->progress_title, 0))
+		if (lvmpolld(name, lvid.s, parms->background, parms->lv_type, parms->progress_title, 0, parms->interval))
 			parms->outstanding_count++;
 	}
 
@@ -365,23 +336,47 @@ int poll_daemon(struct cmd_context *cmd, const char *name, const char *uuid,
 		uint64_t lv_type, struct poll_functions *poll_fns,
 		const char *progress_title)
 {
-	struct daemon_parms parms = { 0 };
+	struct daemon_parms parms;
+	sign_t interval_sign;
+
+	parms.aborting = arg_is_set(cmd, abort_ARG);
+	parms.background = background;
+	interval_sign = arg_sign_value(cmd, interval_ARG, SIGN_NONE);
+	if (interval_sign == SIGN_MINUS) {
+		log_error("Argument to --interval cannot be negative");
+		return EINVALID_CMD_LINE;
+	}
+	parms.interval = arg_uint_value(cmd, interval_ARG,
+					find_config_tree_int(cmd, activation_polling_interval_CFG, NULL));
+	parms.wait_before_testing = (interval_sign == SIGN_PLUS);
+	parms.progress_display = 1;
+	parms.progress_title = progress_title;
+	parms.lv_type = lv_type;
+	parms.poll_fns = poll_fns;
+
+	if (parms.interval && !parms.aborting)
+		log_verbose("Checking progress %s waiting every %u seconds",
+			    (parms.wait_before_testing ? "after" : "before"),
+			    parms.interval);
+
+	if (!parms.interval) {
+		parms.progress_display = 0;
+
+		/* FIXME Disabled multiple-copy wait_event */
+		if (!name)
+			parms.interval = find_config_tree_int(cmd, activation_polling_interval_CFG, NULL);
+	}
 
 	if (lvmpolld_use())
 		if (name || uuid)
-			return lvmpolld(name, uuid, background, lv_type, progress_title, 1) ? ECMD_PROCESSED : ECMD_FAILED;
+			return lvmpolld(name, uuid, parms.background,
+					parms.lv_type, parms.progress_title,
+					!parms.background, parms.interval) ?
+						ECMD_PROCESSED : ECMD_FAILED;
 		else {
-			parms.poll_fns = poll_fns;
-			parms.background = background;
-			parms.lv_type = lv_type;
-			parms.progress_title = progress_title;
-
 			_poll_for_all_vgs(cmd, &parms, _lvmpolld_poll_vg);
-
 			return ECMD_PROCESSED;
 		}
 	else
-		/* lv_type & PVMOVE - classical interpretation */
-		return _poll_daemon(cmd, name, uuid, background, lv_type & PVMOVE,
-				    poll_fns, progress_title);
+		return _poll_daemon(cmd, name, uuid, &parms);
 }

@@ -23,7 +23,8 @@
 void lvmpolld_disconnect(void);
 
 int lvmpolld(const char *name, const char *uuid, unsigned background,
-	     uint64_t lv_type, const char *progress_title, unsigned stream_data);
+	     uint64_t lv_type, const char *progress_title, unsigned stream_data,
+	     unsigned interval);
 
 int lvmpolld_use(void);
 

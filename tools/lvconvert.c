@@ -749,7 +749,7 @@ int lvconvert_poll(struct cmd_context *cmd, struct logical_volume *lv,
 	if (lv_is_merging_origin(lv)) {
 		is_thin = seg_is_thin_volume(find_snapshot(lv));
 		return poll_daemon(cmd, lv_full_name, uuid, background,
-				   MERGING | is_thin ? THIN_VOLUME : SNAPSHOT,
+				   MERGING | (is_thin ? THIN_VOLUME : SNAPSHOT),
 				   is_thin ? &_lvconvert_thin_merge_fns : &_lvconvert_merge_fns,
 				   "Merged");
 	}

@@ -140,6 +140,7 @@ static int poll_vg(struct cmd_context *cmd, const char *poll_type,
 		if (wait_before_testing)
 			sleep_and_rescan_devices(lvp.parms);
 
+		parms.outstanding_count = 0;
 		/* replace with lookup by vgname ? */
 		ret = process_each_vg(cmd, 0, NULL, READ_FOR_UPDATE, &lvp, poll_lv_by_lvid);
 		log_verbose("finished process_each_vg(): %d", ret);
