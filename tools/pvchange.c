@@ -146,6 +146,7 @@ int pvchange(struct cmd_context *cmd, int argc, char **argv)
 	int done = 0;
 	int total = 0;
 
+	struct processing_handle *handle = NULL;
 	struct volume_group *vg;
 	const char *vg_name;
 	char *pv_name;
@@ -154,22 +155,34 @@ int pvchange(struct cmd_context *cmd, int argc, char **argv)
 	struct dm_list *vgnames;
 	struct dm_str_list *sll;
 
+	int r = ECMD_PROCESSED;
+
 	if (!(arg_count(cmd, allocatable_ARG) + arg_is_set(cmd, addtag_ARG) +
 	    arg_is_set(cmd, deltag_ARG) + arg_count(cmd, uuid_ARG) +
 	    arg_count(cmd, metadataignore_ARG))) {
 		log_error("Please give one or more of -x, -uuid, "
 			  "--addtag, --deltag or --metadataignore");
-		return EINVALID_CMD_LINE;
+		r = EINVALID_CMD_LINE;
+		goto out;
 	}
 
-	if (!(arg_count(cmd, all_ARG)) && !argc) {
+	if (!(handle = init_processing_handle(cmd)) ||
+	    (!handle->skip_selection && !init_selection_handle(cmd, handle))) {
+		log_error("Failed to initialize processing handle.");
+		r = ECMD_FAILED;
+		goto out;
+	}
+
+	if (!(arg_count(cmd, all_ARG)) && !argc && handle->skip_selection) {
 		log_error("Please give a physical volume path");
-		return EINVALID_CMD_LINE;
+		r = EINVALID_CMD_LINE;
+		goto out;
 	}
 
 	if (arg_count(cmd, all_ARG) && argc) {
 		log_error("Option --all and PhysicalVolumePath are exclusive.");
-		return EINVALID_CMD_LINE;
+		r = EINVALID_CMD_LINE;
+		goto out;
 	}
 
 	if (argc) {
@@ -213,7 +226,8 @@ int pvchange(struct cmd_context *cmd, int argc, char **argv)
 		 */
 		if (!lock_vol(cmd, VG_GLOBAL, LCK_VG_WRITE, NULL)) {
 			log_error("Unable to obtain global lock.");
-			return ECMD_FAILED;
+			r = ECMD_FAILED;
+			goto out;
 		}
 
 		/* populate lvmcache */
@@ -230,10 +244,12 @@ int pvchange(struct cmd_context *cmd, int argc, char **argv)
 					continue;
 				}
 				dm_list_iterate_items(pvl, &vg->pvs) {
-					total++;
-					done += _pvchange_single(cmd, vg,
-								 pvl->pv,
-								 NULL);
+					if (select_match_pv(cmd, handle, vg, pvl->pv)) {
+						total++;
+						done += _pvchange_single(cmd, vg,
+									 pvl->pv,
+									 NULL);
+					}
 				}
 				unlock_and_release_vg(cmd, vg, sll->str);
 			}
@@ -246,5 +262,10 @@ int pvchange(struct cmd_context *cmd, int argc, char **argv)
 				done, done == 1 ? "" : "s",
 				total - done, (total - done) == 1 ? "" : "s");
 
-	return (total == done) ? ECMD_PROCESSED : ECMD_FAILED;
+out:
+	destroy_processing_handle(cmd, handle);
+	if (r == ECMD_PROCESSED)
+		return (total == done) ? ECMD_PROCESSED : ECMD_FAILED;
+	else
+		return r;
 }
