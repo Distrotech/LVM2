@@ -192,6 +192,28 @@ int ignore_vg(struct volume_group *vg, const char *vg_name, int allow_inconsiste
 }
 
 /*
+ * This functiona updates the "selected" arg only if last item processed
+ * is selected so this implements the "whole structure is selected if
+ * at least one of its items is selected".
+ */
+static void _update_selection_result(struct processing_handle *handle, int *selected)
+{
+	if (!handle || !handle->selection_handle)
+		return;
+
+	if (handle->selection_handle->selected)
+		*selected = 1;
+}
+
+static void _set_final_selection_result(struct processing_handle *handle, int selected)
+{
+	if (!handle || !handle->selection_handle)
+		return;
+
+	handle->selection_handle->selected = selected;
+}
+
+/*
  * Metadata iteration functions
  */
 int process_each_segment_in_pv(struct cmd_context *cmd,
@@ -201,6 +223,7 @@ int process_each_segment_in_pv(struct cmd_context *cmd,
 			       process_single_pvseg_fn_t process_single_pvseg)
 {
 	struct pv_segment *pvseg;
+	int selected = 0;
 	int ret_max = ECMD_PROCESSED;
 	int ret;
 	struct pv_segment _free_pv_segment = { .pv = pv };
@@ -217,6 +240,7 @@ int process_each_segment_in_pv(struct cmd_context *cmd,
 				return_ECMD_FAILED;
 
 			ret = process_single_pvseg(cmd, vg, pvseg, handle);
+			_update_selection_result(handle, &selected);
 			if (ret != ECMD_PROCESSED)
 				stack;
 			if (ret > ret_max)
@@ -224,6 +248,8 @@ int process_each_segment_in_pv(struct cmd_context *cmd,
 		}
 	}
 
+	/* the PV is selected if at least one PV segment is selected */
+	_set_final_selection_result(handle, selected);
 	return ret_max;
 }
 
@@ -233,6 +259,7 @@ int process_each_segment_in_lv(struct cmd_context *cmd,
 			       process_single_seg_fn_t process_single_seg)
 {
 	struct lv_segment *seg;
+	int selected = 0;
 	int ret_max = ECMD_PROCESSED;
 	int ret;
 
@@ -241,12 +268,15 @@ int process_each_segment_in_lv(struct cmd_context *cmd,
 			return_ECMD_FAILED;
 
 		ret = process_single_seg(cmd, seg, handle);
+		_update_selection_result(handle, &selected);
 		if (ret != ECMD_PROCESSED)
 			stack;
 		if (ret > ret_max)
 			ret_max = ret;
 	}
 
+	/* the LV is selected if at least one LV segment is selected */
+	_set_final_selection_result(handle, selected);
 	return ret_max;
 }
 
@@ -1621,6 +1651,7 @@ static int _process_vgnameid_list(struct cmd_context *cmd, uint32_t flags,
 	struct vgnameid_list *vgnl;
 	const char *vg_name;
 	const char *vg_uuid;
+	int selected = 0;
 	int ret_max = ECMD_PROCESSED;
 	int ret;
 	int skip;
@@ -1658,6 +1689,7 @@ static int _process_vgnameid_list(struct cmd_context *cmd, uint32_t flags,
 		    (!dm_list_empty(arg_tags) && str_list_match_list(arg_tags, &vg->tags, NULL))) &&
 		    select_match_vg(cmd, handle, vg)) {
 			ret = process_single_vg(cmd, vg_name, vg, handle);
+			_update_selection_result(handle, &selected);
 			if (ret != ECMD_PROCESSED)
 				stack;
 			if (ret > ret_max)
@@ -1670,6 +1702,8 @@ static int _process_vgnameid_list(struct cmd_context *cmd, uint32_t flags,
 			unlock_and_release_vg(cmd, vg, vg_name);
 	}
 
+	/* the VG is selected if at least one LV is selected */
+	_set_final_selection_result(handle, selected);
 	return ret_max;
 }
 
@@ -1784,6 +1818,7 @@ int process_each_lv_in_vg(struct cmd_context *cmd, struct volume_group *vg,
 	unsigned lvargs_supplied = 0;
 	struct lv_list *lvl;
 	struct dm_str_list *sl;
+	int selected = 0;
 
 	if (!vg_check_status(vg, EXPORTED_VG)) {
 		ret_max = ECMD_FAILED;
@@ -1879,6 +1914,8 @@ int process_each_lv_in_vg(struct cmd_context *cmd, struct volume_group *vg,
 		log_very_verbose("Processing LV %s in VG %s.", lvl->lv->name, vg->name);
 
 		ret = process_single_lv(cmd, lvl->lv, handle);
+		if (handle_supplied)
+			_update_selection_result(handle, &selected);
 		if (ret != ECMD_PROCESSED)
 			stack;
 		if (ret > ret_max)
@@ -1903,6 +1940,8 @@ int process_each_lv_in_vg(struct cmd_context *cmd, struct volume_group *vg,
 out:
 	if (!handle_supplied)
 		destroy_processing_handle(cmd, handle);
+	else
+		_set_final_selection_result(handle, selected);
 	return ret_max;
 }
 
@@ -2534,6 +2573,7 @@ int process_each_pv_in_vg(struct cmd_context *cmd, struct volume_group *vg,
 			  struct processing_handle *handle,
 			  process_single_pv_fn_t process_single_pv)
 {
+	int selected = 0;
 	int ret_max = ECMD_PROCESSED;
 	int ret;
 	struct pv_list *pvl;
@@ -2543,12 +2583,14 @@ int process_each_pv_in_vg(struct cmd_context *cmd, struct volume_group *vg,
 			return_ECMD_FAILED;
 
 		ret = process_single_pv(cmd, vg, pvl->pv, handle);
+		_update_selection_result(handle, &selected);
 		if (ret != ECMD_PROCESSED)
 			stack;
 		if (ret > ret_max)
 			ret_max = ret;
 	}
 
+	_set_final_selection_result(handle, selected);
 	return ret_max;
 }
 
