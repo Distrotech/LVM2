@@ -1116,7 +1116,7 @@ int lvchange(struct cmd_context *cmd, int argc, char **argv)
 	if (!update || !update_partial_unsafe)
 		cmd->handles_missing_pvs = 1;
 
-	if (!argc) {
+	if (!argc && !arg_is_set(cmd, select_ARG)) {
 		log_error("Please give logical volume path(s)");
 		return EINVALID_CMD_LINE;
 	}
