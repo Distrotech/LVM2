@@ -24,8 +24,7 @@ enum poll_type {
 	CONVERT,
 	MERGE,
 	MERGE_THIN,
-
-	POLL_TYPE_MAX	/* keep it at tail */
+	POLL_TYPE_MAX
 };
 
 typedef struct {
@@ -34,40 +33,113 @@ typedef struct {
 } lvmpolld_cmd_stat_t;
 
 typedef struct {
-	struct lvmpolld_state *ls;
-
-	enum poll_type type;
-	/* full lvid vguuid+lvuuid. may be also vguuid+zeroes -> PVMOVE */
-	const char *lvid;
+	/*
+	 * accessing following vars doesn't
+	 * require lvmpolld_lv_t lock
+	 */
+	struct lvmpolld_state *const ls;
+	const enum poll_type type;
+	/* full lvid vguuid+lvuuid. may also be vguuid+zeroes -> PVMOVE */
+	const char *const lvid;
 	/* either fullname vg/lv or vgname only */
-	const char *name;
+	/* const char *name; */
+	const unsigned interval;
+	const char *const sinterval;
 
 	/* pid of polled lvm command */
 	pid_t lvmcmd;
 	pthread_t tid;
-	/* accesed from client threads and polling thread */
+
+	/*
+	 * cond_update singnals update of one
+	 * or more variable in following block
+	 */
 	pthread_mutex_t lock;
-	/* cond singnaling update of: cmd state, percent or pollin_finished */
 	pthread_cond_t cond_update;
 
+	/* block of shared variables */
+	unsigned int use_count;
 	lvmpolld_cmd_stat_t cmd_state;
 	dm_percent_t percent;
-	unsigned polling_finished:1;
-
-	unsigned interval;
-	const char *sinterval;
-	unsigned int use_count;
+	unsigned polling_finished:1; /* no more update */
+	unsigned internal_error:1; /* unrecoverable error in lvmpolld */
 
 	/* FIXME: read from lvmpolld configuration */
 	unsigned debug:1;
 	unsigned verbose:1;
-
-	/* unrecoverable error in fork_and_poll code */
-	unsigned internal_error:1;
 } lvmpolld_lv_t;
 
+static inline void pdlv_lock(lvmpolld_lv_t *pdlv)
+{
+	pthread_mutex_lock(&pdlv->lock);
+}
+
+static inline void pdlv_unlock(lvmpolld_lv_t *pdlv)
+{
+	pthread_mutex_unlock(&pdlv->lock);
+}
+
+static inline int pdlv_locked_await_update(lvmpolld_lv_t *pdlv)
+{
+	return !pthread_cond_wait(&pdlv->cond_update, &pdlv->lock);
+}
+
+static inline int pdlv_is_type(const lvmpolld_lv_t *pdlv, enum poll_type type)
+{
+	return pdlv->type == type;
+}
+
+static inline void pdlv_set_debug(lvmpolld_lv_t *pdlv, unsigned debug)
+{
+	pdlv->debug = debug;
+}
+
+/* FIXME: --verbose is countable parameter in LVM2 */
+static inline void pdlv_set_verbose(lvmpolld_lv_t *pdlv, unsigned verbose)
+{
+	pdlv->verbose = verbose;
+}
+
+static inline int pdlv_locked_polling_finished(const lvmpolld_lv_t *pdlv)
+{
+	return pdlv->polling_finished;
+}
+
+static inline dm_percent_t pdlv_locked_get_percent(const lvmpolld_lv_t *pdlv)
+{
+	return pdlv->percent;
+}
+
+static inline lvmpolld_cmd_stat_t pdlv_locked_get_cmd_state(const lvmpolld_lv_t *pdlv)
+{
+	return pdlv->cmd_state;
+}
+
+static inline unsigned pdlv_locked_get_internal_error(const lvmpolld_lv_t *pdlv)
+{
+	return pdlv->internal_error;
+}
+
+static inline void pdlv_set_cmd_pid(lvmpolld_lv_t *pdlv, pid_t pid)
+{
+	pdlv->lvmcmd = pid;
+}
+
+static inline pid_t pdlv_get_cmd_pid(const lvmpolld_lv_t *pdlv)
+{
+	return pdlv->lvmcmd;
+}
+
+static inline unsigned pdlv_get_interval(const lvmpolld_lv_t *pdlv)
+{
+	return pdlv->interval;
+}
+
+
 /* pdlv structure has use_count == 1 after create */
-lvmpolld_lv_t *pdlv_create(struct lvmpolld_state *ls, const char *lvid, const enum poll_type type, const char *sinterval);
+lvmpolld_lv_t *pdlv_create(struct lvmpolld_state *ls, const char *lvid,
+			   const enum poll_type type, const char *sinterval,
+			   unsigned interval);
 
 /* use count must not reach 0 when structure is inside hash table */
 void pdlv_put(lvmpolld_lv_t *pdlv);
@@ -75,7 +147,7 @@ void pdlv_get(lvmpolld_lv_t *pdlv);
 
 void pdlv_set_percents(lvmpolld_lv_t *pdlv, dm_percent_t percent);
 
-void pdlv_set_cmd_state(lvmpolld_lv_t *pdlv, lvmpolld_cmd_stat_t *cmd_state);
+void pdlv_set_cmd_state(lvmpolld_lv_t *pdlv, const lvmpolld_cmd_stat_t *cmd_state);
 
 dm_percent_t pdlv_get_percents(lvmpolld_lv_t *pdlv);
 
