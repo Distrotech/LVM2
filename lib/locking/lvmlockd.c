@@ -1957,3 +1957,32 @@ int lockd_free_lv(struct cmd_context *cmd, struct volume_group *vg,
 	}
 }
 
+int lockd_update_local(struct cmd_context *cmd)
+{
+	daemon_reply reply;
+	int result;
+	int ret;
+
+	if (!_lvmlockd_active)
+		return 1;
+	if (!lvmlockd_connected())
+		return 0;
+
+	reply = _lockd_send("update_local",
+			"pid = %d", getpid(),
+			NULL);
+
+	if (!_lockd_result(reply, &result, NULL)) {
+		ret = 0;
+	} else {
+		ret = (result < 0) ? 0 : 1;
+	}
+	
+	if (!ret) {
+		log_error("lockd_update_local lvmlockd result %d", result);
+	}
+
+	daemon_reply_destroy(reply);
+
+	return ret;
+}
