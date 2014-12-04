@@ -988,7 +988,7 @@ xx(vgchange,
    metadataprofile_ARG, monitor_ARG, noudevsync_ARG, metadatacopies_ARG,
    vgmetadatacopies_ARG, partial_ARG, physicalextentsize_ARG, poll_ARG,
    refresh_ARG, resizeable_ARG, resizable_ARG, select_ARG, sysinit_ARG,
-   systemid_ARG, test_ARG, uuid_ARG, lockstart_ARG, lockstop_ARG, locktype_ARG)
+   systemid_ARG, test_ARG, uuid_ARG, lockstart_ARG, lockstop_ARG, locktype_ARG, lockopt_ARG)
 
 xx(vgck,
    "Check the consistency of volume group(s)",
