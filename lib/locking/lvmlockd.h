@@ -103,6 +103,7 @@ void lockd_free_vg_final(struct cmd_context *cmd, struct volume_group *vg);
 
 int lockd_start_vg(struct cmd_context *cmd, struct volume_group *vg);
 int lockd_stop_vg(struct cmd_context *cmd, struct volume_group *vg);
+int lockd_start_wait(struct cmd_context *cmd);
 
 /* locking */
 
@@ -144,6 +145,7 @@ int lockd_init_lv_args(struct cmd_context *cmd, struct volume_group *vg,
 
 #define lockd_start_vg(cmd, vg) (1)
 #define lockd_stop_vg(cmd, vg)  (1)
+#define lockd_start_wait(cmd) (1)
 
 #define lockd_gl_create(cmd, def_mode, vg_lock_type) (1)
 #define lockd_gl(cmd, def_mode, flags) (1)
