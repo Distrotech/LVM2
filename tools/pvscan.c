@@ -314,6 +314,22 @@ out:
 	sync_local_dev_names(cmd);
 	unlock_vg(cmd, VG_GLOBAL);
 
+	/*
+	 * lvmlockd wants to know about any new local vgs that
+	 * have been added to lvmetad.  If not done automatically
+	 * here, then an explicit vgchange --lock-start would be
+	 * needed to cause lvmlockd to update its list of local vgs
+	 * from lvmetad.  We could possibly optimize this by only
+	 * calling this if a new vg has been found.
+	 *
+	 * This will do nothing during startup because lvmlockd is
+	 * not yet running.  lvmlockd will get an initial list of
+	 * local vgs from lvmetad when it's started.  This call is
+	 * for the case when lvmetad/lvmlockd are already running
+	 * and a new local vg appears to the system.
+	 */
+	lockd_update_local(cmd);
+
 	return ret;
 }
 
