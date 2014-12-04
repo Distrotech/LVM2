@@ -1745,6 +1745,47 @@ static int _free_lv_sanlock(struct cmd_context *cmd, struct volume_group *vg,
 }
 
 /*
+ * The lock managers have max name lengths lower than lvm;
+ * 64 for dlm and 48 for sanlock.  Check for name collisions
+ * within this limit.  (It's much easier to check for this here
+ * where the vg metadata is available than in lvmlockd.)
+ */
+
+#define MAX_LVNAME_SANLOCK 48
+#define MAX_LVNAME_DLM     64
+
+int lockd_init_lv_args(struct cmd_context *cmd, struct volume_group *vg,
+		       const char *lv_name, const char *lock_type, const char **lock_args)
+{
+	struct lv_list *lvl;
+	int maxname;
+
+	switch (lock_type_to_num(vg->lock_type)) {
+	case LOCK_TYPE_SANLOCK:
+		maxname = MAX_LVNAME_SANLOCK;
+		break;
+	case LOCK_TYPE_DLM:
+		maxname = MAX_LVNAME_DLM;
+		break;
+	default:
+		return 1;
+	}
+
+	dm_list_iterate_items(lvl, &vg->lvs) {
+		if (!strncmp(lvl->lv->name, lv_name, maxname)) {
+			log_error("LV name %s matches existing LV %s within %s character limit %d",
+				  lv_name, lvl->lv->name, vg->lock_type, maxname);
+			return 0;
+		}
+	}
+
+	/* sanlock is the only lock type that sets per-LV lock_args. */
+	if (!strcmp(lock_type, "sanlock"))
+		return _init_lv_sanlock(cmd, vg, lv_name, lock_args);
+	return 1;
+}
+
+/*
  * lvcreate
  *
  * lvcreate sets lp lock_type to the vg lock_type, so any lv
@@ -1853,10 +1894,7 @@ int lockd_init_lv(struct cmd_context *cmd, struct volume_group *vg,
 		lv_name = lp->lv_name;
 	}
 
-	if (lock_type_num == LOCK_TYPE_SANLOCK)
-		return _init_lv_sanlock(cmd, vg, lv_name, &lp->lock_args);
-
-	return 1;
+	return lockd_init_lv_args(cmd, vg, lv_name, lp->lock_type, &lp->lock_args);
 }
 
 /* lvremove */
