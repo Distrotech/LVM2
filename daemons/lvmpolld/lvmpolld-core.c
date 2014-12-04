@@ -624,7 +624,7 @@ static response poll_init(client_handle h, lvmpolld_state_t *ls, request req, en
 		}
 	 } else {
 		sinterval = daemon_request_str(req, "interval", NULL);
-		if (!sinterval || ((*sinterval == '-') || sscanf(sinterval, "%u", &interval) != 1)) {
+		if (!sinterval || strpbrk(sinterval, "-") || sscanf(sinterval, "%u", &interval) != 1) {
 			unlock_lvid_to_pdlv(ls);
 			return reply_fail("illegal 'interval' parameter");
 		}
