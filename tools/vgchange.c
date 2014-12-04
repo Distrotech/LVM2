@@ -776,8 +776,66 @@ static int _vgchange_system_id(struct cmd_context *cmd, struct volume_group *vg)
 	return 1;
 }
 
+static int _passes_lock_start_filter(struct cmd_context *cmd,
+				     struct volume_group *vg,
+				     const int cfg_id)
+{
+	const struct dm_config_node *cn;
+	const struct dm_config_value *cv;
+	const char *str;
+
+	/* undefined list means no restrictions, all vg names pass */
+
+	cn = find_config_tree_node(cmd, cfg_id, NULL);
+	if (!cn)
+		return 1;
+
+	/* with a defined list, the vg name must be included to pass */
+
+	for (cv = cn->v; cv; cv = cv->next) {
+		if (cv->type == DM_CFG_EMPTY_ARRAY)
+			break;
+		if (cv->type != DM_CFG_STRING) {
+			log_error("Ignoring invalid string in lock_start list");
+			continue;
+		}
+		str = cv->v.str;
+		if (!*str) {
+			log_error("Ignoring empty string in config file");
+			continue;
+		}
+
+		/* ignoring tags for now */
+
+		if (!strcmp(str, vg->name))
+			return 1;
+	}
+
+	return 0;
+}
+
 static int _vgchange_lock_start(struct cmd_context *cmd, struct volume_group *vg)
 {
+	const char *start_opt = arg_str_value(cmd, lockopt_ARG, NULL);
+	int auto_opt = 0;
+
+	if (!start_opt || arg_is_set(cmd, force_ARG))
+		goto do_start;
+
+	if (!strcmp(start_opt, "auto") || !strcmp(start_opt, "autowait"))
+		auto_opt = 1;
+
+	if (!_passes_lock_start_filter(cmd, vg, activation_lock_start_list_CFG)) {
+		log_verbose("Not starting %s since it does not pass lock_start_list", vg->name);
+		return 1;
+	}
+
+	if (auto_opt && !_passes_lock_start_filter(cmd, vg, activation_auto_lock_start_list_CFG)) {
+		log_verbose("Not starting %s since it does not pass auto_lock_start_list", vg->name);
+		return 1;
+	}
+
+do_start:
 	return lockd_start_vg(cmd, vg);
 }
 
@@ -983,6 +1041,8 @@ static int lockd_vgchange(struct cmd_context *cmd, int argc, char **argv)
 
 int vgchange(struct cmd_context *cmd, int argc, char **argv)
 {
+	int ret;
+
 	int noupdate =
 		arg_count(cmd, activate_ARG) ||
 		arg_count(cmd, lockstart_ARG) ||
@@ -1109,6 +1169,16 @@ int vgchange(struct cmd_context *cmd, int argc, char **argv)
 	if (!lockd_vgchange(cmd, argc, argv))
 		return_ECMD_FAILED;
 
-	return process_each_vg(cmd, argc, argv, update ? READ_FOR_UPDATE : 0,
-			       NULL, &vgchange_single);
+	ret = process_each_vg(cmd, argc, argv, update ? READ_FOR_UPDATE : 0,
+			      NULL, &vgchange_single);
+
+	/* Wait for lock-start ops that were initiated in vgchange_lockstart. */
+
+	if (arg_is_set(cmd, lockstart_ARG) && arg_is_set(cmd, lockopt_ARG)) {
+		const char *start_opt = arg_str_value(cmd, lockopt_ARG, NULL);
+		if (!strcmp(start_opt, "wait") || !strcmp(start_opt, "autowait"))
+			lockd_start_wait(cmd);
+	}
+
+	return ret;
 }

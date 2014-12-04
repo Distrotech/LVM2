@@ -887,6 +887,40 @@ out:
 	return ret;
 }
 
+int lockd_start_wait(struct cmd_context *cmd)
+{
+	daemon_reply reply;
+	int result;
+	int ret;
+
+	if (!_lvmlockd_active)
+		return 1;
+	if (!lvmlockd_connected())
+		return 0;
+
+	reply = _lockd_send("start_wait",
+			"pid = %d", getpid(),
+			NULL);
+
+	if (!_lockd_result(reply, &result, NULL)) {
+		ret = 0;
+	} else {
+		ret = (result < 0) ? 0 : 1;
+	}
+
+	if (!ret)
+		log_error("Locking start failed");
+
+	/*
+	 * Get a list of vgs that started so we can
+	 * better report what worked and what didn't?
+	 */
+
+	daemon_reply_destroy(reply);
+
+	return ret;
+}
+
 static int _mode_num(const char *mode)
 {
 	if (!strcmp(mode, "na"))
