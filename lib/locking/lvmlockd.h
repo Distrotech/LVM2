@@ -126,6 +126,9 @@ int lockd_init_lv(struct cmd_context *cmd, struct volume_group *vg,
 int lockd_free_lv(struct cmd_context *cmd, struct volume_group *vg,
 		  const char *lv_name, const char *lock_args);
 
+int lockd_init_lv_args(struct cmd_context *cmd, struct volume_group *vg,
+		       const char *lv_name, const char *lock_type, const char **lock_args);
+
 #else /* LVMLOCKD_SUPPORT */
 
 #define lvmlockd_init(cmd)          do { } while (0)
@@ -153,6 +156,7 @@ int lockd_free_lv(struct cmd_context *cmd, struct volume_group *vg,
 
 #define lockd_init_lv(cmd, vg, lp) (1)
 #define lockd_free_lv(cmd, vg, lv_name, lock_args) (1)
+#define lockd_init_lv_args(cmd, vg, lv_name, lock_type, lock_args) (1)
 
 #endif /* LVMLOCKD_SUPPORT */
 
