@@ -313,8 +313,17 @@ static int _vgchange_clustered(struct cmd_context *cmd,
 			       struct volume_group *vg)
 {
 	int clustered = arg_int_value(cmd, clustered_ARG, 0);
+	const char *lock_type = arg_str_value(cmd, locktype_ARG, NULL);
 	struct lv_list *lvl;
 	struct lv_segment *mirror_seg;
+
+	if (find_config_tree_bool(cmd, global_use_lvmlockd_CFG, NULL)) {
+		log_error("lvmlockd requires using the vgchange --lock-type option.");
+		return 0;
+	}
+
+	if (lock_type && !strcmp(lock_type, "clvm"))
+		clustered = 1;
 
 	if (clustered && vg_is_clustered(vg)) {
 		if (vg->system_id && *vg->system_id)
@@ -511,6 +520,197 @@ static int _vgchange_profile(struct cmd_context *cmd,
 	return 1;
 }
 
+static int _vgchange_locktype(struct cmd_context *cmd,
+			      struct volume_group *vg)
+{
+	const char *lock_type = arg_str_value(cmd, locktype_ARG, NULL);
+	const char *lock_args = NULL;
+	struct lv_list *lvl;
+	struct logical_volume *lv;
+
+	/*
+	 * This is a special/forced exception to change the lock type to none.
+	 * It's needed for recovery cases and skips the normal steps of undoing
+	 * the current lock type.  It's a way to forcibly get access to a VG
+	 * when the normal locking mechanisms are not working.
+	 *
+	 * It ignores: the current lvm locking config, lvmlockd, the state of
+	 * the vg on other hosts, etc.  It is meant to just remove any locking
+	 * related metadata from the VG (cluster/lock_type flags, lock_type,
+	 * lock_args).
+	 *
+	 * This can be necessary when manually recovering from certain failures.
+	 * e.g. when a pv is lost containing the lvmlock lv (holding sanlock
+	 * leases), the vg lock_type needs to be changed to none, and then
+	 * back to sanlock, which recreates the lvmlock lv and leases.
+	 */
+	if (!strcmp(lock_type, "none") && arg_is_set(cmd, force_ARG)) {
+		if (yes_no_prompt("Forcibly change VG %s lock type to none? [y/n]: ", vg->name) == 'n') {
+			log_error("VG lock type not changed.");
+			return 0;
+		}
+
+		vg->status &= ~CLUSTERED;
+		vg->lock_type = "none";
+		vg->lock_args = NULL;
+
+		dm_list_iterate_items(lvl, &vg->lvs) {
+			lvl->lv->lock_type = "none";
+			lvl->lv->lock_args = NULL;
+		}
+
+		return 1;
+	}
+
+	if (!strcmp(vg->lock_type, lock_type)) {
+		log_warn("New lock_type %s matches the current lock_type %s.",
+			 lock_type, vg->lock_type);
+		return 1;
+	}
+
+	/*
+	 * When lvm is currently using clvm, this function is just an alternative
+	 * to vgchange -c{y,n}, and can:
+	 * - change none to clvm
+	 * - change clvm to none
+	 * - it CANNOT change to or from a lockd type
+	 */
+	if (locking_is_clustered()) {
+		if (is_lockd_type(lock_type)) {
+			log_error("Changing to lock type %s requires lvmlockd.", lock_type);
+			return 0;
+		}
+
+		return _vgchange_clustered(cmd, vg);
+	}
+
+	/*
+	 * When lvm is currently using lvmlockd, this function can:
+	 * - change none to lockd type
+	 * - change none to clvm (with warning about not being able to use it)
+	 * - change lockd type to none
+	 * - change lockd type to clvm (with warning about not being able to use it)
+	 * - change clvm to none
+	 * - change clvm to lockd type
+	 */
+
+	if (lvs_in_vg_activated(vg)) {
+		log_error("Changing VG %s lock type not allowed with active LVs",
+			  vg->name);
+		return 0;
+	}
+
+	/*
+	 * Check if there are any LV types in the VG that cannot be handled
+	 * with the new lock type.  Remove this once all LV types can be
+	 * handled.
+	 */
+	if (is_lockd_type(lock_type)) {
+		dm_list_iterate_items(lvl, &vg->lvs) {
+			lv = lvl->lv;
+
+			if ((lv->status & SNAPSHOT) || lv_is_cow(lv)) {
+				log_error("Changing to lock type %s is not allowed with cow snapshot LV %s/%s",
+					  lock_type, vg->name, lv->name);
+				return 0;
+			}
+		}
+	}
+
+	/* none to clvm */
+	if (!strcmp(vg->lock_type, "none") && !strcmp(lock_type, "clvm")) {
+		log_warn("New clvm lock type will not be usable with lvmlockd.");
+		vg->status |= CLUSTERED;
+		vg->lock_type = "clvm"; /* this is optional */
+		return 1;
+	}
+
+	/* clvm to none */
+	if (!strcmp(vg->lock_type, "clvm") && !strcmp(lock_type, "none")) {
+		vg->status &= ~CLUSTERED;
+		vg->lock_type = "none";
+		return 1;
+	}
+
+	/* clvm to ..., first undo clvm */
+	if (!strcmp(vg->lock_type, "clvm")) {
+		vg->status &= ~CLUSTERED;
+	}
+
+	/*
+	 * lockd type to ..., first undo lockd type
+	 *
+	 * To allow this, we need to do:
+	 * lockd_stop_vg();
+	 * lockd_free_vg_before();
+	 * lockd_free_vg_after();
+	 */
+	if (is_lockd_type(vg->lock_type)) {
+		/* TODO */
+		log_error("Changing VG %s from lock type %s not yet allowed.",
+			  vg->name, vg->lock_type);
+		return 0;
+	}
+
+	/* ... to clvm */
+	if (!strcmp(lock_type, "clvm")) {
+		log_warn("New clvm lock type will not be usable with lvmlockd.");
+		vg->status |= CLUSTERED;
+		vg->lock_type = "clvm"; /* this is optional */
+		vg->system_id = NULL;
+		return 1;
+	}
+
+	/*
+	 * ... to lockd type.  These are the same steps vgcreate uses.
+	 */
+	if (is_lockd_type(lock_type)) {
+		if (!vg_set_lock_type(vg, lock_type))
+			return 0;
+
+		if (!lockd_init_vg(cmd, vg)) {
+			log_error("Failed to initialize lock args for lock type %s", lock_type);
+			return 0;
+		}
+
+		vg->system_id = NULL;
+
+		/* These are the same steps lvcreate uses within a lockd type VG. */
+
+		dm_list_iterate_items(lvl, &vg->lvs) {
+			lv = lvl->lv;
+
+			/* Some LV types have no lock. */
+			if (!lv_is_visible(lv) ||
+			    lv_is_thin_volume(lv) ||
+			    lv_is_thin_pool_data(lv) ||
+			    lv_is_thin_pool_metadata(lv) ||
+			    lv_is_pool_metadata_spare(lv) ||
+			    lv_is_cache_pool(lv) ||
+			    lv_is_cache_pool_data(lv) ||
+			    lv_is_cache_pool_metadata(lv))
+				continue;
+
+			if (!lockd_init_lv_args(cmd, vg, lv->name, lock_type, &lock_args)) {
+				log_error("Failed to init %s lock args LV %s/%s",
+					  lock_type, vg->name, lv->name);
+				return 0;
+			}
+
+			lv->lock_type = dm_pool_strdup(cmd->mem, lock_type);
+			lv->lock_args = lock_args;
+		}
+
+		if (!lockd_start_vg(cmd, vg))
+			log_error("Failed to start locking for VG %s", vg->name);
+
+		return 1;
+	}
+
+	log_error("Unknown lock type");
+	return 0;
+}
+
 /*
  * This function will not be called unless the local host is allowed to use the
  * VG.  Either the VG has no system_id, or the VG and host have matching
@@ -626,6 +826,7 @@ static int vgchange_single(struct cmd_context *cmd, const char *vg_name,
 		{ metadataprofile_ARG, &_vgchange_profile },
 		{ profile_ARG, &_vgchange_profile },
 		{ detachprofile_ARG, &_vgchange_profile },
+		{ locktype_ARG, &_vgchange_locktype },
 		{ systemid_ARG, &_vgchange_system_id },
 	};
 
@@ -819,6 +1020,7 @@ int vgchange(struct cmd_context *cmd, int argc, char **argv)
 		arg_count(cmd, clustered_ARG) ||
 		arg_count(cmd, alloc_ARG) ||
 		arg_count(cmd, vgmetadatacopies_ARG) ||
+		arg_count(cmd, locktype_ARG) ||
 		arg_count(cmd, systemid_ARG);
 
 	int update = update_partial_safe || update_partial_unsafe;
