@@ -1739,6 +1739,15 @@ static int _free_lv_sanlock(struct cmd_context *cmd, struct volume_group *vg,
 	return ret;
 }
 
+int lockd_init_lv_args(struct cmd_context *cmd, struct volume_group *vg,
+		       const char *lv_name, const char *lock_type, const char **lock_args)
+{
+	/* sanlock is the only lock type that sets per-LV lock_args. */
+	if (!strcmp(lock_type, "sanlock"))
+		return _init_lv_sanlock(cmd, vg, lv_name, lock_args);
+	return 1;
+}
+
 /*
  * lvcreate
  *
@@ -1838,10 +1847,7 @@ int lockd_init_lv(struct cmd_context *cmd, struct volume_group *vg,
 		lv_name = lp->lv_name;
 	}
 
-	if (lock_type_num == LOCK_TYPE_SANLOCK)
-		return _init_lv_sanlock(cmd, vg, lv_name, &lp->lock_args);
-
-	return 1;
+	return lockd_init_lv_args(cmd, vg, lv_name, lp->lock_type, &lp->lock_args);
 }
 
 /* lvremove */
