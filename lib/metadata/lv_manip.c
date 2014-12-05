@@ -4016,7 +4016,50 @@ int lv_rename_update(struct cmd_context *cmd, struct logical_volume *lv,
 int lv_rename(struct cmd_context *cmd, struct logical_volume *lv,
 	      const char *new_name)
 {
-	return lv_rename_update(cmd, lv, new_name, 1);
+	struct volume_group *vg;
+	const char *old_name;
+	const char *old_args;
+	const char *new_args;
+	int is_active = 0;
+
+	if (!is_lockd_type(lv->lock_type))
+		return lv_rename_update(cmd, lv, new_name, 1);
+
+	vg = lv->vg;
+	old_name = lv->name;
+	old_args = lv->lock_args;
+	is_active = lv_is_active(lv);
+
+	/* Lock the old LV name. */
+	if (!lockd_lv_name(cmd, vg, old_name, old_args, "ex", is_active ? LDLV_PERSISTENT : 0))
+		return_0;
+
+	/* Create a lock for the new LV name. */
+	if (!lockd_init_lv_args(cmd, vg, new_name, lv->lock_type, &new_args)) {
+		log_error("Failed to init %s lock args for new LV", lv->lock_type);
+		return 0;
+	}
+
+	/* Lock the new LV name. */
+	if (is_active && !lockd_lv_name(cmd, vg, new_name, new_args, "ex", LDLV_PERSISTENT)) {
+		log_error("Failed to lock new LV name %s/%s.", vg->name, new_name);
+		return 0;
+	}
+
+	/* The new lock args need to be written in the metadata with the new name. */
+	lv->lock_args = new_args;
+
+	if (!lv_rename_update(cmd, lv, new_name, 1)) {
+		if (is_active)
+			lockd_lv_name(cmd, vg, new_name, new_args, "un", LDLV_PERSISTENT);
+		lockd_free_lv(cmd, vg, new_name, new_args);
+		return 0;
+	}
+
+	/* Unlock and free the lock on the old name. */
+	lockd_lv_name(cmd, vg, old_name, old_args, "un", is_active ? LDLV_PERSISTENT : 0);
+	lockd_free_lv(cmd, vg, old_name, old_args);
+	return 1;
 }
 
 /*
