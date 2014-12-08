@@ -226,7 +226,7 @@ static int _lockd_request(struct cmd_context *cmd,
 		          int *result,
 		          uint32_t *result_flags)
 {
-	const char *cmd_name = "unknown"; /* FIXME: setting this would help debugging */
+	const char *cmd_name = get_cmd_name();
 	daemon_reply reply;
 	int pid = getpid();
 
@@ -242,6 +242,9 @@ static int _lockd_request(struct cmd_context *cmd,
 		return 0;
 
 	/* cmd and pid are passed for informational and debugging purposes */
+
+	if (!cmd_name || !cmd_name[0])
+		cmd_name = "none";
 
 	if (vg_name && lv_name) {
 		reply = _lockd_send(req_name,
