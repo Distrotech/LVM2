@@ -4034,7 +4034,6 @@ static int _add_area(struct dm_tree_node *node, struct load_segment *seg, struct
 
 	dm_list_add(&seg->areas, &area->list);
 	seg->area_count++;
-printf("%s %u dev_node=%p\n", __func__, __LINE__, area->dev_node);
 
 	return 1;
 }
@@ -4048,7 +4047,6 @@ int dm_tree_node_add_target_area(struct dm_tree_node *node,
 	struct stat info;
 	struct dm_tree_node *dev_node;
 
-printf("%s %u\n", __func__, __LINE__);
 	if ((!dev_name || !*dev_name) && (!uuid || !*uuid)) {
 		log_error("dm_tree_node_add_target_area called without device");
 		return 0;
