@@ -29,12 +29,6 @@ static struct volume_group *_get_old_vg_for_rename(struct cmd_context *cmd,
 		return_NULL;
 	}
 
-	if (is_lockd_type(vg->lock_type)) {
-		log_error("vgrename not allowed for lock_type %s", vg->lock_type);
-		unlock_and_release_vg(cmd, vg, vg_name_old);
-		return NULL;
-	}
-
 	return vg;
 }
 
@@ -120,6 +114,9 @@ static int vg_rename_path(struct cmd_context *cmd, const char *old_vg_path,
 	} else
 		vgid = NULL;
 
+	if (!lockd_vg(cmd, vg_name_old, "ex", 0))
+		return_0;
+
 	if (strcmp(vg_name_new, vg_name_old) < 0)
 		lock_vg_old_first = 0;
 
@@ -150,6 +147,9 @@ static int vg_rename_path(struct cmd_context *cmd, const char *old_vg_path,
 	if (!drop_cached_metadata(vg))
 		stack;
 
+	if (!lockd_rename_vg_before(cmd, vg))
+		return_0;
+
 	/* Change the volume group name */
 	vg_rename(cmd, vg, vg_name_new);
 
@@ -177,6 +177,8 @@ static int vg_rename_path(struct cmd_context *cmd, const char *old_vg_path,
 		}
 	}
 
+	lockd_rename_vg_final(cmd, vg, 1);
+
 	if (!backup(vg))
 		stack;
 	if (!backup_remove(cmd, vg_name_old))
@@ -196,6 +198,8 @@ static int vg_rename_path(struct cmd_context *cmd, const char *old_vg_path,
 	return 1;
 
       error:
+	lockd_rename_vg_final(cmd, vg, 0);
+
 	if (lock_vg_old_first) {
 		unlock_vg(cmd, vg_name_new);
 		unlock_and_release_vg(cmd, vg, vg_name_old);

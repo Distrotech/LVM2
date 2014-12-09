@@ -50,6 +50,8 @@ enum {
 	LD_OP_STOP_ALL,
 	LD_OP_DUMP_INFO,
 	LD_OP_DUMP_LOG,
+	LD_OP_RENAME_BEFORE,
+	LD_OP_RENAME_FINAL,
 };
 
 /* resource types */

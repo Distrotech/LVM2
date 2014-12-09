@@ -12,6 +12,7 @@
 #include "toolcontext.h"
 #include "metadata.h"
 #include "segtype.h"
+#include "activate.h"
 #include "lvmetad.h"
 #include "lvmlockd.h"
 #include "lvmcache.h"
@@ -1947,3 +1948,128 @@ int lockd_update_local(struct cmd_context *cmd)
 
 	return ret;
 }
+
+int lockd_rename_vg_before(struct cmd_context *cmd, struct volume_group *vg)
+{
+	struct lv_list *lvl;
+	daemon_reply reply;
+	int result;
+	int ret;
+
+	if (!is_lockd_type(vg->lock_type))
+		return 1;
+
+	if (lvs_in_vg_activated(vg)) {
+		log_error("LVs must be inactive before vgrename.");
+		return 0;
+	}
+
+	/* Check that no LVs are active on other hosts. */
+
+	dm_list_iterate_items(lvl, &vg->lvs) {
+		if (!lockd_lv(cmd, lvl->lv, "ex", 0)) {
+			log_error("LV %s/%s must be inactive on all hosts before vgrename.",
+				  vg->name, lvl->lv->name);
+			return 0;
+		}
+
+		if (!lockd_lv(cmd, lvl->lv, "un", 0)) {
+			log_error("Failed to unlock LV %s/%s.", vg->name, lvl->lv->name);
+			return 0;
+		}
+	}
+
+	/*
+	 * lvmlockd:
+	 * checks for other hosts in lockspace
+	 * leaves the lockspace
+	 */
+
+	reply = _lockd_send("rename_vg_before",
+			"pid = %d", getpid(),
+			"vg_name = %s", vg->name,
+			"vg_lock_type = %s", vg->lock_type,
+			"vg_lock_args = %s", vg->lock_args,
+			NULL);
+
+	if (!_lockd_result(reply, &result, NULL)) {
+		ret = 0;
+	} else {
+		ret = (result < 0) ? 0 : 1;
+	}
+
+	daemon_reply_destroy(reply);
+	
+	if (!ret) {
+		log_error("lockd_rename_vg_before lvmlockd result %d", result);
+		return 0;
+	}
+
+	if (!strcmp(vg->lock_type, "sanlock")) {
+		log_debug("lockd_rename_vg_before deactivate sanlock lv");
+		_deactivate_sanlock_lv(cmd, vg);
+	}
+
+	return 1;
+}
+
+int lockd_rename_vg_final(struct cmd_context *cmd, struct volume_group *vg, int success)
+{
+	daemon_reply reply;
+	int result;
+	int ret;
+
+	if (!is_lockd_type(vg->lock_type))
+		return 1;
+
+	if (!success) {
+		/*
+		 * Depending on the problem that caused the rename to
+		 * fail, it may make sense to not restart the VG here.
+		 */
+		if (!lockd_start_vg(cmd, vg))
+			log_error("Failed to restart VG %s lockspace.", vg->name);
+		return 1;
+	}
+
+	if (!strcmp(vg->lock_type, "sanlock")) {
+		if (!_activate_sanlock_lv(cmd, vg))
+			return 0;
+
+		/*
+		 * lvmlockd needs to rewrite the leases on disk
+		 * with the new VG (lockspace) name.
+		 */
+		reply = _lockd_send("rename_vg_final",
+				"pid = %d", getpid(),
+				"vg_name = %s", vg->name,
+				"vg_lock_type = %s", vg->lock_type,
+				"vg_lock_args = %s", vg->lock_args,
+				NULL);
+
+		if (!_lockd_result(reply, &result, NULL)) {
+			ret = 0;
+		} else {
+			ret = (result < 0) ? 0 : 1;
+		}
+	
+		daemon_reply_destroy(reply);
+
+		if (!ret) {
+			/*
+			 * The VG has been renamed on disk, but renaming the
+			 * sanlock leases failed.  Cleaning this up can
+			 * probably be done by converting the VG to lock_type
+			 * none, then converting back to sanlock.
+			 */
+			log_error("lockd_rename_vg_final lvmlockd result %d", result);
+			return 0;
+		}
+	}
+
+	if (!lockd_start_vg(cmd, vg))
+		log_error("Failed to start VG %s lockspace.", vg->name);
+
+	return 1;
+}
+
