@@ -753,6 +753,10 @@ static const char *op_str(int x)
 		return "start_wait";
 	case LD_OP_STOP_ALL:
 		return "stop_all";
+	case LD_OP_RENAME_BEFORE:
+		return "rename_before";
+	case LD_OP_RENAME_FINAL:
+		return "rename_final";
 	default:
 		return "op_unknown";
 	};
@@ -2132,6 +2136,23 @@ static void *lockspace_thread_main(void *arg_in)
 				break;
 			}
 
+			if (act->op == LD_OP_RENAME_BEFORE && act->rt == LD_RT_VG) {
+				/* vgrename */
+				log_debug("S %s checking for lockspace hosts", ls->name);
+				rv = lm_hosts(ls, 1);
+				if (rv) {
+					log_error("S %s lockspace hosts %d", ls->name, rv);
+					list_del(&act->list);
+					act->result = -EBUSY;
+					add_client_result(act);
+					continue;
+				}
+				ls->thread_work = 0;
+				ls->thread_stop = 1;
+				/* Do we want to check hosts again below like vgremove? */
+				break;
+			}
+
 			list_del(&act->list);
 
 			/* applies to all resources */
@@ -2234,6 +2255,8 @@ out_act:
 		if (act->op == LD_OP_FREE)
 			act->result = 0;
 		else if (act->op == LD_OP_STOP)
+			act->result = 0;
+		else if (act->op == LD_OP_RENAME_BEFORE)
 			act->result = 0;
 		else
 			act->result = -ENOLS;
@@ -3384,6 +3407,25 @@ static int work_init_vg(struct action *act)
 	return rv;
 }
 
+static int work_rename_vg(struct action *act)
+{
+	char ls_name[MAX_NAME+1];
+	int rv = 0;
+
+	memset(ls_name, 0, sizeof(ls_name));
+
+	vg_ls_name(act->vg_name, ls_name);
+
+	if (act->lm_type == LD_LM_SANLOCK)
+		rv = lm_rename_vg_sanlock(ls_name, act->vg_name, act->flags, act->vg_args);
+	else if (act->lm_type == LD_LM_DLM)
+		return 0;
+	else
+		rv = -EINVAL;
+
+	return rv;
+}
+
 static void work_test_gl(void)
 {
 	struct lockspace *ls;
@@ -3537,6 +3579,11 @@ static void *worker_thread_main(void *arg_in)
 		} else if ((act->op == LD_OP_INIT) && (act->rt == LD_RT_LV)) {
 			log_debug("work init_lv %s/%s", act->vg_name, act->lv_name);
 			act->result = work_init_lv(act);
+			add_client_result(act);
+
+		} else if ((act->op == LD_OP_RENAME_FINAL) && (act->rt == LD_RT_VG)) {
+			log_debug("work rename_vg %s", act->vg_name);
+			act->result = work_rename_vg(act);
 			add_client_result(act);
 
 		} else if (act->op == LD_OP_UPDATE_LOCAL) {
@@ -4124,6 +4171,16 @@ static int str_to_op_rt(const char *req_name, int *op, int *rt)
 	}
 	if (!strcmp(req_name, "update_local")) {
 		*op = LD_OP_UPDATE_LOCAL;
+		return 0;
+	}
+	if (!strcmp(req_name, "rename_vg_before")) {
+		*op = LD_OP_RENAME_BEFORE;
+		*rt = LD_RT_VG;
+		return 0;
+	}
+	if (!strcmp(req_name, "rename_vg_final")) {
+		*op = LD_OP_RENAME_FINAL;
+		*rt = LD_RT_VG;
 		return 0;
 	}
 out:
@@ -4744,6 +4801,7 @@ static void client_recv_action(struct client *cl)
 	case LD_OP_UPDATE_LOCAL:
 	case LD_OP_START_WAIT:
 	case LD_OP_STOP_ALL:
+	case LD_OP_RENAME_FINAL:
 		add_work_action(act);
 		rv = 0;
 		break;
@@ -4752,6 +4810,7 @@ static void client_recv_action(struct client *cl)
 	case LD_OP_ENABLE:
 	case LD_OP_DISABLE:
 	case LD_OP_FREE:
+	case LD_OP_RENAME_BEFORE:
 		rv = add_lock_action(act);
 		break;
 	case LD_OP_ADD_LOCAL:
