@@ -50,6 +50,8 @@ enum {
 	LD_OP_STOP_ALL,
 	LD_OP_DUMP_INFO,
 	LD_OP_DUMP_LOG,
+	LD_OP_RENAME_BEFORE,
+	LD_OP_RENAME_FINAL,
 };
 
 /* resource types */
@@ -214,6 +216,7 @@ int lm_rem_resource_dlm(struct lockspace *ls, struct resource *r);
 int lm_init_vg_sanlock(char *ls_name, char *vg_name, uint32_t flags, char *vg_args);
 int lm_init_lv_sanlock(char *ls_name, char *vg_name, char *lv_name, char *vg_args, char *lv_args);
 int lm_free_lv_sanlock(struct lockspace *ls, struct resource *r);
+int lm_rename_vg_sanlock(char *ls_name, char *vg_name, uint32_t flags, char *vg_args);
 int lm_add_lockspace_sanlock(struct lockspace *ls);
 int lm_rem_lockspace_sanlock(struct lockspace *ls, int free_vg);
 int lm_lock_sanlock(struct lockspace *ls, struct resource *r, int ld_mode,

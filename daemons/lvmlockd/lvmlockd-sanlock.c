@@ -482,6 +482,161 @@ int lm_init_lv_sanlock(char *ls_name, char *vg_name, char *lv_name,
 	return rv;
 }
 
+/*
+ * Read the lockspace and each resource, replace the lockspace name,
+ * and write it back.
+ */
+
+int lm_rename_vg_sanlock(char *ls_name, char *vg_name, uint32_t flags, char *vg_args)
+{
+	struct sanlk_lockspace ss;
+	struct sanlk_resourced rd;
+	struct sanlk_disk disk;
+	char lock_lv_name[MAX_ARGS];
+	uint64_t offset;
+	uint32_t io_timeout;
+	int align_size;
+	int i, rv;
+
+	memset(&disk, 0, sizeof(disk));
+	memset(lock_lv_name, 0, sizeof(lock_lv_name));
+
+	if (!vg_args || !vg_args[0] || !strcmp(vg_args, "none")) {
+		log_error("S %s rename_vg_san vg_args missing", ls_name);
+		return -EINVAL;
+	}
+
+	rv = lock_lv_name_from_args(vg_args, lock_lv_name);
+	if (rv < 0) {
+		log_error("S %s init_lv_san lock_lv_name_from_args error %d %s",
+			  ls_name, rv, vg_args);
+		return rv;
+	}
+
+	snprintf(disk.path, SANLK_PATH_LEN, "/dev/mapper/%s-%s", vg_name, lock_lv_name);
+
+	log_debug("S %s rename_vg_san path %s", ls_name, disk.path);
+
+	if (daemon_test)
+		return 0;
+
+	/* FIXME: remove this, device is not always ready for us here */
+	sleep(1);
+
+	align_size = sanlock_align(&disk);
+	if (align_size <= 0) {
+		log_error("S %s rename_vg_san bad align size %d %s",
+			  ls_name, align_size, disk.path);
+		return -EINVAL;
+	}
+
+	/*
+	 * Lockspace
+	 */
+
+	memset(&ss, 0, sizeof(ss));
+	memcpy(ss.host_id_disk.path, disk.path, SANLK_PATH_LEN);
+	ss.host_id_disk.offset = LS_BEGIN * align_size;
+
+	rv = sanlock_read_lockspace(&ss, 0, &io_timeout);
+	if (rv < 0) {
+		log_error("S %s rename_vg_san read_lockspace error %d %s",
+			  ls_name, rv, ss.host_id_disk.path);
+		return rv;
+	}
+
+	strncpy(ss.name, ls_name, SANLK_NAME_LEN);
+
+	rv = sanlock_write_lockspace(&ss, 0, 0, 0);
+	if (rv < 0) {
+		log_error("S %s rename_vg_san write_lockspace error %d %s",
+			  ls_name, rv, ss.host_id_disk.path);
+		return rv;
+	}
+
+	/*
+	 * GL resource
+	 */
+
+	memset(&rd, 0, sizeof(rd));
+	memcpy(rd.rs.disks[0].path, disk.path, SANLK_PATH_LEN);
+	rd.rs.disks[0].offset = align_size * GL_LOCK_BEGIN;
+	rd.rs.num_disks = 1;
+
+	rv = sanlock_read_resource(&rd.rs, 0);
+	if (rv < 0) {
+		log_error("S %s rename_vg_san read_resource gl error %d %s",
+			  ls_name, rv, rd.rs.disks[0].path);
+		return rv;
+	}
+
+	strncpy(rd.rs.lockspace_name, ss.name, SANLK_NAME_LEN);
+
+	rv = sanlock_write_resource(&rd.rs, 0, 0, 0);
+	if (rv < 0) {
+		log_error("S %s rename_vg_san write_resource gl error %d %s",
+			  ls_name, rv, rd.rs.disks[0].path);
+		return rv;
+	}
+
+	/*
+	 * VG resource
+	 */
+
+	memset(&rd, 0, sizeof(rd));
+	memcpy(rd.rs.disks[0].path, disk.path, SANLK_PATH_LEN);
+	rd.rs.disks[0].offset = align_size * VG_LOCK_BEGIN;
+	rd.rs.num_disks = 1;
+
+	rv = sanlock_read_resource(&rd.rs, 0);
+	if (rv < 0) {
+		log_error("S %s rename_vg_san write_resource vg error %d %s",
+			  ls_name, rv, rd.rs.disks[0].path);
+		return rv;
+	}
+
+	strncpy(rd.rs.lockspace_name, ss.name, SANLK_NAME_LEN);
+
+	rv = sanlock_write_resource(&rd.rs, 0, 0, 0);
+	if (rv < 0) {
+		log_error("S %s rename_vg_san write_resource vg error %d %s",
+			  ls_name, rv, rd.rs.disks[0].path);
+		return rv;
+	}
+
+	/*
+	 * LV resources
+	 */
+
+	offset = align_size * LV_LOCK_BEGIN;
+
+	for (i = 0; i < LVMLOCKD_SANLOCK_MAX_LVS_IN_VG; i++) {
+		memset(&rd, 0, sizeof(rd));
+		memcpy(rd.rs.disks[0].path, disk.path, SANLK_PATH_LEN);
+		rd.rs.disks[0].offset = offset;
+		rd.rs.num_disks = 1;
+
+		rv = sanlock_read_resource(&rd.rs, 0);
+		if (rv < 0) {
+			log_error("S %s rename_vg_san read_resource resource area %llu error %d",
+				  ls_name, (unsigned long long)offset, rv);
+			break;
+		}
+
+		strncpy(rd.rs.lockspace_name, ss.name, SANLK_NAME_LEN);
+
+		rv = sanlock_write_resource(&rd.rs, 0, 0, 0);
+		if (rv) {
+			log_error("S %s rename_vg_san write_resource resource area %llu error %d",
+				  ls_name, (unsigned long long)offset, rv);
+			break;
+		}
+		offset += align_size;
+	}
+
+	return 0;
+}
+
 /* lvremove */
 int lm_free_lv_sanlock(struct lockspace *ls, struct resource *r)
 {
