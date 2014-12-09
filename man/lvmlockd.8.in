@@ -560,8 +560,6 @@ Things that do not yet work in lockd VGs:
 .br
 - splitting raid1 mirror LVs
 .br
-- vgrename
-.br
 - vgsplit
 .br
 - vgmerge
