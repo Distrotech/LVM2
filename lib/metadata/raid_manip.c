@@ -705,7 +705,7 @@ static int _alloc_image_components(struct logical_volume *lv, int allocate,
 			extents = (segtype_is_raid0(segtype) || segtype->parity_devs) ?
 				  lv->le_count / __data_rimages_count(seg, seg->area_count) : lv->le_count;
 
-			if (!(ah = allocate_extents(lv->vg, NULL, segtype, 0, count, count,
+			if (!(ah = allocate_extents(lv->vg, NULL, segtype, 1, count, count,
 						    seg->region_size, extents,
 						    pvs, lv->alloc, 0, parallel_areas)))
 				return_0;
