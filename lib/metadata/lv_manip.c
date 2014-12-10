@@ -1080,21 +1080,18 @@ static int _release_and_discard_lv_segment_area(struct lv_segment *seg, uint32_t
 			struct logical_volume *mlv, *slv = seg->lv;
 			struct volume_group *vg = lv->vg;
 
-printf("%s %u slv->name=%s slv_seg=%p lv->name=%s lv->le_count=%u seg->area_count=%u seg->region_size=%u\n", __func__, __LINE__, slv->name, seg, lv->name, lv->le_count, seg->area_count, seg->region_size);
 			if (!(mlv = seg_metalv(seg, s)))
 				return 0;
 
-// printf("%s %u %s\n", __func__, __LINE__, mlv->name);
 			meta_area_reduction = mlv->le_count -
 					      raid_rmeta_extents(vg->cmd, lv->le_count - area_reduction, seg->region_size, vg->extent_size);
+
 			if (lv->le_count - area_reduction == 0)
 				meta_area_reduction++;
-printf("%s %u %s lv->le_count-area_reduction=%u lv->le_count=%u mlv->le_count=%u meta_area_reduction=%u\n", __func__, __LINE__, mlv->name, lv->le_count - area_reduction, lv->le_count, mlv->le_count, meta_area_reduction);
 
 			if (meta_area_reduction &&
 			    !lv_reduce(mlv, meta_area_reduction))
 				return_0; /* FIXME: any upper level reporting */
-// printf("%s %u %s\n", __func__, __LINE__, mlv->name);
 		}
 
 		if (!lv_reduce(lv, area_reduction))
@@ -1708,21 +1705,17 @@ static struct alloc_handle *_alloc_init(struct cmd_context *cmd,
 	else
 		total_extents = 0;
 
-printf("%s %u\n", __func__, __LINE__);
 	if (segtype_is_raid(segtype)) {
-printf("%s %u\n", __func__, __LINE__);
 		if (metadata_area_count) {
-printf("%s %u\n", __func__, __LINE__);
 			if (metadata_area_count != area_count)
 				log_error(INTERNAL_ERROR "Bad metadata_area_count");
 
 			ah->metadata_area_count = area_count;
-printf("%s %u log_len-new=%u log_len-exiting=%u\n", __func__, __LINE__, raid_rmeta_extents(cmd, existing_extents + new_extents, region_size, extent_size), raid_rmeta_extents(cmd, existing_extents, region_size, extent_size));
 			ah->log_len = (existing_extents ? 0 : 1) +
 				      raid_rmeta_extents(cmd, existing_extents + new_extents, region_size, extent_size) -
 				      raid_rmeta_extents(cmd, existing_extents, region_size, extent_size);
 			ah->alloc_and_split_meta = ah->log_len ? 1 : 0;
-printf("%s %u existing_extents=%u new_extents=%u ah->log_len=%u, ah->alloc...=%u\n", __func__, __LINE__, existing_extents, new_extents, ah->log_len, ah->alloc_and_split_meta);
+// printf("%s %u existing_extents=%u new_extents=%u ah->log_len=%u, ah->alloc...=%u\n", __func__, __LINE__, existing_extents, new_extents, ah->log_len, ah->alloc_and_split_meta);
 
 			/*
 			 * We need 'log_len' extents for each
@@ -2981,7 +2974,6 @@ static int _allocate(struct alloc_handle *ah,
 		return 1;
 	}
 
-printf("%s %u ah->area_multiple=%u ah->new_extents=%u alloc_state.allocated=%u\n", __func__, __LINE__, ah->area_multiple, ah->new_extents, alloc_state.allocated);
         if (ah->area_multiple > 1 &&
             (ah->new_extents - alloc_state.allocated) % ah->area_multiple) {
 		log_error("Number of extents requested (%u) needs to be divisible by %d.",
@@ -3803,7 +3795,6 @@ int lv_extend(struct logical_volume *lv,
 
 		/* Make sure metadata LVs are being extended as well */
 		log_count = (mirrors ?: 1) * stripes;
-printf("%s %u mirrors=%u stripes=%u log_count=%u\n", __func__, __LINE__, mirrors, stripes, log_count);
 	}
 
 #if 0

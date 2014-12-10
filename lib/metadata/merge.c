@@ -455,16 +455,16 @@ int check_lv_segments(struct logical_volume *lv, int complete_vg)
 			}
 
 		if (!seg_found) {
-{
-unsigned ss = 0;
-printf("seg->lv=%s\n", seg->lv->name);
-dm_list_iterate_items(seg2, &seg->lv->segments) {
-	ss++;
-	printf("seg_lv(seg2, 0)->segs_using_this_lv");
-}
-printf("ss=%u\n", ss);
+#if 0
+			unsigned ss = 0;
 
-}
+			printf("seg->lv=%s\n", seg->lv->name);
+			dm_list_iterate_items(seg2, &seg->lv->segments) {
+				ss++;
+
+			printf("seg_lv(seg2, 0)->segs_using_this_lv");
+			printf("ss=%u\n", ss);
+#endif
 			log_error("LV segment %s:%" PRIu32 "-%" PRIu32
 				  " is incorrectly listed as being used by LV %s",
 				  seg->lv->name, seg->le, seg->le + seg->len - 1,
