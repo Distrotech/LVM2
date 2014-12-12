@@ -136,6 +136,41 @@ notify_lvmetad() {
 	fi
 }
 
+prepare_lvmpolld() {
+	set -x
+	rm -f debug.log
+	# skip if we don't have our own lvmetad...
+	(which lvmpolld 2>/dev/null | grep "$abs_builddir") || skip
+
+	lvmconf "global/use_lvmpolld = 1"
+
+	local run_valgrind=
+	test "${LVM_VALGRIND_LVMPOLLD:-0}" -eq 0 || run_valgrind="run_valgrind"
+
+	echo "preparing lvmpolld..."
+	$run_valgrind lvmpolld -f "$@" -s "$TESTDIR/lvmpolld.socket" -U "$TESTDIR/lib" -l all,debug &
+	echo $! > LOCAL_LVMPOLLD
+	while ! test -e "$TESTDIR/lvmpolld.socket"; do echo -n .; sleep .1; done # wait for the socket
+	echo ok
+}
+
+lvmpolld_talk() {
+	local use=nc
+	if type -p socat >& /dev/null; then
+		use=socat
+	elif echo | not nc -U "$TESTDIR/lvmpolld.socket" ; then
+		echo "WARNING: Neither socat nor nc -U seems to be available." 1>&2
+		echo "# failed to contact lvmpolld"
+		return 1
+	fi
+
+	if test "$use" = nc ; then
+		nc -U "$TESTDIR/lvmpolld.socket"
+	else
+		socat "unix-connect:$TESTDIR/lvmpolld.socket" -
+	fi | tee -a lvmpolld-talk.txt
+}
+
 teardown_devs_prefixed() {
 	local prefix=$1
 	local stray=${2:-0}

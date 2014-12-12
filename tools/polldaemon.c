@@ -497,7 +497,7 @@ static int _lvmpolld_poll_vg(struct cmd_context *cmd,
 
 		name = parms->poll_fns->get_copy_name_from_lv(lv);
 
-		memcpy(lvid.id, &vg->id, sizeof(*(lvid.id)));
+		memcpy(&lvid, &vg->id, sizeof(*(lvid.id)));
 
 		if (!lvid.s) {
 			log_print_unless_silent("Failed to extract vgid from VG including PV: %s", name);
@@ -505,7 +505,8 @@ static int _lvmpolld_poll_vg(struct cmd_context *cmd,
 		}
 
 		/* ret_code != 0 means we found the request polling operation and it's active */
-		if (lvmpolld(name, lvid.s, parms->background, parms->lv_type, parms->progress_title, 0, parms->interval))
+		if (lvmpolld(name, lvid.s, parms->background, parms->lv_type,
+			     parms->progress_title, 0, parms->interval, parms->aborting))
 			parms->outstanding_count++;
 	}
 

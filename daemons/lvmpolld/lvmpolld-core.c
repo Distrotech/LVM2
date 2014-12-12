@@ -46,8 +46,8 @@
  * FIXME: I don't follow the logic behind prefix variables in lvm2
  * configure script
  */
-#define CMD_PATH "/home/okozina/testik/usr/sbin"
-#define VGPOLL_CMD_BIN CMD_PATH  "/lvpoll"
+
+#define LVPOLL_CMD "lvpoll"
 /* extract this info from autoconf/automake files */
 
 typedef struct lvmpolld_state {
@@ -60,11 +60,11 @@ typedef struct lvmpolld_state {
 	 * only thread responsible for polling of lvm command
 	 * should remove the pdlv from hash_table
 	 */
-	struct dm_hash_table *lvid_to_pdlv;
+	lvmpolld_store_t lvid_to_pdlv_abort;
+	lvmpolld_store_t lvid_to_pdlv_poll;
 
-	struct {
-		pthread_mutex_t lvid_to_pdlv;
-	} lock;
+	const char *prefix_dir;
+	const char *cmd;
 } lvmpolld_state_t;
 
 static const char *const const polling_ops[] = { [PVMOVE] = PVMOVE_POLL,
@@ -85,17 +85,33 @@ static void usage(const char *prog, FILE *file)
 		"   -s       Set path to the socket to listen on\n\n", prog);
 }
 
+#define LVMPOLLD_SBIN_DIR "/usr/sbin/"
+
 static int init(struct daemon_state *s)
 {
+	char *tmp;
+	size_t n;
 	lvmpolld_state_t *ls = s->private;
 	ls->log = s->log;
 
 	if (!daemon_log_parse(ls->log, DAEMON_LOG_OUTLET_STDERR, ls->log_config, 1))
 		return 0;
 
-	ls->lvid_to_pdlv = dm_hash_create(32);
+	pdst_init(&ls->lvid_to_pdlv_poll);
+	pdst_init(&ls->lvid_to_pdlv_abort);
 
-	pthread_mutex_init(&ls->lock.lvid_to_pdlv, NULL);
+	DEBUGLOG(ls, "%s: LVM_SYSTEM_DIR=%s", PD_LOG_PREFIX, getenv("LVM_SYSTEM_DIR") ?: "<not set>");
+
+	/* TODO: blaaah. reaaaaly nice */
+	ls->prefix_dir = ls->prefix_dir ?: LVMPOLLD_SBIN_DIR;
+	n = strlen(ls->prefix_dir) + strlen(LVPOLL_CMD) + 2; /* PREFIX_DIR + / + LVPOLL_CMD + \0 */
+	tmp = dm_malloc(n * sizeof(char));
+	memcpy(tmp, ls->prefix_dir, strlen(ls->prefix_dir));
+	*(tmp + strlen(ls->prefix_dir)) = '/';
+	memcpy(tmp + strlen(ls->prefix_dir) + 1, LVPOLL_CMD, strlen(LVPOLL_CMD));
+	*(tmp + n - 1) = '\0';
+
+	ls->cmd = tmp;
 
 	return 1;
 }
@@ -104,21 +120,12 @@ static int fini(struct daemon_state *s)
 {
 	lvmpolld_state_t *ls = s->private;
 
-	pthread_mutex_destroy(&ls->lock.lvid_to_pdlv);
+	pdst_destroy(&ls->lvid_to_pdlv_poll);
+	pdst_destroy(&ls->lvid_to_pdlv_abort);
 
-	dm_hash_destroy(ls->lvid_to_pdlv);
+	dm_free((void *)ls->cmd);
 
 	return 1;
-}
-
-static void lock_lvid_to_pdlv(lvmpolld_state_t *ls)
-{
-	pthread_mutex_lock(&ls->lock.lvid_to_pdlv);
-}
-
-static void unlock_lvid_to_pdlv(lvmpolld_state_t *ls)
-{
-	pthread_mutex_unlock(&ls->lock.lvid_to_pdlv);
 }
 
 static response reply_fail(const char *reason)
@@ -151,33 +158,49 @@ static inline const char *get_keyword(const enum poll_type type)
 	}
 }
 
-static dm_percent_t parse_line_for_percents(lvmpolld_lv_t *pdlv, const char *line)
+static void parse_line_for_percents(lvmpolld_lv_t *pdlv, const char *line)
 {
 	char *endptr, *keyw, *nr;
+	dm_percent_t perc;
 	double d;
 
 	if (!(keyw = strstr(line, get_keyword(pdlv->type))) || keyw == line
-	    || !strchr(keyw, DM_PERCENT_CHAR))
-		return DM_PERCENT_FAILED;
+	    || !strchr(keyw, DM_PERCENT_CHAR)) {
+		WARN(pdlv->ls, "%s: %s", PD_LOG_PREFIX,
+		     "parsing percentage from lvm2 command failed");
+		return;
+	}
 
 	nr = strpbrk(keyw, "+-0123456789");
-	if (!nr)
-		return DM_PERCENT_FAILED;
+	if (!nr) {
+		WARN(pdlv->ls, "%s: %s", PD_LOG_PREFIX,
+		     "parsing percentage from lvm2 command failed");
+		return;
+	}
 
 	d = strtod(nr, &endptr);
-	if (nr == endptr)
-		return DM_PERCENT_FAILED;
-	if (d > 100.0)
-		return DM_PERCENT_INVALID;
+	if (nr == endptr) {
+		WARN(pdlv->ls, "%s: %s", PD_LOG_PREFIX,
+		     "parsing percentage from lvm2 command failed");
+		return;
+	} else if (d > 100.0) {
+		WARN(pdlv->ls, "%s: %s", PD_LOG_PREFIX,
+		     "parsing percentage from lvm2 command returned invalid value");
+		return;
+	}
 
-	return dm_make_percent((uint64_t)(d * DM_PERCENT_1), DM_PERCENT_100);
+	perc = dm_make_percent((uint64_t)(d * DM_PERCENT_1), DM_PERCENT_100);
+
+	DEBUGLOG(pdlv->ls, "%s: %s %.1f%%", PD_LOG_PREFIX,
+		 "parsed", dm_percent_to_float(perc));
+
+	pdlv_set_percents(pdlv, perc);
 }
 
 #define MAX_TIMEOUT 0
 
 static void poll_for_output(lvmpolld_lv_t *pdlv, int outfd, int errfd)
 {
-	dm_percent_t prcs;
 	size_t lsize;
 	int ch_stat, r, wait4, fds_count = 2, timeout = 0;
 
@@ -196,7 +219,7 @@ static void poll_for_output(lvmpolld_lv_t *pdlv, int outfd, int errfd)
 
 	while (1) {
 		do {
-			r = poll(fds, 2, 2 * pdlv_get_interval(pdlv) * 1000);
+			r = poll(fds, 2, pdlv_get_timeout(pdlv) * 1000);
 		} while (r < 0 && errno == EINTR);
 
 		DEBUGLOG(pdlv->ls, "%s: %s %d", PD_LOG_PREFIX, "poll() returned", r);
@@ -234,15 +257,8 @@ static void poll_for_output(lvmpolld_lv_t *pdlv, int outfd, int errfd)
 			INFO(pdlv->ls, "%s: PID %d: %s: '%s'", LVM2_LOG_PREFIX,
 			     pdlv_get_cmd_pid(pdlv), "STDOUT", line);
 
-			prcs = parse_line_for_percents(pdlv, line);
-			if (prcs < DM_PERCENT_0)
-				WARN(pdlv->ls, "%s: %s", PD_LOG_PREFIX,
-				     "parsing percentage from lvm2 command failed");
-			else {
-				DEBUGLOG(pdlv->ls, "%s: %s (%f)", PD_LOG_PREFIX,
-					 "parsed this", dm_percent_to_float(prcs));
-				pdlv_set_percents(pdlv, prcs);
-			}
+			if (pdlv->parse_output_fn)
+				pdlv->parse_output_fn(pdlv, line);
 		} else if (fds[0].revents) {
 			if (fds[0].revents & POLLHUP)
 				DEBUGLOG(pdlv->ls, "%s: %s", PD_LOG_PREFIX, "caught POLLHUP");
@@ -275,7 +291,7 @@ static void poll_for_output(lvmpolld_lv_t *pdlv, int outfd, int errfd)
 			/*
 			 * fds_count == 0 means polling reached EOF
 			 * or received error on both descriptors.
-			 * We have nothing to
+			 * In such case, just wait for command to finish
 			 */
 			wait4 = waitpid(pdlv_get_cmd_pid(pdlv), &ch_stat, fds_count ? WNOHANG : 0);
 		} while (wait4 < 0 && errno == EINTR);
@@ -298,13 +314,8 @@ static void poll_for_output(lvmpolld_lv_t *pdlv, int outfd, int errfd)
 		while (read_single_line(&line, &lsize, fout)) {
 			assert(r > 0);
 			INFO(pdlv->ls, "%s: PID %d: %s: %s", LVM2_LOG_PREFIX, pdlv_get_cmd_pid(pdlv), "STDOUT", line);
-			prcs = parse_line_for_percents(pdlv, line);
-			if (prcs == DM_PERCENT_FAILED || prcs == DM_PERCENT_INVALID)
-				WARN(pdlv->ls, "%s: %s", PD_LOG_PREFIX, "parsing percentage from lvm2 command failed");
-			else {
-				DEBUGLOG(pdlv->ls, "%s: %s (%f)", PD_LOG_PREFIX, "parsed this", dm_percent_to_float(prcs));
-				pdlv_set_percents(pdlv, prcs);
-			}
+			if (pdlv->parse_output_fn)
+				pdlv->parse_output_fn(pdlv, line);
 		}
 	if (fds[1].fd >= 0)
 		while (read_single_line(&line, &lsize, ferr)) {
@@ -362,11 +373,11 @@ static const char **cmdargv_ctr(lvmpolld_lv_t *pdlv)
 		return NULL;
 	}
 
-	if (!add_to_cmdargv(&cmd_argv, VGPOLL_CMD_BIN, &i, MIN_SIZE))
+	if (!add_to_cmdargv(&cmd_argv, pdlv->ls->cmd, &i, MIN_SIZE))
 		goto err;
 	if (pdlv->debug && !add_to_cmdargv(&cmd_argv, "--debug", &i, MIN_SIZE))
 		goto err;
-	if (pdlv->verbose && !add_to_cmdargv(&cmd_argv, "--verbose", &i, MIN_SIZE))
+	if (pdlv->verbose && !add_to_cmdargv(&cmd_argv, "-vvvv", &i, MIN_SIZE))
 		goto err;
 	if (!add_to_cmdargv(&cmd_argv, "--config", &i, MIN_SIZE) ||
 	    !add_to_cmdargv(&cmd_argv, "devices { filter = [ \"a/.*/\" ] }", &i, MIN_SIZE))
@@ -374,6 +385,9 @@ static const char **cmdargv_ctr(lvmpolld_lv_t *pdlv)
 	if (pdlv->sinterval &&
 	    (!add_to_cmdargv(&cmd_argv, "--interval", &i, MIN_SIZE) ||
 	     !add_to_cmdargv(&cmd_argv, pdlv->sinterval, &i, MIN_SIZE)))
+		goto err;
+	if (pdlv->abort &&
+		!add_to_cmdargv(&cmd_argv, "--abort", &i, MIN_SIZE))
 		goto err;
 	if (!add_to_cmdargv(&cmd_argv, polling_ops[pdlv->type], &i, MIN_SIZE))
 		goto err;
@@ -431,7 +445,7 @@ static void *fork_and_poll(void *args)
 		    (dup2(errpipe[1], STDERR_FILENO ) != STDERR_FILENO))
 			_exit(100);
 
-		execve(VGPOLL_CMD_BIN, (char *const *)cmdargv, NULL);
+		execv(*cmdargv, (char *const *)cmdargv);
 
 		_exit(101);
 	} else {
@@ -442,7 +456,7 @@ static void *fork_and_poll(void *args)
 			goto err;
 		}
 
-		INFO(pdlv->ls, "%s: LVM2 cmd \"%s\" (PID: %d)", PD_LOG_PREFIX, VGPOLL_CMD_BIN, r);
+		INFO(pdlv->ls, "%s: LVM2 cmd \"%s\" (PID: %d)", PD_LOG_PREFIX, *cmdargv, r);
 
 		/* failure to close write end of any pipe will result in broken polling */
 		if (close(outpipe[1])) {
@@ -465,9 +479,9 @@ static void *fork_and_poll(void *args)
 	}
 
 err:
-	lock_lvid_to_pdlv(pdlv->ls);
-	dm_hash_remove(pdlv->ls->lvid_to_pdlv, pdlv->lvid);
-	unlock_lvid_to_pdlv(pdlv->ls);
+	pdst_lock(pdlv->pdst);
+	pdst_remove(pdlv->pdst, pdlv->lvid);
+	pdst_unlock(pdlv->pdst);
 
 	dm_free(cmdargv);
 	if (outpipe[0] != -1)
@@ -484,7 +498,8 @@ err:
 	 * know nothing about state of lvm cmd and
 	 * (eventually) ongoing progress
 	 */
-	r = pdlv->internal_error ? pdlv->lvmcmd : 0;
+	/* internal error never gets modified again */
+	r = pdlv_locked_get_internal_error(pdlv) ? pdlv_get_cmd_pid(pdlv) : 0;
 	pdlv_put(pdlv);
 
 	/* harvest zombies */
@@ -577,27 +592,37 @@ static response stream_progress_data(client_handle h, lvmpolld_lv_t *pdlv)
 	}
 
 	if (cmd_state.signal)
+		/* may block */
 		resp = daemon_reply_simple("failed",
 					   "reason = %s",
 					   "signal",
 					   "value = %d", cmd_state.signal, 
 					   NULL);
 	else if (cmd_state.ret_code)
+		/* may block */
 		resp = daemon_reply_simple("failed",
 					   "reason = %s",
 					   "ret_code",
 					   "value = %d", cmd_state.ret_code, 
 					   NULL);
 	else
+		/* may block */
 		resp = daemon_reply_simple("OK", NULL);
 
 	return resp;
 fail:
 	/* UNLOCKED */
+	/* may block */
 	return reply_fail("lvmpolld internal error occured");
 }
 
-static response poll_init(client_handle h, lvmpolld_state_t *ls, request req, enum poll_type type)
+static response poll_init(client_handle h,
+			  lvmpolld_state_t *ls,
+			  request req,
+			  enum poll_type type,
+			  lvmpolld_store_t *pdst,
+			  lvmpolld_parse_output_fn_t parse_fn,
+			  unsigned abort)
 {
 	const char *sinterval;
 	lvmpolld_lv_t *pdlv;
@@ -611,45 +636,47 @@ static response poll_init(client_handle h, lvmpolld_state_t *ls, request req, en
 	if (!lvid)
 		return reply_fail("requires LV UUID");
 
-	lock_lvid_to_pdlv(ls);
+	pdst_lock(pdst);
 
 	/*
 	 * lookup already polled LV object or create new one
 	 */
-	pdlv = dm_hash_lookup(ls->lvid_to_pdlv, lvid);
+	pdlv = pdst_lookup(pdst, lvid);
 	if (pdlv) {
+		DEBUGLOG(pdlv->ls, "%s: %s '%s' %s", PD_LOG_PREFIX, "LV with lvid:", pdlv->lvid, "already exists");
 		if (!pdlv_is_type(pdlv, type)) {
-			unlock_lvid_to_pdlv(ls);
+			pdst_unlock(pdst);
 			return reply_fail("LV is already beying polled with different operation in place");
 		}
-	 } else {
+	} else {
+		DEBUGLOG(ls, "%s: %s '%s' %s", PD_LOG_PREFIX, "LV with lvid:", lvid, "not found");
 		sinterval = daemon_request_str(req, "interval", NULL);
 		if (!sinterval || strpbrk(sinterval, "-") || sscanf(sinterval, "%u", &interval) != 1) {
-			unlock_lvid_to_pdlv(ls);
+			pdst_unlock(pdst);
 			return reply_fail("illegal 'interval' parameter");
 		}
 
 		/* pdlv->use_count == 1 after create */
-		if ((pdlv = pdlv_create(ls, lvid, type, sinterval, interval)) == NULL) {
-			unlock_lvid_to_pdlv(ls);
+		if ((pdlv = pdlv_create(ls, lvid, type, sinterval, 2 * interval, abort, pdst, parse_fn)) == NULL) {
+			pdst_unlock(pdst);
 			ERROR(ls, "%s: %s", PD_LOG_PREFIX, "pdlv_create failed");
 			return r;
 		}
 
-		if (!dm_hash_insert(ls->lvid_to_pdlv, lvid, pdlv)) {
+		if (!pdst_insert(pdst, lvid, pdlv)) {
 			pdlv_put(pdlv);
-			unlock_lvid_to_pdlv(ls);
+			pdst_unlock(pdst);
 			ERROR(ls, "%s: %s", PD_LOG_PREFIX, "dm_hash_insert(pdlv) failed");
 			return r;
 		}
 
-		pdlv_set_debug(pdlv, daemon_request_int(req, "debug", 0));
-		pdlv_set_verbose(pdlv, daemon_request_int(req, "verbose", 0));
+	/*	pdlv_set_debug(pdlv, daemon_request_int(req, "debug", 0));
+		pdlv_set_verbose(pdlv, daemon_request_int(req, "verbose", 0)); */
 
 		if (pthread_create(&pdlv->tid, NULL, fork_and_poll, (void *)pdlv)) {
-			dm_hash_remove(ls->lvid_to_pdlv, lvid);
+			pdst_remove(pdst, lvid);
 			pdlv_put(pdlv);
-			unlock_lvid_to_pdlv(ls);
+			pdst_unlock(pdst);
 			ERROR(ls, "%s: %s", PD_LOG_PREFIX, "pthread_create failed");
 			return r;
 		}
@@ -659,7 +686,7 @@ static response poll_init(client_handle h, lvmpolld_state_t *ls, request req, en
 	if (stream_data)
 		pdlv_get(pdlv);
 
-	unlock_lvid_to_pdlv(ls);
+	pdst_unlock(pdst);
 
 	if (stream_data) {
 		r = stream_progress_data(h, pdlv);
@@ -679,13 +706,13 @@ static response progress_stream(client_handle h, lvmpolld_state_t *ls, request r
 	if (!lvid)
 		return reply_fail("requires UUID");
 
-	lock_lvid_to_pdlv(ls);
+	pdst_lock(&ls->lvid_to_pdlv_poll);
 
-	pdlv = dm_hash_lookup(ls->lvid_to_pdlv, lvid);
+	pdlv = pdst_lookup(&ls->lvid_to_pdlv_poll, lvid);
 	if (pdlv)
-		pdlv_get(pdlv);
+		 pdlv_get(pdlv);
 
-	unlock_lvid_to_pdlv(ls);
+	pdst_unlock(&ls->lvid_to_pdlv_poll);
 
 	if (pdlv) {
 		r = stream_progress_data(h, pdlv);
@@ -705,13 +732,13 @@ static response progress_data_single(client_handle h, lvmpolld_state_t *ls, requ
 	if (!lvid)
 		return reply_fail("requires UUID");
 
-	lock_lvid_to_pdlv(ls);
+	pdst_lock(&ls->lvid_to_pdlv_poll);
 
-	pdlv = dm_hash_lookup(ls->lvid_to_pdlv, lvid);
+	pdlv = pdst_lookup(&ls->lvid_to_pdlv_poll, lvid);
 	if (pdlv)
 		pdlv_get(pdlv);
 
-	unlock_lvid_to_pdlv(ls);
+	pdst_unlock(&ls->lvid_to_pdlv_poll);
 
 	if (pdlv) {
 		r = daemon_reply_simple("progress_data", "data = %d", pdlv_get_percents(pdlv), NULL);
@@ -726,16 +753,28 @@ static response handler(struct daemon_state s, client_handle h, request r)
 {
 	lvmpolld_state_t *ls = s.private;
 	const char *rq = daemon_request_str(r, "request", "NONE");
+	unsigned abort = daemon_request_int(r, "abort", 0);
 
 	if (!strcmp(rq, PVMOVE_POLL))
-		return poll_init(h, ls, r, PVMOVE);
+		return poll_init(h, ls, r, PVMOVE,
+				 abort ? &ls->lvid_to_pdlv_abort : &ls->lvid_to_pdlv_poll,
+				 abort ? NULL : parse_line_for_percents,
+				 abort);
 	if (!strcmp(rq, CONVERT_POLL))
-		return poll_init(h, ls, r, CONVERT);
+		return poll_init(h, ls, r, CONVERT,
+				 &ls->lvid_to_pdlv_poll,
+				 parse_line_for_percents,
+				 0);
 	if (!strcmp(rq, MERGE_POLL))
-		return poll_init(h, ls, r, MERGE);
+		return poll_init(h, ls, r, MERGE,
+				 &ls->lvid_to_pdlv_poll,
+				 parse_line_for_percents,
+				 0);
 	if (!strcmp(rq, MERGE_THIN_POLL))
-		return poll_init(h, ls, r, MERGE_THIN);
-
+		return poll_init(h, ls, r, MERGE_THIN,
+				 &ls->lvid_to_pdlv_poll,
+				 parse_line_for_percents,
+				 0);
 	if (!strcmp(rq, "progress_stream"))
 		return progress_stream(h, ls, r);
 	if (!strcmp(rq, "progress_data_single"))
@@ -753,15 +792,15 @@ int main(int argc, char *argv[])
 		.daemon_init = init,
 		.handler = handler,
 		.name = "lvmpolld",
-		.pidfile = getenv("LVM_LVMPOLLD_PIDFILE") ? : LVMPOLLD_PIDFILE,
+		.pidfile = getenv("LVM_LVMPOLLD_PIDFILE") ?: LVMPOLLD_PIDFILE,
 		.private = &ls,
 		.protocol = "lvmpolld",
 		.protocol_version = 1,
-		.socket_path = getenv("LVM_LVMPOLLD_SOCKET") ? : LVMPOLLD_SOCKET,
+		.socket_path = getenv("LVM_LVMPOLLD_SOCKET") ?: LVMPOLLD_SOCKET,
 	};
 
 	// use getopt_long
-	while ((opt = getopt(argc, argv, "?fhVl:p:s:")) != EOF) {
+	while ((opt = getopt(argc, argv, "?fhVl:p:s:U:")) != EOF) {
 		switch (opt) {
 		case 'h':
 			usage(argv[0], stdout);
@@ -780,6 +819,9 @@ int main(int argc, char *argv[])
 			break;
 		case 's': // --socket
 			s.socket_path = optarg;
+			break;
+		case 'U': /* --prefix */
+			ls.prefix_dir = optarg;
 			break;
 		case 'V':
 			printf("lvmpolld version: " LVM_VERSION "\n");

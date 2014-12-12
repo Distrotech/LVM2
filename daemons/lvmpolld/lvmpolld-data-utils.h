@@ -17,7 +17,10 @@
 
 #include <pthread.h>
 
-struct lvmpolld_state;
+typedef struct lvmpolld_state lvmpolld_state_t;
+
+/* replace with configuration option */
+#define PDTIMEOUT_DEF 60
 
 enum poll_type {
 	PVMOVE = 0,
@@ -27,12 +30,24 @@ enum poll_type {
 	POLL_TYPE_MAX
 };
 
+typedef struct lvmpolld_lv lvmpolld_lv_t;
+
+typedef struct {
+	pthread_mutex_t lock;
+	void *store;
+} lvmpolld_store_t;
+
 typedef struct {
 	int ret_code;
 	int signal;
 } lvmpolld_cmd_stat_t;
 
-typedef struct {
+void pdst_init(lvmpolld_store_t *pdst);
+void pdst_destroy(lvmpolld_store_t *pdst);
+
+typedef void (*lvmpolld_parse_output_fn_t) (lvmpolld_lv_t *pdlv, const char *line);
+
+typedef struct lvmpolld_lv {
 	/*
 	 * accessing following vars doesn't
 	 * require lvmpolld_lv_t lock
@@ -43,8 +58,10 @@ typedef struct {
 	const char *const lvid;
 	/* either fullname vg/lv or vgname only */
 	/* const char *name; */
-	const unsigned interval;
+	const unsigned pdtimeout; /* in seconds */
 	const char *const sinterval;
+	lvmpolld_store_t *const pdst;
+	lvmpolld_parse_output_fn_t parse_output_fn;
 
 	/* pid of polled lvm command */
 	pid_t lvmcmd;
@@ -64,10 +81,21 @@ typedef struct {
 	unsigned polling_finished:1; /* no more update */
 	unsigned internal_error:1; /* unrecoverable error in lvmpolld */
 
-	/* FIXME: read from lvmpolld configuration */
-	unsigned debug:1;
-	unsigned verbose:1;
+	/* TODO: read from lvmpolld configuration and change to const */
+	unsigned debug:1; /* may be read w/o lock */
+	unsigned verbose:1; /* may be read w/o lock */
+	const unsigned abort:1; /* may be read w/o lock */
 } lvmpolld_lv_t;
+
+static inline void pdst_lock(lvmpolld_store_t *pdst)
+{
+	pthread_mutex_lock(&pdst->lock);
+}
+
+static inline void pdst_unlock(lvmpolld_store_t *pdst)
+{
+	pthread_mutex_unlock(&pdst->lock);
+}
 
 static inline void pdlv_lock(lvmpolld_lv_t *pdlv)
 {
@@ -130,18 +158,34 @@ static inline pid_t pdlv_get_cmd_pid(const lvmpolld_lv_t *pdlv)
 	return pdlv->lvmcmd;
 }
 
-static inline unsigned pdlv_get_interval(const lvmpolld_lv_t *pdlv)
+static inline unsigned pdlv_get_timeout(const lvmpolld_lv_t *pdlv)
 {
-	return pdlv->interval;
+	return pdlv->pdtimeout;
 }
 
+static inline lvmpolld_lv_t *pdst_lookup(lvmpolld_store_t *pdst, const char *key)
+{
+	return dm_hash_lookup(pdst->store, key);
+}
+
+static inline void pdst_remove(lvmpolld_store_t *pdst, const char *key)
+{
+	dm_hash_remove(pdst->store, key);
+}
+
+static inline int pdst_insert(lvmpolld_store_t *pdst, const char *key, lvmpolld_lv_t *pdlv)
+{
+	return dm_hash_insert(pdst->store, key, pdlv);
+}
 
 /* pdlv structure has use_count == 1 after create */
 lvmpolld_lv_t *pdlv_create(struct lvmpolld_state *ls, const char *lvid,
 			   const enum poll_type type, const char *sinterval,
-			   unsigned interval);
+			   unsigned pdtimeout, unsigned abort,
+			   lvmpolld_store_t *pdst,
+			   lvmpolld_parse_output_fn_t parse_fn);
 
-/* use count must not reach 0 when structure is inside hash table */
+/* use count must not reach 0 when structure is in lvmpolld_store_t */
 void pdlv_put(lvmpolld_lv_t *pdlv);
 void pdlv_get(lvmpolld_lv_t *pdlv);
 

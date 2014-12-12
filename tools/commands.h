@@ -883,6 +883,7 @@ xx(pvmove,
 xx(lvpoll,
    "Poll operation initiated before by either pvmove or lvconvert",
    ALL_VGS_IS_DEFAULT,
+   "\t[--abort]\n"
    "\t[-d|--debug]\n "
    "\t[-h|-?|--help]\n"
    "\t[-i|--interval seconds]\n"
@@ -890,7 +891,7 @@ xx(lvpoll,
    "\t[-v|--verbose]\n "
    "\t[--version]\n",
 
-   interval_ARG, test_ARG)
+   abort_ARG, interval_ARG, test_ARG)
 
 xx(pvremove,
    "Remove LVM label(s) from physical volume(s)",

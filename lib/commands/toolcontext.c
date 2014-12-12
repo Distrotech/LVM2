@@ -650,6 +650,7 @@ static int _process_config(struct cmd_context *cmd)
 	lvmpolld_socket = getenv("LVM_LVMPOLLD_SOCKET");
 	if (!lvmpolld_socket)
 		lvmpolld_socket = DEFAULT_RUN_DIR "/lvmpolld.socket";
+	lvmpolld_set_socket(lvmpolld_socket);
 
 	lvmpolld_set_active(find_config_tree_bool(cmd, global_use_lvmpolld_CFG, NULL));
 

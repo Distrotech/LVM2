@@ -24,10 +24,12 @@ void lvmpolld_disconnect(void);
 
 int lvmpolld(const char *name, const char *uuid, unsigned background,
 	     uint64_t lv_type, const char *progress_title, unsigned stream_data,
-	     unsigned interval);
+	     unsigned interval, unsigned abort);
 
 int lvmpolld_use(void);
 
 void lvmpolld_set_active(int active);
+
+void lvmpolld_set_socket(const char *socket);
 
 #endif /* _LVM_LVMPOLLD_CLIENT_H */

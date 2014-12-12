@@ -169,6 +169,8 @@ int lvpoll(struct cmd_context *cmd, int argc, char **argv)
 		return EINVALID_CMD_LINE;
 	}
 
+	log_print_unless_silent("LVM_SYSTEM_DIR=%s", getenv("LVM_SYSTEM_DIR") ?: "<not set>");
+
 	return poll_vg(cmd, argv[0], argv[1], arg_is_set(cmd, abort_ARG),
 		       arg_uint_value(cmd, interval_ARG, find_config_tree_int(cmd, activation_polling_interval_CFG, NULL)));
 }

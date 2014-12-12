@@ -26,19 +26,24 @@ static void pdlv_destroy(lvmpolld_lv_t *pdlv)
 	dm_free((void *)pdlv);
 }
 
-lvmpolld_lv_t *pdlv_create(struct lvmpolld_state *ls, const char *lvid,
+lvmpolld_lv_t *pdlv_create(lvmpolld_state_t *ls, const char *lvid,
 			   enum poll_type type, const char *sinterval,
-			   unsigned interval)
+			   unsigned pdtimeout, unsigned abort,
+			   lvmpolld_store_t *pdst,
+			   lvmpolld_parse_output_fn_t parse_fn)
 {
 	lvmpolld_lv_t tmp = {
 		.ls = ls,
 		.type = type,
 		.lvid = dm_strdup(lvid),
 		.sinterval = sinterval ? dm_strdup(sinterval) : NULL,
-		.interval = interval,
+		.pdtimeout = pdtimeout ?: PDTIMEOUT_DEF,
 		.percent = DM_PERCENT_0,
 		.cmd_state = { .ret_code = -1, .signal = 0 },
-		.use_count = 1
+		.use_count = 1,
+		.pdst = pdst,
+		.parse_output_fn = parse_fn,
+		.abort = abort
 	}, *pdlv = (lvmpolld_lv_t *) dm_malloc(sizeof(lvmpolld_lv_t));
 
 	if (!pdlv) {
@@ -190,4 +195,16 @@ void pdlv_set_internal_error(lvmpolld_lv_t *pdlv, unsigned error)
 	pthread_cond_broadcast(&pdlv->cond_update);
 
 	pdlv_unlock(pdlv);
+}
+
+void pdst_init(lvmpolld_store_t *pdst)
+{
+	pdst->store = dm_hash_create(32);
+	pthread_mutex_init(&pdst->lock, NULL);
+}
+
+void pdst_destroy(lvmpolld_store_t *pdst)
+{
+	dm_hash_destroy(pdst->store);
+	pthread_mutex_destroy(&pdst->lock);
 }
