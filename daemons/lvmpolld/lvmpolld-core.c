@@ -624,6 +624,7 @@ static response poll_init(client_handle h,
 			  lvmpolld_parse_output_fn_t parse_fn,
 			  unsigned abort)
 {
+	pthread_attr_t attr;
 	const char *sinterval;
 	lvmpolld_lv_t *pdlv;
 	unsigned interval;
@@ -674,17 +675,27 @@ static response poll_init(client_handle h,
 			return r;
 		}
 
-	/*	pdlv_set_debug(pdlv, daemon_request_int(req, "debug", 0));
-		pdlv_set_verbose(pdlv, daemon_request_int(req, "verbose", 0)); */
-
-		/* TODO: polling threads should be detached */
-		if (pthread_create(&pdlv->tid, NULL, fork_and_poll, (void *)pdlv)) {
+		if (pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED)) {
 			pdst_remove(pdst, lvid);
 			pdlv_put(pdlv);
 			pdst_unlock(pdst);
+			ERROR(ls, "%s: %s", PD_LOG_PREFIX, "pthread_attr_setdetachstate failed");
+			return r;
+		}
+
+	/*	pdlv_set_debug(pdlv, daemon_request_int(req, "debug", 0));
+		pdlv_set_verbose(pdlv, daemon_request_int(req, "verbose", 0)); */
+
+		if (pthread_create(&pdlv->tid, &attr, fork_and_poll, (void *)pdlv)) {
+			pdst_remove(pdst, lvid);
+			pdlv_put(pdlv);
+			pdst_unlock(pdst);
+			pthread_attr_destroy(&attr);
 			ERROR(ls, "%s: %s", PD_LOG_PREFIX, "pthread_create failed");
 			return r;
 		}
+
+		pthread_attr_destroy(&attr);
 	}
 
 	/* increase use count for streaming thread */
