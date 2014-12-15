@@ -79,7 +79,7 @@ static int poll_lv_by_lvid(struct cmd_context *cmd,
 	return ECMD_PROCESSED;
 }
 
-static int set_daemon_parms(const char* poll_type, struct daemon_parms *parms)
+static int set_daemon_parms(struct cmd_context *cmd, const char* poll_type, struct daemon_parms *parms)
 {
 	if (!strcmp(poll_type, PVMOVE_POLL)) {
 		parms->progress_title = "Moved";
@@ -88,6 +88,7 @@ static int set_daemon_parms(const char* poll_type, struct daemon_parms *parms)
 	} else if (!strcmp(poll_type, CONVERT_POLL)) {
 		parms->progress_title = "Converted";
 		parms->poll_fns = &_convert_fns;
+		cmd->handles_missing_pvs = 1; /* TODO: handle with explicit --handlemissing parameter or similar */
 	} else if (!strcmp(poll_type, MERGE_POLL)) {
 		parms->progress_title = "Merged";
 		parms->poll_fns = &_merge_fns;
@@ -115,7 +116,7 @@ static int poll_vg(struct cmd_context *cmd, const char *poll_type,
 	parms.aborting = abort;
 	parms.progress_display = 1;
 
-	if (!set_daemon_parms(poll_type, &parms))
+	if (!set_daemon_parms(cmd, poll_type, &parms))
 		return EINVALID_CMD_LINE;
 
 	lvp.parms = &parms;
