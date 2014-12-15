@@ -505,7 +505,7 @@ static int _lvmpolld_poll_vg(struct cmd_context *cmd,
 		}
 
 		/* ret_code != 0 means we found the request polling operation and it's active */
-		if (lvmpolld(name, lvid.s, parms->background, parms->lv_type,
+		if (lvmpolld(cmd, name, lvid.s, parms->background, parms->lv_type,
 			     parms->progress_title, 0, parms->interval, parms->aborting))
 			parms->outstanding_count++;
 	}

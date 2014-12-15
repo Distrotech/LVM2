@@ -17,12 +17,14 @@
 
 #include "daemon-client.h"
 
+struct cmd_context;
+
 #define LVMPOLLD_SOCKET DEFAULT_RUN_DIR "/lvmpolld.socket"
 
 /* daemon_handle lvmpolld_connect(const char *socket);*/
 void lvmpolld_disconnect(void);
 
-int lvmpolld(const char *name, const char *uuid, unsigned background,
+int lvmpolld(struct cmd_context *cmd, const char *name, const char *uuid, unsigned background,
 	     uint64_t lv_type, const char *progress_title, unsigned stream_data,
 	     unsigned interval, unsigned abort);
 

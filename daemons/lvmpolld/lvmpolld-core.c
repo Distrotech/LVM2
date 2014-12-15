@@ -629,6 +629,7 @@ static response poll_init(client_handle h,
 	unsigned interval;
 	response r = reply_fail("not enough memory");
 	const char *lvid = daemon_request_str(req, "lvid", NULL);
+	const char *cmdline = daemon_request_str(req, "cmdline", NULL);
 	unsigned stream_data = daemon_request_int(req, "stream_data", 0);
 
 	assert(type < POLL_TYPE_MAX);
@@ -637,6 +638,9 @@ static response poll_init(client_handle h,
 		return reply_fail("requires LV UUID");
 
 	pdst_lock(pdst);
+
+	if (cmdline)
+		DEBUGLOG(ls, "%s: %s %s", PD_LOG_PREFIX, "command initiating polling operation: ", cmdline);
 
 	/*
 	 * lookup already polled LV object or create new one
@@ -673,6 +677,7 @@ static response poll_init(client_handle h,
 	/*	pdlv_set_debug(pdlv, daemon_request_int(req, "debug", 0));
 		pdlv_set_verbose(pdlv, daemon_request_int(req, "verbose", 0)); */
 
+		/* TODO: polling threads should be detached */
 		if (pthread_create(&pdlv->tid, NULL, fork_and_poll, (void *)pdlv)) {
 			pdst_remove(pdst, lvid);
 			pdlv_put(pdlv);
