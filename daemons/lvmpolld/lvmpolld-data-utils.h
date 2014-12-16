@@ -35,6 +35,7 @@ typedef struct lvmpolld_lv lvmpolld_lv_t;
 typedef struct {
 	pthread_mutex_t lock;
 	void *store;
+	const char *name;
 } lvmpolld_store_t;
 
 typedef struct {
@@ -42,7 +43,7 @@ typedef struct {
 	int signal;
 } lvmpolld_cmd_stat_t;
 
-void pdst_init(lvmpolld_store_t *pdst);
+void pdst_init(lvmpolld_store_t *pdst, const char *name);
 void pdst_destroy(lvmpolld_store_t *pdst);
 
 typedef void (*lvmpolld_parse_output_fn_t) (lvmpolld_lv_t *pdlv, const char *line);
@@ -62,6 +63,7 @@ typedef struct lvmpolld_lv {
 	const char *const sinterval;
 	lvmpolld_store_t *const pdst;
 	lvmpolld_parse_output_fn_t parse_output_fn;
+	const char *const *cmdargv;
 
 	/* pid of polled lvm command */
 	pid_t lvmcmd;
@@ -82,8 +84,9 @@ typedef struct lvmpolld_lv {
 	unsigned internal_error:1; /* unrecoverable error in lvmpolld */
 
 	/* TODO: read from lvmpolld configuration and change to const */
-	unsigned debug:1; /* may be read w/o lock */
-	unsigned verbose:1; /* may be read w/o lock */
+	/* unsigned debug:1; */ /* may be read w/o lock */
+	/* unsigned verbose:1; */ /* may be read w/o lock */
+
 	const unsigned abort:1; /* may be read w/o lock */
 } lvmpolld_lv_t;
 
@@ -115,17 +118,6 @@ static inline int pdlv_locked_await_update(lvmpolld_lv_t *pdlv)
 static inline int pdlv_is_type(const lvmpolld_lv_t *pdlv, enum poll_type type)
 {
 	return pdlv->type == type;
-}
-
-static inline void pdlv_set_debug(lvmpolld_lv_t *pdlv, unsigned debug)
-{
-	pdlv->debug = debug;
-}
-
-/* FIXME: --verbose is countable parameter in LVM2 */
-static inline void pdlv_set_verbose(lvmpolld_lv_t *pdlv, unsigned verbose)
-{
-	pdlv->verbose = verbose;
 }
 
 static inline int pdlv_locked_polling_finished(const lvmpolld_lv_t *pdlv)
@@ -161,6 +153,11 @@ static inline pid_t pdlv_get_cmd_pid(const lvmpolld_lv_t *pdlv)
 static inline unsigned pdlv_get_timeout(const lvmpolld_lv_t *pdlv)
 {
 	return pdlv->pdtimeout;
+}
+
+static inline void pdlv_set_cmdargv(lvmpolld_lv_t *pdlv, const char **cmdargv)
+{
+	pdlv->cmdargv = cmdargv;
 }
 
 static inline lvmpolld_lv_t *pdst_lookup(lvmpolld_store_t *pdst, const char *key)

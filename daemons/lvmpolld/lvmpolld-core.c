@@ -35,7 +35,7 @@
 #include "config-util.h"
 #include "lvmpolld-data-utils.h"
 #include "polling_ops.h"
-#include "lvm-version.h"
+#include "lvm-version.h"  /* ??? */
 
 #define LVMPOLLD_SOCKET DEFAULT_RUN_DIR "/lvmpolld.socket"
 
@@ -97,8 +97,8 @@ static int init(struct daemon_state *s)
 	if (!daemon_log_parse(ls->log, DAEMON_LOG_OUTLET_STDERR, ls->log_config, 1))
 		return 0;
 
-	pdst_init(&ls->lvid_to_pdlv_poll);
-	pdst_init(&ls->lvid_to_pdlv_abort);
+	pdst_init(&ls->lvid_to_pdlv_poll, "polling");
+	pdst_init(&ls->lvid_to_pdlv_abort, "abort");
 
 	DEBUGLOG(ls, "%s: LVM_SYSTEM_DIR=%s", PD_LOG_PREFIX, getenv("LVM_SYSTEM_DIR") ?: "<not set>");
 
@@ -166,21 +166,21 @@ static void parse_line_for_percents(lvmpolld_lv_t *pdlv, const char *line)
 
 	if (!(keyw = strstr(line, get_keyword(pdlv->type))) || keyw == line
 	    || !strchr(keyw, DM_PERCENT_CHAR)) {
-		WARN(pdlv->ls, "%s: %s", PD_LOG_PREFIX,
+		INFO(pdlv->ls, "%s: %s", PD_LOG_PREFIX,
 		     "parsing percentage from lvm2 command failed");
 		return;
 	}
 
 	nr = strpbrk(keyw, "+-0123456789");
 	if (!nr) {
-		WARN(pdlv->ls, "%s: %s", PD_LOG_PREFIX,
+		INFO(pdlv->ls, "%s: %s", PD_LOG_PREFIX,
 		     "parsing percentage from lvm2 command failed");
 		return;
 	}
 
 	d = strtod(nr, &endptr);
 	if (nr == endptr) {
-		WARN(pdlv->ls, "%s: %s", PD_LOG_PREFIX,
+		INFO(pdlv->ls, "%s: %s", PD_LOG_PREFIX,
 		     "parsing percentage from lvm2 command failed");
 		return;
 	} else if (d > 100.0) {
@@ -375,28 +375,34 @@ static const char **cmdargv_ctr(lvmpolld_lv_t *pdlv)
 
 	if (!add_to_cmdargv(&cmd_argv, pdlv->ls->cmd, &i, MIN_SIZE))
 		goto err;
-	if (pdlv->debug && !add_to_cmdargv(&cmd_argv, "--debug", &i, MIN_SIZE))
-		goto err;
-	if (pdlv->verbose && !add_to_cmdargv(&cmd_argv, "-vvvv", &i, MIN_SIZE))
-		goto err;
+
+	/* by default run under global filter */
 	if (!add_to_cmdargv(&cmd_argv, "--config", &i, MIN_SIZE) ||
 	    !add_to_cmdargv(&cmd_argv, "devices { filter = [ \"a/.*/\" ] }", &i, MIN_SIZE))
 		goto err;
+
+	/* transfer polling internal polling interval */
 	if (pdlv->sinterval &&
 	    (!add_to_cmdargv(&cmd_argv, "--interval", &i, MIN_SIZE) ||
 	     !add_to_cmdargv(&cmd_argv, pdlv->sinterval, &i, MIN_SIZE)))
 		goto err;
+
+	/* pass abort param */
 	if (pdlv->abort &&
 		!add_to_cmdargv(&cmd_argv, "--abort", &i, MIN_SIZE))
 		goto err;
+
+	/* FIXME: one of: "convert", "pvmove", "merge", "merge_thin" */
 	if (!add_to_cmdargv(&cmd_argv, polling_ops[pdlv->type], &i, MIN_SIZE))
 		goto err;
+
+	/* either vg_uuid+\0\0\0\0... or vg_uuid+lv_uuid */
 	if (!add_to_cmdargv(&cmd_argv, pdlv->lvid, &i, MIN_SIZE))
 		goto err;
+
+	/* terminating NULL */
 	if (!add_to_cmdargv(&cmd_argv, NULL, &i, MIN_SIZE))
 		goto err;
-
-	DEBUGLOG(pdlv->ls, "%s: i = %d", PD_LOG_PREFIX, i);
 
 	return cmd_argv;
 err:
@@ -412,12 +418,6 @@ static void *fork_and_poll(void *args)
 	lvmpolld_lv_t *pdlv = (lvmpolld_lv_t *) args;
 
 	int outpipe[2] = { -1, -1 }, errpipe[2] = { -1, -1 };
-	const char **cmdargv = cmdargv_ctr(pdlv);
-	if (!cmdargv) {
-		ERROR(pdlv->ls, "%s: %s", PD_LOG_PREFIX, "failed to construct arguments for poll command");
-		pdlv_set_internal_error(pdlv, 1);
-		goto err;
-	}
 
 	if (pipe(outpipe) || pipe(errpipe)) {
 		ERROR(pdlv->ls, "%s: %s", PD_LOG_PREFIX, "failed to create pipe");
@@ -439,13 +439,13 @@ static void *fork_and_poll(void *args)
 	r = fork();
 	if (!r) {
 		/* child */
-		/* !!! Do not touch any shared variables belonging to polldaemon !!! */
+		/* !!! Do not touch any posix thread primitive !!! */
 
 		if ((dup2(outpipe[1], STDOUT_FILENO ) != STDOUT_FILENO) ||
 		    (dup2(errpipe[1], STDERR_FILENO ) != STDERR_FILENO))
 			_exit(100);
 
-		execv(*cmdargv, (char *const *)cmdargv);
+		execv(*(pdlv->cmdargv), (char *const *)pdlv->cmdargv);
 
 		_exit(101);
 	} else {
@@ -456,7 +456,9 @@ static void *fork_and_poll(void *args)
 			goto err;
 		}
 
-		INFO(pdlv->ls, "%s: LVM2 cmd \"%s\" (PID: %d)", PD_LOG_PREFIX, *cmdargv, r);
+		INFO(pdlv->ls, "%s: LVM2 cmd \"%s\" (PID: %d)", PD_LOG_PREFIX, *(pdlv->cmdargv), r);
+
+		pdlv_set_cmd_pid(pdlv, r);
 
 		/* failure to close write end of any pipe will result in broken polling */
 		if (close(outpipe[1])) {
@@ -472,7 +474,6 @@ static void *fork_and_poll(void *args)
 
 		outpipe[1] = errpipe[1] = -1;
 
-		pdlv_set_cmd_pid(pdlv, r);
 
 		poll_for_output(pdlv, *outpipe, *errpipe);
 		DEBUGLOG(pdlv->ls, "%s: %s", PD_LOG_PREFIX, "polling command finished");
@@ -483,7 +484,6 @@ err:
 	pdst_remove(pdlv->pdst, pdlv->lvid);
 	pdst_unlock(pdlv->pdst);
 
-	dm_free(cmdargv);
 	if (outpipe[0] != -1)
 		close(outpipe[0]);
 	if (outpipe[1] != -1)
@@ -616,129 +616,6 @@ fail:
 	return reply_fail("lvmpolld internal error occured");
 }
 
-static response poll_init(client_handle h,
-			  lvmpolld_state_t *ls,
-			  request req,
-			  enum poll_type type,
-			  lvmpolld_store_t *pdst,
-			  lvmpolld_parse_output_fn_t parse_fn,
-			  unsigned abort)
-{
-	pthread_attr_t attr;
-	const char *sinterval;
-	lvmpolld_lv_t *pdlv;
-	unsigned interval;
-	response r = reply_fail("not enough memory");
-	const char *lvid = daemon_request_str(req, "lvid", NULL);
-	const char *cmdline = daemon_request_str(req, "cmdline", NULL);
-	unsigned stream_data = daemon_request_int(req, "stream_data", 0);
-
-	assert(type < POLL_TYPE_MAX);
-
-	if (!lvid)
-		return reply_fail("requires LV UUID");
-
-	pdst_lock(pdst);
-
-	if (cmdline)
-		DEBUGLOG(ls, "%s: %s %s", PD_LOG_PREFIX, "command initiating polling operation: ", cmdline);
-
-	/*
-	 * lookup already polled LV object or create new one
-	 */
-	pdlv = pdst_lookup(pdst, lvid);
-	if (pdlv) {
-		DEBUGLOG(pdlv->ls, "%s: %s '%s' %s", PD_LOG_PREFIX, "LV with lvid:", pdlv->lvid, "already exists");
-		if (!pdlv_is_type(pdlv, type)) {
-			pdst_unlock(pdst);
-			return reply_fail("LV is already beying polled with different operation in place");
-		}
-	} else {
-		DEBUGLOG(ls, "%s: %s '%s' %s", PD_LOG_PREFIX, "LV with lvid:", lvid, "not found");
-		sinterval = daemon_request_str(req, "interval", NULL);
-		if (!sinterval || strpbrk(sinterval, "-") || sscanf(sinterval, "%u", &interval) != 1) {
-			pdst_unlock(pdst);
-			return reply_fail("illegal 'interval' parameter");
-		}
-
-		/* pdlv->use_count == 1 after create */
-		if ((pdlv = pdlv_create(ls, lvid, type, sinterval, 2 * interval, abort, pdst, parse_fn)) == NULL) {
-			pdst_unlock(pdst);
-			ERROR(ls, "%s: %s", PD_LOG_PREFIX, "pdlv_create failed");
-			return r;
-		}
-
-		if (!pdst_insert(pdst, lvid, pdlv)) {
-			pdlv_put(pdlv);
-			pdst_unlock(pdst);
-			ERROR(ls, "%s: %s", PD_LOG_PREFIX, "dm_hash_insert(pdlv) failed");
-			return r;
-		}
-
-		if (pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED)) {
-			pdst_remove(pdst, lvid);
-			pdlv_put(pdlv);
-			pdst_unlock(pdst);
-			ERROR(ls, "%s: %s", PD_LOG_PREFIX, "pthread_attr_setdetachstate failed");
-			return r;
-		}
-
-	/*	pdlv_set_debug(pdlv, daemon_request_int(req, "debug", 0));
-		pdlv_set_verbose(pdlv, daemon_request_int(req, "verbose", 0)); */
-
-		if (pthread_create(&pdlv->tid, &attr, fork_and_poll, (void *)pdlv)) {
-			pdst_remove(pdst, lvid);
-			pdlv_put(pdlv);
-			pdst_unlock(pdst);
-			pthread_attr_destroy(&attr);
-			ERROR(ls, "%s: %s", PD_LOG_PREFIX, "pthread_create failed");
-			return r;
-		}
-
-		pthread_attr_destroy(&attr);
-	}
-
-	/* increase use count for streaming thread */
-	if (stream_data)
-		pdlv_get(pdlv);
-
-	pdst_unlock(pdst);
-
-	if (stream_data) {
-		r = stream_progress_data(h, pdlv);
-		pdlv_put(pdlv);
-		return r;
-	}
-	else
-		return daemon_reply_simple("OK", NULL);
-}
-
-static response progress_stream(client_handle h, lvmpolld_state_t *ls, request req)
-{
-	lvmpolld_lv_t *pdlv;
-	response r;
-	const char *lvid = daemon_request_str(req, "lvid", NULL);
-
-	if (!lvid)
-		return reply_fail("requires UUID");
-
-	pdst_lock(&ls->lvid_to_pdlv_poll);
-
-	pdlv = pdst_lookup(&ls->lvid_to_pdlv_poll, lvid);
-	if (pdlv)
-		 pdlv_get(pdlv);
-
-	pdst_unlock(&ls->lvid_to_pdlv_poll);
-
-	if (pdlv) {
-		r = stream_progress_data(h, pdlv);
-		pdlv_put(pdlv);
-	} else
-		r = reply_fail("not found");
-
-	return r;
-}
-
 static response progress_data_single(client_handle h, lvmpolld_state_t *ls, request req)
 {
 	lvmpolld_lv_t *pdlv;
@@ -765,34 +642,127 @@ static response progress_data_single(client_handle h, lvmpolld_state_t *ls, requ
 	return r;
 }
 
+static lvmpolld_lv_t *construct_pdlv(request req, lvmpolld_state_t *ls,
+				     const char *lvid, enum poll_type type,
+				     unsigned abort, lvmpolld_store_t *pdst)
+{
+	const char **cmdargv;
+	lvmpolld_lv_t *pdlv;
+	unsigned interval;
+	const char *sinterval = daemon_request_str(req, "interval", NULL);
+
+	if (!sinterval || strpbrk(sinterval, "-") || sscanf(sinterval, "%u", &interval) != 1) {
+		ERROR(ls, "%s: %s: %s", PD_LOG_PREFIX, "Illegal mandatory interval parameter",
+		      sinterval ?: "<empty>");
+		return NULL;
+	}
+
+	pdlv = pdlv_create(ls, lvid, type, sinterval, 2 * interval, abort, pdst,
+			   (abort ? NULL : parse_line_for_percents));
+
+	if (!pdlv) {
+		ERROR(ls, "%s: %s", PD_LOG_PREFIX, "Failed to create pdlv");
+		return NULL;
+	}
+
+	cmdargv = cmdargv_ctr(pdlv);
+	if (!cmdargv) {
+		pdlv_put(pdlv);
+		ERROR(pdlv->ls, "%s: %s", PD_LOG_PREFIX, "failed to construct cmd arguments for lvpoll command");
+		return NULL;
+	}
+
+	pdlv_set_cmdargv(pdlv, cmdargv);
+
+	return pdlv;
+}
+
+static int spawn_detached_thread(lvmpolld_lv_t *pdlv)
+{
+	int r;
+	pthread_attr_t attr;
+
+	pthread_attr_init(&attr);
+	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+
+	r = pthread_create(&pdlv->tid, &attr, fork_and_poll, (void *)pdlv);
+
+	pthread_attr_destroy(&attr);
+
+	return !r;
+}
+
+static response poll_init(client_handle h, lvmpolld_state_t *ls, request req, enum poll_type type)
+{
+	lvmpolld_lv_t *pdlv;
+	lvmpolld_store_t *pdst;
+	response r;
+
+	const char *lvid = daemon_request_str(req, "lvid", NULL);
+	unsigned abort = daemon_request_int(req, "abort", 0);
+	unsigned stream_data = daemon_request_int(req, "stream_data", 0);
+
+	assert(type < POLL_TYPE_MAX);
+
+	if (abort && type != PVMOVE)
+		return reply_fail("abort is not supported with requested poll operation");
+
+	pdst = abort ? &ls->lvid_to_pdlv_abort : &ls->lvid_to_pdlv_poll;
+
+	pdst_lock(pdst);
+	pdlv = pdst_lookup(pdst, lvid);
+	if (pdlv) {
+		if (!pdlv_is_type(pdlv, type)) {
+			pdst_unlock(pdst);
+			return reply_fail("different operation with same lvid already running");
+		}
+	} else {
+		pdlv = construct_pdlv(req, ls, lvid, type, abort, pdst);
+		if (!pdlv) {
+			pdst_unlock(pdst);
+			return reply_fail("lvmpolld internal error");
+		}
+		if (!pdst_insert(pdst, lvid, pdlv)) {
+			pdlv_put(pdlv);
+			pdst_unlock(pdst);
+			return reply_fail("lvmpolld internal error");
+		}
+		if (!spawn_detached_thread(pdlv)) {
+			ERROR(ls, "%s: %s", PD_LOG_PREFIX, "failed to spawn detached thread");
+			pdst_remove(pdst, lvid);
+			pdlv_put(pdlv);
+			pdst_unlock(pdst);
+			return reply_fail("lvmpolld internal error");
+		}
+	}
+
+	if (stream_data)
+		pdlv_get(pdlv);
+
+	pdst_unlock(pdst);
+
+	if (stream_data) {
+		r = stream_progress_data(h, pdlv);
+		pdlv_put(pdlv);
+		return r;
+	}
+	else
+		return daemon_reply_simple("OK", NULL);
+}
+
 static response handler(struct daemon_state s, client_handle h, request r)
 {
 	lvmpolld_state_t *ls = s.private;
 	const char *rq = daemon_request_str(r, "request", "NONE");
-	unsigned abort = daemon_request_int(r, "abort", 0);
 
 	if (!strcmp(rq, PVMOVE_POLL))
-		return poll_init(h, ls, r, PVMOVE,
-				 abort ? &ls->lvid_to_pdlv_abort : &ls->lvid_to_pdlv_poll,
-				 abort ? NULL : parse_line_for_percents,
-				 abort);
+		return poll_init(h, ls, r, PVMOVE);
 	if (!strcmp(rq, CONVERT_POLL))
-		return poll_init(h, ls, r, CONVERT,
-				 &ls->lvid_to_pdlv_poll,
-				 parse_line_for_percents,
-				 0);
+		return poll_init(h, ls, r, CONVERT);
 	if (!strcmp(rq, MERGE_POLL))
-		return poll_init(h, ls, r, MERGE,
-				 &ls->lvid_to_pdlv_poll,
-				 parse_line_for_percents,
-				 0);
+		return poll_init(h, ls, r, MERGE);
 	if (!strcmp(rq, MERGE_THIN_POLL))
-		return poll_init(h, ls, r, MERGE_THIN,
-				 &ls->lvid_to_pdlv_poll,
-				 parse_line_for_percents,
-				 0);
-	if (!strcmp(rq, "progress_stream"))
-		return progress_stream(h, ls, r);
+		return poll_init(h, ls, r, MERGE_THIN);
 	if (!strcmp(rq, "progress_data_single"))
 		return progress_data_single(h, ls, r);
 
