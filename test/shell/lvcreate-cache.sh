@@ -16,6 +16,8 @@
 
 . lib/inittest
 
+test -e LOCAL_CLVMD && skip
+
 aux have_cache 1 3 0 || skip
 
 # FIXME: parallel cache metadata allocator is crashing when used value 8000!
