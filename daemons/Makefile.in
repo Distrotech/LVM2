@@ -23,9 +23,7 @@ ifeq ("@BUILD_LVMPOLLD@", "yes")
   SUBDIRS += lvmpolld
 endif
 
-SUBDIRS += testdaemon
-
-.PHONY: dmeventd clvmd cmirrord lvmetad lvmpolld testdaemon
+.PHONY: dmeventd clvmd cmirrord lvmetad lvmpolld
 
 ifneq ("@CLVMD@", "none")
   SUBDIRS += clvmd
@@ -43,7 +41,7 @@ endif
 endif
 
 ifeq ($(MAKECMDGOALS),distclean)
-  SUBDIRS = clvmd cmirrord dmeventd lvmetad lvmpolld testdaemon
+  SUBDIRS = clvmd cmirrord dmeventd lvmetad lvmpolld
 endif
 
 include $(top_builddir)/make.tmpl

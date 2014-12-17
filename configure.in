@@ -1865,7 +1865,6 @@ daemons/dmeventd/plugins/snapshot/Makefile
 daemons/dmeventd/plugins/thin/Makefile
 daemons/lvmetad/Makefile
 daemons/lvmpolld/Makefile
-daemons/testdaemon/Makefile
 conf/Makefile
 conf/example.conf
 conf/lvmlocal.conf
