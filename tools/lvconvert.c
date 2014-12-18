@@ -452,7 +452,7 @@ static int _read_params(struct cmd_context *cmd, int argc, char **argv,
 
 	if ((arg_count(cmd, stripes_long_ARG) || arg_count(cmd, stripesize_ARG)) &&
 #if 1
-	    (_mirror_or_raid_type_requested(cmd, type_str) ||
+	    (!_mirror_or_raid_type_requested(cmd, type_str) ||
 #endif
 	     arg_count(cmd, repair_ARG) ||
 	     arg_count(cmd, thinpool_ARG))) {
@@ -1900,6 +1900,7 @@ static int _lvconvert_raid(struct logical_volume *lv, struct lvconvert_params *l
 	struct lv_segment *seg = first_seg(lv);
 	dm_percent_t sync_percent;
 
+printf("stripes_ARG=%u stripes_long_ARG=%u\n", arg_count(lv->vg->cmd, stripes_ARG), arg_count(lv->vg->cmd, stripes_long_ARG));
 	if (!arg_count(cmd, type_ARG))
 		lp->segtype = seg->segtype;
 
@@ -1962,18 +1963,21 @@ printf("%s %u region_size=%u\n", __func__, __LINE__, seg->region_size);
 		return lv_raid_change_image_count(lv, image_count, lp->pvh);
 	}
 
-printf("%s %u lp->stripes=%u\n", __func__, __LINE__, lp->stripes);
+printf("%s %u lp->stripes=%u lp->stripe_size=%u\n", __func__, __LINE__, lp->stripes, lp->stripe_size);
 	if ((seg_is_striped(seg) || lv_is_raid(lv)) &&
 	    (arg_count(cmd, type_ARG) ||
 	     arg_count(cmd, stripes_ARG) ||
 	     arg_count(cmd, stripes_long_ARG) ||
 	     arg_count(cmd, stripesize_ARG)))
 {
+		unsigned stripes = (arg_count(cmd, stripes_ARG )|| arg_count(cmd, stripes_long_ARG)) ? lp->stripes  : 0;
+		unsigned stripe_size = arg_count(cmd, stripesize_ARG) ? lp->stripe_size  : 0;
+
 		if (seg_is_striped(seg))
 			seg->region_size = lp->region_size;
 
-printf("%s %u lp->segtype=%s\n", __func__, __LINE__, lp->segtype->name);
-		return lv_raid_reshape(lv, lp->segtype, lp->stripes, lp->stripe_size, lp->pvh);
+printf("%s %u lp->segtype=%s stripes=%u stripe_size=%u\n", __func__, __LINE__, lp->segtype->name, stripes, stripe_size);
+		return lv_raid_reshape(lv, lp->segtype, stripes, stripe_size, lp->pvh);
 }
 printf("%s %u Hrmpf!\n", __func__, __LINE__);
 

@@ -930,7 +930,7 @@ dm_percent_t copy_percent(const struct logical_volume *lv)
 	dm_list_iterate_items(seg, &lv->segments) {
 		denominator += seg->area_len;
 
-	/* FIXME Generalise name of 'extents_copied' field */
+		/* FIXME Generalise name of 'extents_copied' field */
 		if ((seg_is_raid(seg) || seg_is_mirrored(seg)) &&
 		    (seg->area_count > 1))
 			numerator += seg->extents_copied;
@@ -938,7 +938,7 @@ dm_percent_t copy_percent(const struct logical_volume *lv)
 			numerator += seg->area_len;
 	}
 
-	return denominator ? dm_make_percent( numerator, denominator ) : 100.0;
+	return denominator ? dm_make_percent(numerator, denominator) : 100.0;
 }
 
 /*
@@ -974,6 +974,7 @@ struct lv_segment *alloc_lv_segment(const struct segment_type *segtype,
 		return_NULL;
 	}
 
+	/*  HM FIXME raid0 optionally w/o rmeta */
 	if (segtype_is_raid(segtype) &&
 	    !(seg->meta_areas = dm_pool_zalloc(mem, areas_sz))) {
 		dm_pool_free(mem, seg); /* frees everything alloced since seg */
@@ -994,6 +995,7 @@ struct lv_segment *alloc_lv_segment(const struct segment_type *segtype,
 	seg->pvmove_source_seg = pvmove_source_seg;
 	dm_list_init(&seg->tags);
 	dm_list_init(&seg->thin_messages);
+// printf("%s %u seg->len=%u\n", __func__, __LINE__, seg->len);
 
 	if (log_lv && !attach_mirror_log(seg, log_lv))
 		return_NULL;
@@ -1005,6 +1007,26 @@ struct lv_segment *alloc_lv_segment(const struct segment_type *segtype,
 		lv->status |= MIRRORED;
 
 	return seg;
+}
+
+/* Round up @extents to next stripe boundary for number of @stripes */
+static uint32_t __round_to_stripe_boundary(struct logical_volume *lv, uint32_t extents, uint32_t stripes, int up)
+{
+	uint32_t rest;
+
+	if (!stripes)
+		return extents;
+
+printf("%s %u extents=%u stripes=%u\n", __func__, __LINE__, extents, stripes);
+	/* Round up extents to stripe divisable amount */
+	if ((rest = extents % stripes)) {
+		extents += up ? stripes - rest : -rest;
+		log_print_unless_silent("Rounding up size to full stripe size %s",
+			  		display_size(lv->vg->cmd, extents * lv->vg->extent_size));
+	}
+printf("%s %u extents=%u\n", __func__, __LINE__, extents);
+
+	return extents;
 }
 
 struct lv_segment *alloc_snapshot_seg(struct logical_volume *lv,
@@ -1033,6 +1055,7 @@ struct lv_segment *alloc_snapshot_seg(struct logical_volume *lv,
 	return seg;
 }
 
+/* Release @area_reduction extents from @seg, area @s and release the pv segment if @discard */
 static int _release_and_discard_lv_segment_area(struct lv_segment *seg, uint32_t s,
 						uint32_t area_reduction, int with_discard)
 {
@@ -1043,6 +1066,7 @@ static int _release_and_discard_lv_segment_area(struct lv_segment *seg, uint32_t
 		return 1;
 
 	if (seg_type(seg, s) == AREA_PV) {
+printf("%s %u le_count=%u area_reduction=%u s=%u\n", __func__, __LINE__, lv->le_count, area_reduction, s);
 		if (with_discard && !discard_pv_segment(seg_pvseg(seg, s), area_reduction))
 			return_0;
 
@@ -1055,6 +1079,7 @@ static int _release_and_discard_lv_segment_area(struct lv_segment *seg, uint32_t
 		return 1;
 	}
 
+printf("%s %u %s %s le_count=%u area_reduction=%u s=%u\n", __func__, __LINE__, seg->lv->name, lv->name, lv->le_count, area_reduction, s);
 	if (lv_is_mirror_image(lv) ||
 	    lv_is_thin_pool_data(lv) ||
 	    lv_is_cache_pool_data(lv)) {
@@ -1063,6 +1088,38 @@ static int _release_and_discard_lv_segment_area(struct lv_segment *seg, uint32_t
 		return 1;
 	}
 
+	if (lv_is_raid_image(lv)) {
+		if (seg->meta_areas) {
+			uint32_t meta_area_reduction;
+			struct logical_volume *mlv, *slv = seg->lv;
+			struct volume_group *vg = lv->vg;
+
+printf("%s %u slv->name=%s slv_seg=%p lv->name=%s lv->le_count=%u seg->area_count=%u seg->region_size=%u\n", __func__, __LINE__, slv->name, seg, lv->name, lv->le_count, seg->area_count, seg->region_size);
+			if (!(mlv = seg_metalv(seg, s)))
+				return 0;
+
+printf("%s %u %s\n", __func__, __LINE__, mlv->name);
+			meta_area_reduction = mlv->le_count -
+					      raid_rmeta_extents(vg->cmd, lv->le_count - area_reduction, seg->region_size, vg->extent_size);
+printf("%s %u %s\n", __func__, __LINE__, mlv->name);
+			if (lv->le_count - area_reduction == 0)
+				meta_area_reduction++;
+printf("%s %u %s lv->le_count-area_reduction=%u lv->le_count=%u mlv->le_count=%u meta_area_reduction=%u\n", __func__, __LINE__, mlv->name, lv->le_count - area_reduction, lv->le_count, mlv->le_count, meta_area_reduction);
+
+			if (meta_area_reduction &&
+			    !lv_reduce(mlv, meta_area_reduction))
+				return_0; /* FIXME: any upper level reporting */
+// printf("%s %u %s\n", __func__, __LINE__, mlv->name);
+		}
+
+printf("%s %u %s\n", __func__, __LINE__, lv->name);
+		if (!lv_reduce(lv, area_reduction))
+			return_0; /* FIXME: any upper level reporting */
+
+		return 1;
+	}
+
+// printf("---> %s %u seg->area_len=%u, area_reduction=%u\n", __func__, __LINE__, seg->area_len, area_reduction);
 	if (seg_is_cache_pool(seg) &&
 	    !dm_list_empty(&seg->lv->segs_using_this_lv)) {
 		if (!(cache_seg = get_only_segment_using_this_lv(seg->lv)))
@@ -1070,66 +1127,23 @@ static int _release_and_discard_lv_segment_area(struct lv_segment *seg, uint32_t
 
 		if (!lv_cache_remove(cache_seg->lv))
 			return_0;
-	}
-
-	if (lv_is_raid_image(lv)) {
-		uint32_t len = seg_is_raid0(seg) ? lv->le_count : seg->area_len;
-
-		/* HM FIXME: support shrinking of raid volumes */
-		if (area_reduction == len) {
-#if 0
-			/* HM FIMXE: CODEME */
-			if (!lv_raid_resize(lv, )) {
-				log_error("Failed to reduce RAID set %s in kernel", lv->name);
-				return 0;
-			}
-#endif
-
-			if (!lv_reduce(lv, lv->le_count)) {
-				log_error("Failed to remove RAID image %s", lv->name);
-				return 0;
-			}
-
-#if 0
-			if (!remove_seg_from_segs_using_this_lv(lv, seg))
-				return_0;
-
-			seg_lv(seg, s) = NULL;
-			seg_le(seg, s) = 0;
-			seg_type(seg, s) = AREA_UNASSIGNED;
-#endif
-
-			if (seg->meta_areas) {
-				struct logical_volume *mlv = seg_metalv(seg, s);
-
-				if (mlv) {
-					if (!lv_reduce(mlv, mlv->le_count)) {
-						log_error("Failed to remove RAID meta-device %s", mlv->name);
-						return 0;
-					}
-#if 0
-					if (!remove_seg_from_segs_using_this_lv(mlv, seg))
-						return_0;
-
-					seg_metalv(seg, s) = NULL;
-					seg_metale(seg, s) = 0;
-					seg_metatype(seg, s) = AREA_UNASSIGNED;
-#endif
-				}
-			}
-
-		} else {
-			log_error("Unable to reduce RAID LV - operation not implemented.");
-			return_0;
-		}
 
 	} else if (area_reduction == seg->area_len) {
 		log_very_verbose("Remove %s:%" PRIu32 "[%" PRIu32 "] from "
 				 "the top of LV %s:%" PRIu32,
 				 seg->lv->name, seg->le, s, lv->name, seg_le(seg, s));
 
+// printf("%s %u calling remove_seg_from_segs_using_this_lv(lv, seg)\n", __func__, __LINE__);
 		if (!remove_seg_from_segs_using_this_lv(lv, seg))
 			return_0;
+
+#if 0
+		/* HM FIXME: TESTME: image component not unliked from VG */
+		/* Remove the LV if it is now empty */
+		if (!unlink_lv_from_vg(lv))
+			return_0;
+// printf("%s %u unlinked %s from vg\n", __func__, __LINE__, lv->name);
+#endif
 
 		seg_lv(seg, s) = NULL;
 		seg_le(seg, s) = 0;
@@ -1224,16 +1238,11 @@ int set_lv_segment_area_lv(struct lv_segment *seg, uint32_t area_num,
 			 seg->lv->name, seg->le, area_num, lv->name, le);
 
 	if (status & RAID_META) {
-		/* FIXME: should always be allocated for RAID_META? */
+		/* FIXME: should always be allocated for RAID_META or not for "raid0"? */
 		if (seg->meta_areas) {
 			seg->meta_areas[area_num].type = AREA_LV;
 			seg_metalv(seg, area_num) = lv;
-			if (le) {
-				log_error(INTERNAL_ERROR "Meta le != 0");
-				return 0;
-			}
-	
-			seg_metale(seg, area_num) = 0;
+			seg_metale(seg, area_num) = le;
 		}
 	} else {
 		seg->areas[area_num].type = AREA_LV;
@@ -1270,6 +1279,25 @@ static int _lv_segment_add_areas(struct logical_volume *lv,
 	return 1;
 }
 
+/* Return @area_len for @extents based on @seg's properties (e.g. striped, ...) */
+static uint32_t __area_len(struct lv_segment *seg, uint32_t extents, uint32_t *area_len)
+{
+	/* Caller must ensure exact divisibility */
+	if (seg_is_striped(seg)|| seg_is_striped_raid(seg)) {
+		uint32_t data_devs = seg->area_count - seg->segtype->parity_devs;
+
+		if (extents % data_devs) {
+			log_error("Extents %" PRIu32 " not divisible by #stripes %" PRIu32, extents, data_devs);
+			return 0;
+		}
+
+		*area_len = extents / data_devs;
+	} else
+		*area_len = extents;
+
+	return 1;
+}
+
 /*
  * Reduce the size of an lv_segment.  New size can be zero.
  */
@@ -1277,27 +1305,68 @@ static int _lv_segment_reduce(struct lv_segment *seg, uint32_t reduction)
 {
 	uint32_t area_reduction, s;
 
-	/* Caller must ensure exact divisibility */
-	if (seg_is_striped(seg) || seg_is_raid0(seg)) {
-		if (reduction % seg->area_count) {
-			log_error("Segment extent reduction %" PRIu32
-				  " not divisible by #stripes %" PRIu32,
-				  reduction, seg->area_count);
-			return 0;
-		}
+	if (!__area_len(seg, reduction, &area_reduction))
+		return 0;
 
-		area_reduction = reduction / seg->area_count;
-
-	} else
-		area_reduction = reduction;
-
+	/* Release extents from all segment areas */
 	for (s = 0; s < seg->area_count; s++)
 		if (!release_and_discard_lv_segment_area(seg, s, area_reduction))
 			return_0;
 
 	seg->len -= reduction;
-	seg->area_len -= area_reduction;
+	seg->lv->size -= reduction * seg->lv->vg->extent_size;
+	seg->area_len -= seg_is_striped(seg) ? area_reduction : reduction;
 
+	return 1;
+}
+
+static uint32_t _calc_area_multiple(const struct segment_type *segtype,
+				    const uint32_t area_count,
+				    const uint32_t stripes)
+{
+	if (!area_count)
+		return 1;
+
+printf("%s %u area_count=%u\n", __func__, __LINE__, area_count);
+	/* Striped */
+	if (segtype_is_striped(segtype))
+		return area_count;
+printf("%s %u area_count=%u\n", __func__, __LINE__, area_count);
+
+	/* RAID0 and parity RAID (e.g. RAID 4/5/6) */
+	if (segtype_is_striped_raid(segtype)) {
+		/*
+		 * As articulated in _alloc_init, we can tell by
+		 * the area_count whether a replacement drive is
+		 * being allocated; and if this is the case, then
+		 * there is no area_multiple that should be used.
+		 */
+printf("%s %u area_count=%u\n", __func__, __LINE__, area_count);
+		if (area_count <= segtype->parity_devs)
+			return 1;
+printf("%s %u area_count=%u\n", __func__, __LINE__, area_count);
+		return area_count - segtype->parity_devs;
+	}
+
+	/*
+	 * RAID10 - only has 2-way mirror right now.
+	 *          If we are to move beyond 2-way RAID10, then
+	 *          the 'stripes' argument will always need to
+	 *          be given.
+	 */
+	if (segtype_is_raid10(segtype)) {
+		if (!stripes)
+			return area_count / 2;
+		return stripes;
+	}
+
+printf("%s %u stripes=%u\n", __func__, __LINE__, stripes);
+	/* Mirrored stripes */
+	if (stripes)
+		return stripes;
+
+printf("%s %u area_count=%u\n", __func__, __LINE__, area_count);
+	/* Mirrored */
 	return 1;
 }
 
@@ -1306,10 +1375,15 @@ static int _lv_segment_reduce(struct lv_segment *seg, uint32_t reduction)
  */
 static int _lv_reduce(struct logical_volume *lv, uint32_t extents, int delete)
 {
-	struct lv_segment *seg;
-	uint32_t count = extents;
+	struct lv_segment *seg = first_seg(lv);;
+	uint32_t count;
 	uint32_t reduction;
 	struct logical_volume *pool_lv;
+
+printf("%s %u seg->area_count=%u segtype->name=%s extents=%u\n", __func__, __LINE__, seg->area_count, seg->segtype->name, extents);
+	if  (seg_is_striped(seg) || seg_is_striped_raid(seg))
+		extents = __round_to_stripe_boundary(lv, extents, _calc_area_multiple(seg->segtype, seg->area_count, 0), 0);
+printf("%s %u extents=%u\n", __func__, __LINE__, extents);
 
 	if (lv_is_merging_origin(lv)) {
 		log_debug_metadata("Dropping snapshot merge of %s to removed origin %s.",
@@ -1317,10 +1391,13 @@ static int _lv_reduce(struct logical_volume *lv, uint32_t extents, int delete)
 		clear_snapshot_merge(lv);
 	}
 
+
+	count = extents;
 	dm_list_iterate_back_items(seg, &lv->segments) {
 		if (!count)
 			break;
 
+printf("%s %u lv=%s seg->len=%u count=%u\n", __func__, __LINE__, lv->name, seg->len, count);
 		if (seg->len <= count) {
 			if (seg->merge_lv) {
 				log_debug_metadata("Dropping snapshot merge of removed %s to origin %s.",
@@ -1366,11 +1443,13 @@ static int _lv_reduce(struct logical_volume *lv, uint32_t extents, int delete)
 
 		if (!_lv_segment_reduce(seg, reduction))
 			return_0;
+
 		count -= reduction;
 	}
 
 	lv->le_count -= extents;
 	lv->size = (uint64_t) lv->le_count * lv->vg->extent_size;
+printf("%s %u lv->le_count=%u lv->size=%llu seg->len=%llu\n", __func__, __LINE__, lv->le_count, lv->size, seg->len);
 
 	if (!delete)
 		return 1;
@@ -1381,6 +1460,8 @@ static int _lv_reduce(struct logical_volume *lv, uint32_t extents, int delete)
 	}
 
 	/* Remove the LV if it is now empty */
+// if (!lv->le_count)
+// printf("%s %u unliking %s\n", __func__, __LINE__, lv->name);
 	if (!lv->le_count && !unlink_lv_from_vg(lv))
 		return_0;
 	else if (lv->vg->fid->fmt->ops->lv_setup &&
@@ -1505,50 +1586,6 @@ struct alloc_handle {
 	struct dm_list alloced_areas[0];
 };
 
-static uint32_t _calc_area_multiple(const struct segment_type *segtype,
-				    const uint32_t area_count,
-				    const uint32_t stripes)
-{
-	if (!area_count)
-		return 1;
-
-	/* Striped */
-	if (segtype_is_striped(segtype))
-		return area_count;
-
-	/* Parity RAID (e.g. RAID 4/5/6) */
-	if (segtype_is_raid(segtype) && segtype->parity_devs) {
-		/*
-		 * As articulated in _alloc_init, we can tell by
-		 * the area_count whether a replacement drive is
-		 * being allocated; and if this is the case, then
-		 * there is no area_multiple that should be used.
-		 */
-		if (area_count <= segtype->parity_devs)
-			return 1;
-		return area_count - segtype->parity_devs;
-	}
-
-	/*
-	 * RAID10 - only has 2-way mirror right now.
-	 *          If we are to move beyond 2-way RAID10, then
-	 *          the 'stripes' argument will always need to
-	 *          be given.
-	 */
-	if (segtype_is_raid10(segtype)) {
-		if (!stripes)
-			return area_count / 2;
-		return stripes;
-	}
-
-	/* Mirrored stripes */
-	if (stripes)
-		return stripes;
-
-	/* Mirrored */
-	return 1;
-}
-
 /*
  * Returns mirror log device size in extents, algorithm from dm-raid1 ("mirror" target) kernel code
  */
@@ -1585,20 +1622,6 @@ static uint32_t mirror_log_extents(uint32_t region_size, uint32_t pe_size, uint3
 }
 
 /*
- * Returns raid metadata device size in extents, algorithm from dm-raid ("raid" target) kernel code
- */
-uint32_t raid_rmeta_extents(struct cmd_context *cmd,
-			    uint32_t rimage_extents, uint32_t region_size, uint32_t extent_size)
-{
-	uint64_t bytes, sectors, size = rimage_extents;
-
-	bytes = dm_div_up(size * extent_size / region_size, 8);
-	sectors = dm_div_up(bytes, 512);
-
-	return 1 + dm_div_up(sectors, extent_size);
-}
-
-/*
  * Preparation for a specific allocation attempt
  * stripes and mirrors refer to the parallel areas used for data.
  * If log_area_count > 1 it is always mirrored (not striped).
@@ -1624,6 +1647,7 @@ static struct alloc_handle *_alloc_init(struct cmd_context *cmd,
 	if (mirrors && !stripes)
 		stripes = 1;
 
+// printf("%s %u\n", __func__, __LINE__);
 	if (segtype_is_virtual(segtype))
 		area_count = 0;
 	else if (mirrors > 1)
@@ -1634,9 +1658,8 @@ static struct alloc_handle *_alloc_init(struct cmd_context *cmd,
 	size = sizeof(*ah);
 
 	/*
-	 * It is a requirement that RAID 4/5/6 are created with a number of
-	 * stripes that is greater or equal than the number of parity devices.
-	 * (e.g RAID4/5/6 must have at least 2 stripes)
+	 * It is a requirement that RAID 4/5/6 have to have at least 2 stripes.
+	 *
 	 * It is also a constraint that, when replacing individual devices
 	 * in a RAID 4/5/6 array, no more devices can be replaced than
 	 * there are parity devices.  (Otherwise, there would not be enough
@@ -1648,10 +1671,13 @@ static struct alloc_handle *_alloc_init(struct cmd_context *cmd,
 	 * account for the extra parity devices because the array already
 	 * exists and they only want replacement drives.
 	 */
+
+	/* HM FIXME: avoid this overload to define the parity_count to allocate! */
 #if 0
 	parity_count = (area_count <= segtype->parity_devs) ? 0 : segtype->parity_devs;
-#else
 	parity_count = segtype->parity_devs;
+#else
+	parity_count = (area_count < 2) ? 0 : segtype->parity_devs;
 #endif
 	alloc_count = area_count + parity_count;
 	if (segtype_is_raid(segtype) && metadata_area_count)
@@ -1699,22 +1725,22 @@ static struct alloc_handle *_alloc_init(struct cmd_context *cmd,
 	//FIXME: s/mirror_logs_separate/metadata_separate/ so it can be used by others?
 	ah->mirror_logs_separate = find_config_tree_bool(cmd, allocation_mirror_logs_require_separate_pvs_CFG, NULL);
 
-	if (mirrors || stripes)
-		total_extents = new_extents;
-	else
-		total_extents = 0;
-
+	total_extents = (mirrors || stripes) ? new_extents : 0;
+printf("%s %u segtype=%s segtype_is_raid=%u ah->area_multiple=%u metatdat_area_count=%u\n", __func__, __LINE__, segtype->name, segtype_is_raid(segtype), ah->area_multiple, metadata_area_count);
 	if (segtype_is_raid(segtype)) {
+printf("%s %u\n", __func__, __LINE__);
 		if (metadata_area_count) {
+printf("%s %u\n", __func__, __LINE__);
 			if (metadata_area_count != area_count)
 				log_error(INTERNAL_ERROR "Bad metadata_area_count");
+
 			ah->metadata_area_count = area_count;
+printf("%s %u log_len-new=%u log_len-existing=%u\n", __func__, __LINE__, raid_rmeta_extents(cmd, existing_extents + new_extents, region_size, extent_size), raid_rmeta_extents(cmd, existing_extents, region_size, extent_size));
 			ah->log_len = (existing_extents ? 0 : 1) +
 				      raid_rmeta_extents(cmd, existing_extents + new_extents, region_size, extent_size) -
 				      raid_rmeta_extents(cmd, existing_extents, region_size, extent_size);
 			ah->alloc_and_split_meta = ah->log_len ? 1 : 0;
-printf("%s %u exisiting_extents=%u new_extents=%u ah->log_len=%u, ah->alloc...=%u\n", __func__, __LINE__,
-       existing_extents, new_extents, ah->log_len, ah->alloc_and_split_meta);
+printf("%s %u existing_extents=%u new_extents=%u ah->log_len=%u, ah->alloc...=%u\n", __func__, __LINE__, existing_extents, new_extents, ah->log_len, ah->alloc_and_split_meta);
 
 			/*
 			 * We need 'log_len' extents for each
@@ -1764,6 +1790,7 @@ printf("%s %u exisiting_extents=%u new_extents=%u ah->log_len=%u, ah->alloc...=%
 		total_extents += existing_extents;
 
 	ah->new_extents = total_extents;
+printf("%s %u ah->new_extents=%u\n", __func__, __LINE__, ah->new_extents);
 
 	for (s = 0; s < alloc_count; s++)
 		dm_list_init(&ah->alloced_areas[s]);
@@ -1791,7 +1818,8 @@ static int _sufficient_pes_free(struct alloc_handle *ah, struct dm_list *pvms,
 {
 	uint32_t area_extents_needed = (extents_still_needed - allocated) * ah->area_count / ah->area_multiple;
 	uint32_t parity_extents_needed = (extents_still_needed - allocated) * ah->parity_count / ah->area_multiple;
-	uint32_t metadata_extents_needed = (ah->alloc_and_split_meta) ? 0 : ah->metadata_area_count * ah->log_len;
+	// HM FIXME: uint32_t metadata_extents_needed = (ah->alloc_and_split_meta) ? 0 : ah->metadata_area_count * ah->log_len;
+	uint32_t metadata_extents_needed = ah->metadata_area_count * ah->log_len;
 	uint32_t total_extents_needed = area_extents_needed + parity_extents_needed + metadata_extents_needed;
 	uint32_t free_pes = pv_maps_size(pvms);
 
@@ -1929,11 +1957,11 @@ static int _setup_alloced_segment(struct logical_volume *lv, uint64_t status,
 	struct lv_segment *seg;
 
 	area_multiple = _calc_area_multiple(segtype, area_count, 0);
+	extents = aa[0].len * area_multiple;
 
-	if (!(seg = alloc_lv_segment(segtype, lv, lv->le_count,
-				     aa[0].len * area_multiple,
-				     status, stripe_size, NULL,
-				     area_count,
+printf("%s %u aa[0].pe=%u aa[0].len=%u area_multiple=%u\n", __func__, __LINE__, aa[0].pe, aa[0].len, area_multiple);
+	if (!(seg = alloc_lv_segment(segtype, lv, lv->le_count, extents,
+				     status, stripe_size, NULL, area_count,
 				     aa[0].len, 0u, region_size, 0u, NULL))) {
 		log_error("Couldn't allocate new LV segment.");
 		return 0;
@@ -1943,11 +1971,12 @@ static int _setup_alloced_segment(struct logical_volume *lv, uint64_t status,
 		if (!set_lv_segment_area_pv(seg, s, aa[s].pv, aa[s].pe))
 			return_0;
 
+printf("%s %u seg->len=%u seg->area_len=%u\n", __func__, __LINE__, seg->len, seg->area_len);
+
 	dm_list_add(&lv->segments, &seg->list);
 
-	extents = aa[0].len * area_multiple;
 	lv->le_count += extents;
-	lv->size += (uint64_t) extents *lv->vg->extent_size;
+	lv->size += (uint64_t) extents * lv->vg->extent_size;
 
 	return 1;
 }
@@ -1969,6 +1998,7 @@ static int _setup_alloced_segments(struct logical_volume *lv,
 			return_0;
 	}
 
+printf("%s %u\n", __func__, __LINE__);
 	return 1;
 }
 
@@ -1994,6 +2024,7 @@ static int _alloc_parallel_area(struct alloc_handle *ah, uint32_t max_to_allocat
 	}
 
 	area_len = max_to_allocate / ah->area_multiple;
+printf("%s %u total_area_count=%u area_len=%u\n", __func__, __LINE__, total_area_count, area_len);
 
 	/* Reduce area_len to the smallest of the areas */
 	for (s = 0; s < ah->area_count + ah->parity_count; s++)
@@ -2021,6 +2052,7 @@ static int _alloc_parallel_area(struct alloc_handle *ah, uint32_t max_to_allocat
 		}
 
 		pva = alloc_state->areas[s + ix_log_skip].pva;
+// printf("%s %u aasm=%d smia=%d\n", __func__, __LINE__, ah->alloc_and_split_meta, ah->split_metadata_is_allocated);
 		if (ah->alloc_and_split_meta && !ah->split_metadata_is_allocated) {
 			/*
 			 * The metadata area goes at the front of the allocated
@@ -2038,6 +2070,7 @@ static int _alloc_parallel_area(struct alloc_handle *ah, uint32_t max_to_allocat
 			aa[smeta].pe = pva->start;
 			aa[smeta].len = ah->log_len;
 
+printf("%s %u aa[%u].pe=%u aa[%u].len=%u\n", __func__, __LINE__, smeta,  aa[smeta].pe, smeta, aa[smeta].len);
 			log_debug_alloc("Allocating parallel metadata area %" PRIu32
 					" on %s start PE %" PRIu32
 					" length %" PRIu32 ".",
@@ -2056,6 +2089,7 @@ static int _alloc_parallel_area(struct alloc_handle *ah, uint32_t max_to_allocat
 
 		aa[s].pv = pva->map->pv;
 		aa[s].pe = pva->start;
+printf("%s %u aa[%u].pe=%u aa[%u].len=%u\n", __func__, __LINE__, s, aa[s].pe, s, aa[s].len);
 
 		log_debug_alloc("Allocating parallel area %" PRIu32
 				" on %s start PE %" PRIu32 " length %" PRIu32 ".",
@@ -2068,11 +2102,13 @@ static int _alloc_parallel_area(struct alloc_handle *ah, uint32_t max_to_allocat
 
 	/* Only need to alloc metadata from the first batch */
 	if (ah->alloc_and_split_meta)
-		ah->split_metadata_is_allocated = 1;
+		ah->split_metadata_is_allocated = 0;
+		/* HM FIXME: ah->split_metadata_is_allocated = 1 */;
 
 	ah->total_area_len += area_len;
 
 	alloc_state->allocated += area_len * ah->area_multiple;
+printf("%s %u ah->total_area_len=%u alloc_state->allocated=%u\n", __func__, __LINE__, ah->total_area_len, alloc_state->allocated);
 
 	return 1;
 }
@@ -2968,9 +3004,10 @@ static int _allocate(struct alloc_handle *ah,
 		return 1;
 	}
 
+printf("%s %u ah->area_multiple=%u ah->new_extents=%u alloc_state.allocated=%u\n", __func__, __LINE__, ah->area_multiple, ah->new_extents, alloc_state.allocated);
         if (ah->area_multiple > 1 &&
             (ah->new_extents - alloc_state.allocated) % ah->area_multiple) {
-		log_error("Number of extents requested (%d) needs to be divisible by %d.",
+		log_error("Number of extents requested (%u) needs to be divisible by %d.",
 			  ah->new_extents - alloc_state.allocated,
 			  ah->area_multiple);
 		return 0;
@@ -3193,8 +3230,7 @@ int lv_add_segment(struct alloc_handle *ah,
 
 	if (!_setup_alloced_segments(lv, &ah->alloced_areas[first_area],
 				     num_areas, status,
-				     stripe_size, segtype,
-				     region_size))
+				     stripe_size, segtype, region_size))
 		return_0;
 
 	if ((segtype->flags & SEG_CAN_SPLIT) && !lv_merge_segments(lv)) {
@@ -3207,6 +3243,7 @@ int lv_add_segment(struct alloc_handle *ah,
 	    !lv->vg->fid->fmt->ops->lv_setup(lv->vg->fid, lv))
 		return_0;
 
+printf("%s %u\n", __func__, __LINE__);
 	return 1;
 }
 
@@ -3498,6 +3535,7 @@ int lv_add_log_segment(struct alloc_handle *ah, uint32_t first_area,
 		       struct logical_volume *log_lv, uint64_t status)
 {
 
+printf("%s %u\n", __func__, __LINE__);
 	return lv_add_segment(ah, ah->area_count + first_area, 1, log_lv,
 			      get_segtype_from_string(log_lv->vg->cmd,
 						      "striped"),
@@ -3569,7 +3607,8 @@ static int _lv_insert_empty_sublvs(struct logical_volume *lv,
 			return_0;
 
 		/* Metadata LVs for raid */
-		if (segtype_is_raid(segtype)) { //  HM FIXME raid0 w/o rmeta: && !segtype_is_raid0(segtype)) {
+		/*  HM FIXME raid0 optionally w/o rmeta */
+		if (segtype_is_raid(segtype)) {
 			if (dm_snprintf(img_name, len, "%s_rmeta_%u", lv->name, i) < 0)
 				return_0;
 		} else
@@ -3647,10 +3686,10 @@ static int _lv_extend_layered_lv(struct alloc_handle *ah,
 	const struct segment_type *segtype;
 	struct logical_volume *sub_lv, *meta_lv;
 	struct lv_segment *seg = first_seg(lv);
-	uint32_t fa, s;
-	int clear_metadata = lv->le_count ? 0 : 1;
+	uint32_t fa, s, area_len;
+	int clear_metadata = (!seg_is_mirrored(seg) && !lv->le_count) ? 1 : 0;
 
-printf("clear_metadata=%d\n", clear_metadata);
+printf("%s %u clear_metadata=%d extents=%u\n", __func__, __LINE__, clear_metadata, extents);
 
 	segtype = get_segtype_from_string(lv->vg->cmd, "striped");
 
@@ -3666,6 +3705,7 @@ printf("clear_metadata=%d\n", clear_metadata);
 
 	for (fa = first_area, s = 0; s < seg->area_count; s++) {
 		if (is_temporary_mirror_layer(seg_lv(seg, s))) {
+printf("%s %u\n", __func__, __LINE__);
 			if (!_lv_extend_layered_lv(ah, seg_lv(seg, s), extents,
 						   fa, stripes, stripe_size))
 				return_0;
@@ -3674,6 +3714,7 @@ printf("clear_metadata=%d\n", clear_metadata);
 		}
 
 		sub_lv = seg_lv(seg, s);
+printf("%s %u sub_lv=%s\n", __func__, __LINE__, sub_lv->name);
 		if (!lv_add_segment(ah, fa, stripes, sub_lv, segtype,
 				    stripe_size, sub_lv->status, 0)) {
 			log_error("Aborting. Failed to extend %s in %s.",
@@ -3681,54 +3722,75 @@ printf("clear_metadata=%d\n", clear_metadata);
 			return 0;
 		}
 
+printf("%s %u\n", __func__, __LINE__);
 		/* HM FIXME: TESTME: extension on existing sets */
 		/* Extend metadata LVs if any */
 		if (seg_is_raid(seg) &&
- 		    seg->meta_areas) {
-			if ((meta_lv = seg_metalv(seg, s))) {
-				if (!lv_add_segment(ah, fa + seg->area_count, 1,
-						    meta_lv, segtype, 0,
-						    meta_lv->status, 0)) {
-					log_error("Failed to extend %s in %s.",
-						  meta_lv->name, lv->name);
-					return 0;
-				}
-
-				if (clear_metadata)
-					lv_set_visible(meta_lv);
+		    seg->meta_areas &&
+		    ah->log_len &&
+		    (meta_lv = seg_metalv(seg, s))) {
+printf("%s %u extended layered %s\n", __func__, __LINE__, meta_lv->name);
+			if (!lv_add_segment(ah, fa + seg->area_count, 1,
+					    meta_lv, segtype, 0,
+					    meta_lv->status, 0)) {
+				log_error("Failed to extend %s in %s.",
+					  meta_lv->name, lv->name);
+				return 0;
 			}
+
+	    		if (clear_metadata)
+				lv_set_visible(meta_lv);
 		}
 
 		fa += stripes;
 	}
 
+
+seg = first_seg(lv);
+/* Top-level area_len is equal to len */
+seg->area_len += extents;
+seg->len += extents;
+lv->le_count += extents;
+lv->size += (uint64_t) extents * lv->vg->extent_size;
+printf("%s %u seg->len=%u seg->area_len=%u\n", __func__, __LINE__, seg->len, seg->area_len);
 	if (!vg_write(lv->vg) || !vg_commit(lv->vg))
 		return_0;
 
+printf("%s %u\n", __func__, __LINE__);
 	/*
-	 * We must clear the metadata areas upon creation.
+	 * We must clear the metadata areas only upon creation.
 	 */
 	if (clear_metadata &&
 	    !_clear_metadata(lv))
 		return 0;
+printf("%s %u\n", __func__, __LINE__);
 
-	seg->area_len += extents;
-	seg->len += extents;
-	lv->le_count += extents;
-	lv->size += (uint64_t) extents * lv->vg->extent_size;
+	/* Top-level area_len is equal to len */
+	// seg->area_len += extents;
+	// seg->len += extents;
+	// lv->le_count += extents;
+	// lv->size += (uint64_t) extents * lv->vg->extent_size;
 
 	/*
 	 * The MD bitmap is limited to being able to track 2^21 regions.
 	 * The region_size must be adjusted to meet that criteria.
+	 *
+	 * the "raid0" personality does not utilize a bitmap.
 	 */
-	while (seg_is_raid(seg) &&
-	       !seg_is_raid0(seg) &&
-	       (seg->region_size < (lv->size / (1 << 21)))) {
-		seg->region_size *= 2;
-		log_very_verbose("Adjusting RAID region_size from %uS to %uS"
-				 " to support large LV size",
-				 seg->region_size/2, seg->region_size);
+	if (seg_is_striped_raid(seg)) {
+		int adjusted = 0;
+
+		while (seg->region_size < (lv->size / (1 << 21))) {
+			seg->region_size *= 2;
+			adjusted = 1;
+		}
+
+		if (adjusted)
+			log_very_verbose("Adjusting RAID region_size from %uS to %uS"
+				 	" to support large LV size",
+				 	seg->region_size/2, seg->region_size);
 	}
+printf("%s %u\n", __func__, __LINE__);
 
 	return 1;
 }
@@ -3769,17 +3831,28 @@ int lv_extend(struct logical_volume *lv,
 		 */
 		/* FIXME Support striped metadata pool */
 		log_count = 1;
-	} else if (segtype_is_raid(segtype))
-		log_count = mirrors * stripes;
+	// } else if (segtype_is_striped(segtype) || (segtype_is_raid(segtype) && !segtype_is_raid1(segtype))) {
+	} else if (segtype_is_striped(segtype) || segtype_is_raid(segtype)) {
+		extents = __round_to_stripe_boundary(lv, extents, stripes, 1);
 
+		/* Make sure metadata LVs are being extended as well */
+		if (!segtype_is_striped(segtype))
+			log_count = (mirrors ?: 1) * stripes;
+	}
+
+printf("%s %u mirrors=%u stripes=%u log_count=%u extents=%u\n", __func__, __LINE__, mirrors, stripes, log_count, extents);
+#if 1
 	/* FIXME log_count should be 1 for mirrors */
-
+	if (segtype_is_mirror(segtype))
+		log_count = 1;
+#endif
 	if (!(ah = allocate_extents(lv->vg, lv, segtype, stripes, mirrors,
 				    log_count, region_size, extents,
 				    allocatable_pvs, alloc, approx_alloc, NULL)))
 		return_0;
 
 	new_extents = ah->new_extents;
+	/* FIXME: "raid0" w/o metadata images! */
 	if (segtype_is_raid(segtype))
 		new_extents -= ah->log_len * ah->area_multiple;
 
@@ -3804,6 +3877,7 @@ int lv_extend(struct logical_volume *lv,
 
 		old_extents = lv->le_count;
 
+printf("%s %u old_extents=%u sub_lv_count=%u\n", __func__, __LINE__, old_extents, sub_lv_count);
 		if (!lv->le_count &&
 		    !(r = _lv_insert_empty_sublvs(lv, segtype, stripe_size,
 						  region_size, sub_lv_count))) {
@@ -3811,9 +3885,11 @@ int lv_extend(struct logical_volume *lv,
 			goto out;
 		}
 
+printf("%s %u new_extents=%u lv->le_count=%u\n", __func__, __LINE__, new_extents, lv->le_count);
 		if (!(r = _lv_extend_layered_lv(ah, lv, new_extents - lv->le_count, 0,
 						stripes, stripe_size)))
 			goto_out;
+printf("%s %u new_extents=%u lv->le_count=%u\n", __func__, __LINE__, new_extents, lv->le_count);
 
 		/*
 		 * If we are expanding an existing mirror, we can skip the
@@ -5365,10 +5441,9 @@ struct dm_list *build_parallel_areas_from_lv(struct logical_volume *lv,
 
 		current_le = spvs->le + spvs->len;
 #if 1
-		raid_multiple = seg_is_mirror(seg) ? 1 : seg->area_count - seg->segtype->parity_devs;
-#else
 		raid_multiple = (seg_is_mirror(seg) || seg_is_raid1(seg)) ? 1 :
 				seg->area_count - seg->segtype->parity_devs;
+#else
 		raid_multiple = (seg->segtype->parity_devs) ?
 			seg->area_count - seg->segtype->parity_devs : 1;
 #endif
@@ -5480,7 +5555,7 @@ int lv_remove_single(struct cmd_context *cmd, struct logical_volume *lv,
 		return 0;
 	}
 
-	if (lv_is_raid_metadata(lv) || lv_is_raid_image(lv)) {
+	if (lv_is_raid_image(lv) || lv_is_raid_metadata(lv)) {
 		log_error("Can't remove logical volume %s used as RAID device",
 			  lv->name);
 		return 0;
@@ -6761,21 +6836,21 @@ static struct logical_volume *_lv_create_an_lv(struct volume_group *vg,
 		}
 	}
 
-	if (lp->stripe_size > vg->extent_size) {
-		if (seg_is_raid(lp) && (vg->extent_size < STRIPE_SIZE_MIN)) {
-			/*
-			 * FIXME: RAID will simply fail to load the table if
-			 *        this is the case, but we should probably
-			 *        honor the stripe minimum for regular stripe
-			 *        volumes as well.  Avoiding doing that now
-			 *        only to minimize the change.
-			 */
-			log_error("The extent size in volume group %s is too "
-				  "small to support striped RAID volumes.",
-				  vg->name);
-			return NULL;
-		}
+	if (seg_is_raid(lp) && (vg->extent_size < STRIPE_SIZE_MIN)) {
+		/*
+		 * FIXME: RAID will simply fail to load the table if
+		 *        this is the case, but we should probably
+		 *        honor the stripe minimum for regular stripe
+		 *        volumes as well.  Avoiding doing that now
+		 *        only to minimize the change.
+		 */
+		log_error("The extent size in volume group %s is too "
+			  "small to support striped RAID volumes.",
+			  vg->name);
+		return NULL;
+	}
 
+	if (lp->stripe_size > vg->extent_size) {
 		log_print_unless_silent("Reducing requested stripe size %s to maximum, "
 					"physical extent size %s.",
 					display_size(cmd, (uint64_t) lp->stripe_size),
@@ -7124,7 +7199,7 @@ static struct logical_volume *_lv_create_an_lv(struct volume_group *vg,
 			goto revert_new_lv;
 		}
 	}
-
+printf("%s %u\n", __func__, __LINE__);
 	lv_set_activation_skip(lv, lp->activation_skip & ACTIVATION_SKIP_SET,
 			       lp->activation_skip & ACTIVATION_SKIP_SET_ENABLED);
 	/*

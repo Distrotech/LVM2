@@ -49,6 +49,7 @@ static int _raid_text_import_area_count(const struct dm_config_node *sn,
 			  "segment '%s'.", dm_config_parent_name(sn));
 		return 0;
 	}
+
 	return 1;
 }
 
@@ -83,7 +84,7 @@ static int _raid_text_import_areas(struct lv_segment *seg,
 					  cv->v.str ? : "NULL", seg_name);
 				return 0;
 			}
-
+// printf("%s %u setting %s to use %s\n", __func__, __LINE__, seg->lv->name, lv->name);
 			if (!set_lv_segment_area_lv(seg, s, lv, 0, RAID_META))
 				return_0;
 		}
@@ -120,21 +121,21 @@ static int _raid_text_import(struct lv_segment *seg,
 	int i;
 	const struct dm_config_value *cv;
 	const struct {
-		const char *attr_name;
+		const char *name;
 		void *var;
-	} node_import[] = {
-		{ "region_size", &seg->region_size },
-		{ "stripe_size", &seg->stripe_size },
-		{ "writebehind", &seg->writebehind },
+	} attr_import[] = {
+		{ "region_size",       &seg->region_size },
+		{ "stripe_size",       &seg->stripe_size },
+		{ "writebehind",       &seg->writebehind },
 		{ "min_recovery_rate", &seg->min_recovery_rate },
 		{ "max_recovery_rate", &seg->max_recovery_rate },
-	}, *nip = node_import;
+	}, *aip = attr_import;
 
-	for (i = 0; i < DM_ARRAY_SIZE(node_import); i++, nip++) {
-		if (dm_config_has_node(sn, nip->attr_name)) {
-			if (!dm_config_get_uint32(sn, nip->attr_name, nip->var)) {
+	for (i = 0; i < DM_ARRAY_SIZE(attr_import); i++, aip++) {
+		if (dm_config_has_node(sn, aip->name)) {
+			if (!dm_config_get_uint32(sn, aip->name, aip->var)) {
 				log_error("Couldn't read '%s' for segment %s of logical volume %s.",
-					  nip->attr_name, dm_config_parent_name(sn), seg->lv->name);
+					  aip->name, dm_config_parent_name(sn), seg->lv->name);
 				return 0;
 			}
 		}
@@ -148,7 +149,7 @@ static int _raid_text_import(struct lv_segment *seg,
 	}
 
 	if (!_raid_text_import_areas(seg, sn, cv)) {
-		log_error("Failed to import RAID images");
+		log_error("Failed to import RAID component pairs");
 		return 0;
 	}
 
@@ -175,7 +176,7 @@ static int _raid_text_export(const struct lv_segment *seg, struct formatter *f)
 		outf(f, "stripe_size = %" PRIu32, seg->stripe_size);
 
 	if (!raid0) {
-		if (seg->writebehind)
+		if (seg_is_raid1(seg) && seg->writebehind)
 			outf(f, "writebehind = %" PRIu32, seg->writebehind);
 		if (seg->min_recovery_rate)
 			outf(f, "min_recovery_rate = %" PRIu32, seg->min_recovery_rate);
@@ -214,9 +215,9 @@ static int _raid_add_target_line(struct dev_manager *dm __attribute__((unused)),
 	 * 64 device restriction imposed by kernel as well due to bitfield limitation in superblock.
 	 * It is not strictly a userspace limitation.
 	 */
-	if (seg->area_count > 64) {
-		log_error("Unable to handle more than 64 devices in a "
-			  "single RAID array");
+	if (seg->area_count > DEFAULT_RAID_MAX_IMAGES) {
+		log_error("Unable to handle more than %u devices in a "
+			  "single RAID array", DEFAULT_RAID_MAX_IMAGES);
 		return 0;
 	}
 
@@ -233,7 +234,7 @@ static int _raid_add_target_line(struct dev_manager *dm __attribute__((unused)),
 			if (status & LV_REBUILD)
 				rebuilds |= 1ULL << s;
 			if (status & LV_RESHAPE_DELTA_DISKS_PLUS) {
-printf("%s %u s=%u\n", __func__, __LINE__, s);
+// printf("%s %u s=%u\n", __func__, __LINE__, s);
 				if (status & LV_RESHAPE_DELTA_DISKS_MINUS) {
 					log_error(INTERNAL_ERROR "delta disks minus when delta disks plus requested!");
 					return 0;
@@ -251,7 +252,7 @@ printf("%s %u s=%u\n", __func__, __LINE__, s);
 			flags = DM_NOSYNC;
 	}
 
-printf("%s %u delta_disks=%d\n", __func__, __LINE__, delta_disks);
+// printf("%s %u delta_disks=%d\n", __func__, __LINE__, delta_disks);
 	params.raid_type = lvseg_name(seg);
 
 	if (seg->segtype->parity_devs) {
@@ -286,8 +287,8 @@ printf("%s %u delta_disks=%d\n", __func__, __LINE__, delta_disks);
 	params.stripe_size = seg->stripe_size;
 	params.flags = flags;
 
-printf("%s %u stripes=%u stripe_size=%d delta_disks=%d\n", __func__, __LINE__,
-       params.stripes, params.stripe_size, params.delta_disks);
+// printf("%s %u stripes=%u stripe_size=%d delta_disks=%d\n", __func__, __LINE__,
+//       params.stripes, params.stripe_size, params.delta_disks);
 
 
 	if (!dm_tree_node_add_raid_target_with_params(node, len, &params))
