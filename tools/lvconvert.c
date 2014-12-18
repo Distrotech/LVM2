@@ -1964,7 +1964,7 @@ printf("%s %u region_size=%u\n", __func__, __LINE__, seg->region_size);
 	}
 
 printf("%s %u lp->stripes=%u lp->stripe_size=%u\n", __func__, __LINE__, lp->stripes, lp->stripe_size);
-	if ((seg_is_striped(seg) || lv_is_raid(lv)) &&
+	if ((seg_is_striped(seg) || seg_is_mirrored(seg) || lv_is_raid(lv)) &&
 	    (arg_count(cmd, type_ARG) ||
 	     arg_count(cmd, stripes_ARG) ||
 	     arg_count(cmd, stripes_long_ARG) ||

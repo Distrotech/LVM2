@@ -1700,20 +1700,24 @@ static int _convert_mirror_to_raid1(struct logical_volume *lv,
 
 	dm_list_init(&meta_lvs);
 
+printf("%u %s\n", __LINE__, __func__);
 	if (!_raid_in_sync(lv)) {
 		log_error("Unable to convert %s/%s while it is not in-sync",
 			  lv->vg->name, lv->name);
 		return 0;
 	}
 
+printf("%u %s\n", __LINE__, __func__);
 	if (!(meta_areas = dm_pool_zalloc(lv->vg->vgmem,
 					  lv_mirror_count(lv) * sizeof(*meta_areas)))) {
 		log_error("Failed to allocate meta areas memory.");
 		return 0;
 	}
 
+printf("%u %s\n", __LINE__, __func__);
 	if (!archive(lv->vg))
 		return_0;
+printf("%u %s\n", __LINE__, __func__);
 
 	for (s = 0; s < seg->area_count; s++) {
 		log_debug_metadata("Allocating new metadata LV for %s",
@@ -1723,14 +1727,17 @@ static int _convert_mirror_to_raid1(struct logical_volume *lv,
 				  seg_lv(seg, s)->name, lv->name);
 			return 0;
 		}
+printf("%u %s\n", __LINE__, __func__);
 		dm_list_add(&meta_lvs, &(lvl_array[s].list));
 	}
+printf("%u %s\n", __LINE__, __func__);
 
 	log_debug_metadata("Clearing newly allocated metadata LVs");
 	if (!_clear_lvs(&meta_lvs)) {
 		log_error("Failed to initialize metadata LVs");
 		return 0;
 	}
+printf("%u %s\n", __LINE__, __func__);
 
 	if (seg->log_lv) {
 		log_debug_metadata("Removing mirror log, %s", seg->log_lv->name);
@@ -1739,6 +1746,7 @@ static int _convert_mirror_to_raid1(struct logical_volume *lv,
 			return 0;
 		}
 	}
+printf("%u %s\n", __LINE__, __func__);
 
 	seg->meta_areas = meta_areas;
 	s = 0;
@@ -1751,23 +1759,26 @@ static int _convert_mirror_to_raid1(struct logical_volume *lv,
 		first_seg(lvl->lv)->status &= ~LV_REBUILD;
 		lv_set_hidden(lvl->lv);
 
+printf("%u %s\n", __LINE__, __func__);
 		if (!set_lv_segment_area_lv(seg, s, lvl->lv, 0,
 					    lvl->lv->status)) {
 			log_error("Failed to add %s to %s",
 				  lvl->lv->name, lv->name);
 			return 0;
 		}
+printf("%u %s\n", __LINE__, __func__);
 		s++;
 	}
 
 	for (s = 0; s < seg->area_count; ++s) {
-		if (!(new_name = _generate_raid_name(seg_lv(seg, s), "rimage", s)))
+		if (!(new_name = _generate_raid_name(lv, "rimage", s)))
 			return_0;
 		log_debug_metadata("Renaming %s to %s", seg_lv(seg, s)->name, new_name);
 		seg_lv(seg, s)->name = new_name;
 		seg_lv(seg, s)->status &= ~MIRROR_IMAGE;
 		seg_lv(seg, s)->status |= RAID_IMAGE;
 	}
+
 	init_mirror_in_sync(1);
 
 	log_debug_metadata("Setting new segtype for %s", lv->name);
@@ -2692,6 +2703,11 @@ static int _avoid_pvs_of_lv(struct logical_volume *lv, void *data)
 	return 1;
 }
 
+static void __avoid_pvs_with_other_images_of_lv(struct logical_volume *lv, struct dm_list *allocate_pvs)
+{
+	for_each_sub_lv(lv, _avoid_pvs_of_lv, allocate_pvs);
+}
+
 /*
  * lv_raid_replace
  * @lv
@@ -2799,12 +2815,12 @@ struct pv_list *pvl;
 	}
 
 	/* Prevent any PVs holding image components from being used for allocation (i.e. reset ALLOCATABLE_PV */
-	for_each_sub_lv(lv, _avoid_pvs_of_lv, allocate_pvs);
+	__avoid_pvs_with_other_images_of_lv(lv, allocate_pvs);
 
-#if 0
+#if 1
 dm_list_iterate_items(pvl, allocate_pvs)
-printf("%s %u pv=%s allocatable_pv=%u\n", __func__, __LINE__, pv_dev_name(pvl->pv), pvl->pv->status & ALLOCATABLE_PV);
-return 0;
+printf("%s %u pv=%s allocatable_pv=%u\n", __func__, __LINE__, pv_dev_name(pvl->pv), (pvl->pv->status & ALLOCATABLE_PV) ? 1 : 0);
+// return 0;
 #endif
 	/*
 	 * Allocate the new image components first
