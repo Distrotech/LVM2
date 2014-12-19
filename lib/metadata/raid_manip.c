@@ -2702,6 +2702,10 @@ static int _avoid_pvs_of_lv(struct logical_volume *lv, void *data)
 	return 1;
 }
 
+/*
+ * Prevent any PVs holding other image components of @lv from being used for allocation,
+ * I.e. reset ALLOCATABLE_PV flag on respective PVs listed on @allocatable_pvs
+ */
 static void __avoid_pvs_with_other_images_of_lv(struct logical_volume *lv, struct dm_list *allocate_pvs)
 {
 	for_each_sub_lv(lv, _avoid_pvs_of_lv, allocate_pvs);
@@ -2813,7 +2817,7 @@ struct pv_list *pvl;
 		}
 	}
 
-	/* Prevent any PVs holding image components from being used for allocation (i.e. reset ALLOCATABLE_PV */
+	/* Prevent any PVs holding image components from being used for allocation */
 	__avoid_pvs_with_other_images_of_lv(lv, allocate_pvs);
 
 #if 1
