@@ -137,12 +137,18 @@ int check_lv_segments(struct logical_volume *lv, int complete_vg)
 			inc_error_count;
 		}
 
+<<<<<<< HEAD
 // printf("lv=%s area_count=%u seg_is_striped(seg)=%u, lv_is_raid_image(lv)=%u, seg_is_raid(seg)=%u, seg_is_raid1(seg)=%u lv->status=%llx\n", lv->name, seg->area_count, seg_is_striped(seg), lv_is_raid_image(lv), seg_is_raid(seg), seg_is_raid1(seg), lv->status);
 		// area_multiplier = seg_is_striped(seg) ? seg->area_count - seg->segtype->parity_devs : 1;
 		area_multiplier = (seg_is_striped(seg) || (seg_is_raid(seg) && !seg_is_raid1(seg))) ? seg->area_count - seg->segtype->parity_devs : 1;
+=======
+		area_multiplier = seg_is_striped(seg) ? seg->area_count - seg->segtype->parity_devs : 1;
+		// HM FIXME: area_multiplier = seg_is_striped(seg) || (seg_is_raid(seg) && !seg_is_raid1(seg)) ? seg->area_count - seg->segtype->parity_devs : 1;
+>>>>>>> RAID_convert_takeover_reshape_resize-merge2
 
 // printf("seg->lv=%s segtype=%s area_len=%d area_len*mp=%u seg->len=%u\n", seg->lv->name, seg->segtype->name, seg->area_len, seg->area_len * area_multiplier, seg->len);
 		if (seg->area_len * area_multiplier != seg->len) {
+printf("segtype=%s area_len=%d area_len*mp=%u seg->len=%u\n", seg->segtype->name, seg->area_len, seg->area_len * area_multiplier, seg->len);
 			log_error("LV %s: segment %u has inconsistent "
 				  "area_len %u",
 				  lv->name, seg_count, seg->area_len);
@@ -455,6 +461,7 @@ int check_lv_segments(struct logical_volume *lv, int complete_vg)
 			}
 
 		if (!seg_found) {
+<<<<<<< HEAD
 #if 0
 			unsigned ss = 0;
 
@@ -465,6 +472,18 @@ int check_lv_segments(struct logical_volume *lv, int complete_vg)
 			printf("seg_lv(seg2, 0)->segs_using_this_lv");
 			printf("ss=%u\n", ss);
 #endif
+=======
+{
+unsigned ss = 0;
+printf("seg->lv=%s\n", seg->lv->name);
+dm_list_iterate_items(seg2, &seg->lv->segments) {
+	ss++;
+	printf("seg_lv(seg2, 0)->segs_using_this_lv");
+}
+printf("s=%u\n", ss);
+
+}
+>>>>>>> RAID_convert_takeover_reshape_resize-merge2
 			log_error("LV segment %s:%" PRIu32 "-%" PRIu32
 				  " is incorrectly listed as being used by LV %s",
 				  seg->lv->name, seg->le, seg->le + seg->len - 1,

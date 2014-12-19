@@ -26,6 +26,11 @@
 #define RH_HEADINGS_PRINTED	0x00000200
 #define RH_ALREADY_REPORTED	0x00000400
 
+struct selection {
+	struct dm_pool *mem;
+	struct selection_node *selection_root;
+};
+
 struct dm_report {
 	struct dm_pool *mem;
 
@@ -52,7 +57,9 @@ struct dm_report {
 	/* To store caller private data */
 	void *private;
 
-	struct selection_node *selection_root;
+	/* Selection handle */
+	struct selection *selection;
+
 	/* Null-terminated array of reserved values */
 	const struct dm_report_reserved_value *reserved_values;
 };
@@ -64,6 +71,7 @@ struct dm_report {
 #define FLD_SORT_KEY	0x00002000
 #define FLD_ASCENDING	0x00004000
 #define FLD_DESCENDING	0x00008000
+#define FLD_COMPACTED	0x00010000
 
 struct field_properties {
 	struct dm_list list;
@@ -84,16 +92,16 @@ struct op_def {
 	const char *desc;
 };
 
-#define FLD_CMP_MASK		0x00FF0000
-#define FLD_CMP_UNCOMPARABLE	0x00010000
-#define FLD_CMP_EQUAL		0x00020000
-#define FLD_CMP_NOT		0x00040000
-#define FLD_CMP_GT		0x00080000
-#define FLD_CMP_LT		0x00100000
-#define FLD_CMP_REGEX		0x00200000
-#define FLD_CMP_NUMBER		0x00400000
+#define FLD_CMP_MASK		0x0FF00000
+#define FLD_CMP_UNCOMPARABLE	0x00100000
+#define FLD_CMP_EQUAL		0x00200000
+#define FLD_CMP_NOT		0x00400000
+#define FLD_CMP_GT		0x00800000
+#define FLD_CMP_LT		0x01000000
+#define FLD_CMP_REGEX		0x02000000
+#define FLD_CMP_NUMBER		0x04000000
 /*
- * #define FLD_CMP_STRING 0x00400000
+ * #define FLD_CMP_STRING 0x08000000
  * We could defined FLD_CMP_STRING here for completeness here,
  * but it's not needed - we can check operator compatibility with
  * field type by using FLD_CMP_REGEX and FLD_CMP_NUMBER flags only.
@@ -1192,6 +1200,8 @@ struct dm_report *dm_report_init(uint32_t *report_types,
 
 void dm_report_free(struct dm_report *rh)
 {
+	if (rh->selection)
+		dm_pool_destroy(rh->selection->mem);
 	dm_pool_destroy(rh->mem);
 	dm_free(rh);
 }
@@ -1559,10 +1569,10 @@ static int _check_selection(struct dm_report *rh, struct selection_node *sn,
 
 static int _check_report_selection(struct dm_report *rh, struct dm_list *fields)
 {
-	if (!rh->selection_root)
+	if (!rh->selection)
 		return 1;
 
-	return _check_selection(rh, rh->selection_root, fields);
+	return _check_selection(rh, rh->selection->selection_root, fields);
 }
 
 int dm_report_object(struct dm_report *rh, void *object)
@@ -1687,6 +1697,58 @@ out:
 	if (!r)
 		dm_pool_free(rh->mem, row);
 	return r;
+}
+
+int dm_report_compact_fields(struct dm_report *rh)
+{
+	struct dm_report_field *field;
+	struct field_properties *fp;
+	struct row *row;
+
+	if (!(rh->flags & DM_REPORT_OUTPUT_BUFFERED) ||
+	      dm_list_empty(&rh->rows))
+		return 1;
+
+	if (!rh) {
+		log_error("dm_report_enable_compact_output: dm report handler is NULL.");
+		return 0;
+	}
+
+	/*
+	 * At first, mark all fields with FLD_HIDDEN flag.
+	 * Also, mark field with FLD_COMPACTED flag, but only
+	 * the ones that didn't have FLD_HIDDEN set before.
+	 * This prevents losing the original FLD_HIDDEN flag
+	 * in next step...
+	 */
+	dm_list_iterate_items(fp, &rh->field_props) {
+		if (!(fp->flags & FLD_HIDDEN))
+			fp->flags |= (FLD_COMPACTED | FLD_HIDDEN);
+	}
+
+	/*
+	 * ...check each field in a row and if its report value
+	 * is not empty, drop the FLD_COMPACTED and FLD_HIDDEN
+	 * flag if FLD_COMPACTED flag is set. It's important
+	 * to keep FLD_HIDDEN flag for the fields that were
+	 * already marked with FLD_HIDDEN before - these don't
+	 * have FLD_COMPACTED set - check this condition!
+	 */
+	dm_list_iterate_items(row, &rh->rows) {
+		dm_list_iterate_items(field, &row->fields) {
+			if ((field->report_string && *field->report_string) &&
+			     field->props->flags & FLD_COMPACTED)
+					field->props->flags &= ~(FLD_COMPACTED | FLD_HIDDEN);
+			}
+	}
+
+	/*
+	 * The fields left with FLD_COMPACTED and FLD_HIDDEN flag are
+	 * the ones which have blank value in all rows. The FLD_HIDDEN
+	 * will cause such field to not be reported on output at all.
+	 */
+
+	return 1;
 }
 
 /*
@@ -1933,9 +1995,12 @@ dm_percent_t dm_make_percent(uint64_t numerator, uint64_t denominator)
  * Used to check whether the reserved_values definition passed to
  * dm_report_init_with_selection contains only supported reserved value types.
  */
-static int _check_reserved_values_supported(const struct dm_report_reserved_value reserved_values[])
+static int _check_reserved_values_supported(const struct dm_report_field_type fields[],
+					    const struct dm_report_reserved_value reserved_values[])
 {
 	const struct dm_report_reserved_value *iter;
+	const struct dm_report_field_reserved_value *field_res;
+	const struct dm_report_field_type *field;
 	static uint32_t supported_reserved_types = DM_REPORT_FIELD_TYPE_NUMBER |
 						   DM_REPORT_FIELD_TYPE_SIZE |
 						   DM_REPORT_FIELD_TYPE_PERCENT |
@@ -1946,9 +2011,25 @@ static int _check_reserved_values_supported(const struct dm_report_reserved_valu
 
 	iter = reserved_values;
 
-	while (iter->type) {
-		if (!(iter->type & supported_reserved_types))
-			return 0;
+	while (iter->value) {
+		if (iter->type) {
+			if (!(iter->type & supported_reserved_types)) {
+				log_error(INTERNAL_ERROR "_check_reserved_values_supported: "
+					  "global reserved value for type 0x%x not supported",
+					   iter->type);
+				return 0;
+			}
+		} else {
+			field_res = (const struct dm_report_field_reserved_value *) iter->value;
+			field = &fields[field_res->field_num];
+			if (!(field->flags & supported_reserved_types)) {
+				log_error(INTERNAL_ERROR "_check_reserved_values_supported: "
+					  "field-specific reserved value of type 0x%x for "
+					  "field %s not supported",
+					   field->flags & DM_REPORT_FIELD_TYPE_MASK, field->id);
+				return 0;
+			}
+		}
 		iter++;
 	}
 
@@ -2357,7 +2438,7 @@ static struct field_selection *_create_field_selection(struct dm_report *rh,
 	}
 
 	/* set up selection */
-	if (!(fs = dm_pool_zalloc(rh->mem, sizeof(struct field_selection)))) {
+	if (!(fs = dm_pool_zalloc(rh->selection->mem, sizeof(struct field_selection)))) {
 		log_error("dm_report: struct field_selection "
 			  "allocation failed for selection field %s", field_id);
 		return NULL;
@@ -2376,7 +2457,7 @@ static struct field_selection *_create_field_selection(struct dm_report *rh,
 		memcpy(s, v, len);
 		s[len] = '\0';
 
-		fs->v.r = dm_regex_create(rh->mem, (const char **) &s, 1);
+		fs->v.r = dm_regex_create(rh->selection->mem, (const char **) &s, 1);
 		dm_free(s);
 		if (!fs->v.r) {
 			log_error("dm_report: failed to create regex "
@@ -2385,7 +2466,7 @@ static struct field_selection *_create_field_selection(struct dm_report *rh,
 		}
 	} else {
 		/* STRING, NUMBER, SIZE or STRING_LIST */
-		if (!(s = dm_pool_alloc(rh->mem, len + 1))) {
+		if (!(s = dm_pool_alloc(rh->selection->mem, len + 1))) {
 			log_error("dm_report: dm_pool_alloc failed to store "
 				  "value for selection field %s", field_id);
 			goto error;
@@ -2397,7 +2478,7 @@ static struct field_selection *_create_field_selection(struct dm_report *rh,
 			case DM_REPORT_FIELD_TYPE_STRING:
 				if (reserved) {
 					fs->v.s = (const char *) _get_reserved_value(reserved);
-					dm_pool_free(rh->mem, s);
+					dm_pool_free(rh->selection->mem, s);
 				} else {
 					fs->v.s = s;
 					if (_check_value_is_reserved(rh, DM_REPORT_FIELD_TYPE_STRING, fs->v.s)) {
@@ -2420,7 +2501,7 @@ static struct field_selection *_create_field_selection(struct dm_report *rh,
 						goto error;
 					}
 				}
-				dm_pool_free(rh->mem, s);
+				dm_pool_free(rh->selection->mem, s);
 				break;
 			case DM_REPORT_FIELD_TYPE_SIZE:
 				if (reserved)
@@ -2439,7 +2520,7 @@ static struct field_selection *_create_field_selection(struct dm_report *rh,
 						goto error;
 					}
 				}
-				dm_pool_free(rh->mem, s);
+				dm_pool_free(rh->selection->mem, s);
 				break;
 			case DM_REPORT_FIELD_TYPE_PERCENT:
 				if (reserved)
@@ -2475,7 +2556,7 @@ static struct field_selection *_create_field_selection(struct dm_report *rh,
 
 	return fs;
 error:
-	dm_pool_free(rh->mem, fs);
+	dm_pool_free(rh->selection->mem, fs);
 	return NULL;
 }
 
@@ -2677,7 +2758,7 @@ static struct selection_node *_parse_selection(struct dm_report *rh,
 			custom = NULL;
 		if (!(last = _tok_value(rh, ft, field_num, implicit,
 					last, &vs, &ve, &flags,
-					&reserved, rh->mem, custom)))
+					&reserved, rh->selection->mem, custom)))
 			goto_bad;
 	}
 
@@ -2688,7 +2769,7 @@ static struct selection_node *_parse_selection(struct dm_report *rh,
 		return_NULL;
 
 	/* create selection node */
-	if (!(sn = _alloc_selection_node(rh->mem, SEL_ITEM)))
+	if (!(sn = _alloc_selection_node(rh->selection->mem, SEL_ITEM)))
 		return_NULL;
 
 	/* add selection to selection node */
@@ -2775,7 +2856,7 @@ static struct selection_node *_parse_and_ex(struct dm_report *rh,
 	}
 
 	if (!and_sn) {
-		if (!(and_sn = _alloc_selection_node(rh->mem, SEL_AND)))
+		if (!(and_sn = _alloc_selection_node(rh->selection->mem, SEL_AND)))
 			goto error;
 	}
 	dm_list_add(&and_sn->selection.set, &n->list);
@@ -2807,7 +2888,7 @@ static struct selection_node *_parse_or_ex(struct dm_report *rh,
 	}
 
 	if (!or_sn) {
-		if (!(or_sn = _alloc_selection_node(rh->mem, SEL_OR)))
+		if (!(or_sn = _alloc_selection_node(rh->selection->mem, SEL_OR)))
 			goto error;
 	}
 	dm_list_add(&or_sn->selection.set, &n->list);
@@ -2840,11 +2921,11 @@ struct dm_report *dm_report_init_with_selection(uint32_t *report_types,
 		return NULL;
 
 	if (!selection || !selection[0]) {
-		rh->selection_root = NULL;
+		rh->selection = NULL;
 		return rh;
 	}
 
-	if (!_check_reserved_values_supported(reserved_values)) {
+	if (!_check_reserved_values_supported(fields, reserved_values)) {
 		log_error(INTERNAL_ERROR "dm_report_init_with_selection: "
 			  "trying to register unsupported reserved value type, "
 			  "skipping report selection");
@@ -2861,7 +2942,13 @@ struct dm_report *dm_report_init_with_selection(uint32_t *report_types,
 		return rh;
 	}
 
-	if (!(root = _alloc_selection_node(rh->mem, SEL_OR)))
+	if (!(rh->selection = dm_pool_zalloc(rh->mem, sizeof(struct selection))) ||
+	    !(rh->selection->mem = dm_pool_create("report selection", 10 * 1024))) {
+		log_error("Failed to allocate report selection structure.");
+		goto bad;
+	}
+
+	if (!(root = _alloc_selection_node(rh->selection->mem, SEL_OR)))
 		goto_bad;
 
 	if (!_parse_or_ex(rh, selection, &fin, root))
@@ -2877,7 +2964,7 @@ struct dm_report *dm_report_init_with_selection(uint32_t *report_types,
 
 	_dm_report_init_update_types(rh, report_types);
 
-	rh->selection_root = root;
+	rh->selection->selection_root = root;
 	return rh;
 bad:
 	dm_report_free(rh);

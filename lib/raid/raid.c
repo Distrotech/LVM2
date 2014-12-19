@@ -267,6 +267,7 @@ static int _raid_add_target_line(struct dev_manager *dm __attribute__((unused)),
 		/* FIXME: HM: is this actually a constraint still? */
 		params.mirrors = 2;
 		params.stripes = seg->area_count / 2;
+printf("%u %s mirrors=%u stripes=%u\n", __LINE__, __func__, params.mirrors, params.stripes);
 	} else {
 		/* RAID 1 */
 		params.mirrors = seg->area_count;
