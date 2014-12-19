@@ -84,7 +84,6 @@ static int _raid_text_import_areas(struct lv_segment *seg,
 					  cv->v.str ? : "NULL", seg_name);
 				return 0;
 			}
-// printf("%s %u setting %s to use %s\n", __func__, __LINE__, seg->lv->name, lv->name);
 			if (!set_lv_segment_area_lv(seg, s, lv, 0, RAID_META))
 				return_0;
 		}
@@ -234,7 +233,6 @@ static int _raid_add_target_line(struct dev_manager *dm __attribute__((unused)),
 			if (status & LV_REBUILD)
 				rebuilds |= 1ULL << s;
 			if (status & LV_RESHAPE_DELTA_DISKS_PLUS) {
-// printf("%s %u s=%u\n", __func__, __LINE__, s);
 				if (status & LV_RESHAPE_DELTA_DISKS_MINUS) {
 					log_error(INTERNAL_ERROR "delta disks minus when delta disks plus requested!");
 					return 0;
@@ -252,7 +250,6 @@ static int _raid_add_target_line(struct dev_manager *dm __attribute__((unused)),
 			flags = DM_NOSYNC;
 	}
 
-// printf("%s %u delta_disks=%d\n", __func__, __LINE__, delta_disks);
 	params.raid_type = lvseg_name(seg);
 
 	if (seg->segtype->parity_devs) {
@@ -267,7 +264,6 @@ static int _raid_add_target_line(struct dev_manager *dm __attribute__((unused)),
 		/* FIXME: HM: is this actually a constraint still? */
 		params.mirrors = 2;
 		params.stripes = seg->area_count / 2;
-printf("%u %s mirrors=%u stripes=%u\n", __LINE__, __func__, params.mirrors, params.stripes);
 	} else {
 		/* RAID 1 */
 		params.mirrors = seg->area_count;
@@ -287,10 +283,6 @@ printf("%u %s mirrors=%u stripes=%u\n", __LINE__, __func__, params.mirrors, para
 
 	params.stripe_size = seg->stripe_size;
 	params.flags = flags;
-
-// printf("%s %u stripes=%u stripe_size=%d delta_disks=%d\n", __func__, __LINE__,
-//       params.stripes, params.stripe_size, params.delta_disks);
-
 
 	if (!dm_tree_node_add_raid_target_with_params(node, len, &params))
 		return_0;

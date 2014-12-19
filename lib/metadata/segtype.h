@@ -199,10 +199,7 @@ int init_raid_segtypes(struct cmd_context *cmd, struct segtype_library *seglib);
 #define segtype_is_raid6_ra_6(segtype)	(!strcmp((segtype)->name, SEG_TYPE_NAME_RAID6_RA_6))
 #define segtype_is_raid6_0_6(segtype)	(!strcmp((segtype)->name, SEG_TYPE_NAME_RAID6_0_6))
 #define segtype_is_raid6_n_6(segtype)	(!strcmp((segtype)->name, SEG_TYPE_NAME_RAID6_N_6))
-<<<<<<< HEAD
-=======
 #define segtype_is_striped_raid(segtype)	(segtype_is_raid(segtype) && !segtype_is_raid1(segtype))
->>>>>>> RAID_convert_takeover_reshape_resize-merge2
 
 #define seg_is_raid0(seg)		segtype_is_raid0((seg)->segtype)
 #define seg_is_raid1(seg)		segtype_is_raid1((seg)->segtype)
@@ -224,10 +221,7 @@ int init_raid_segtypes(struct cmd_context *cmd, struct segtype_library *seglib);
 #define seg_is_raid6_ra_6(seg)		segtype_is_raid6_ra_6((seg)->segtype)
 #define seg_is_raid6_0_6(seg)		segtype_is_raid6_0_6((seg)->segtype)
 #define seg_is_raid6_n_6(seg)		segtype_is_raid6_n_6((seg)->segtype)
-<<<<<<< HEAD
-=======
 #define seg_is_striped_raid(seg)	segtype_is_striped_raid((seg)->segtype)
->>>>>>> RAID_convert_takeover_reshape_resize-merge2
 
 #ifdef REPLICATOR_INTERNAL
 int init_replicator_segtype(struct cmd_context *cmd, struct segtype_library *seglib);

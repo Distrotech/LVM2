@@ -1959,32 +1959,22 @@ printf("stripes_ARG=%u stripes_long_ARG=%u\n", arg_count(lv->vg->cmd, stripes_AR
 		if (seg_is_linear(seg))
 			seg->region_size = lp->region_size;
 
-printf("%s %u region_size=%u\n", __func__, __LINE__, seg->region_size);
 		return lv_raid_change_image_count(lv, image_count, lp->pvh);
 	}
 
-printf("%s %u lp->stripes=%u lp->stripe_size=%u\n", __func__, __LINE__, lp->stripes, lp->stripe_size);
-<<<<<<< HEAD
-	if ((seg_is_striped(seg) || lv_is_raid(lv)) &&
-=======
 	if ((seg_is_striped(seg) || seg_is_mirrored(seg) || lv_is_raid(lv)) &&
->>>>>>> RAID_convert_takeover_reshape_resize-merge2
 	    (arg_count(cmd, type_ARG) ||
 	     arg_count(cmd, stripes_ARG) ||
 	     arg_count(cmd, stripes_long_ARG) ||
-	     arg_count(cmd, stripesize_ARG)))
-{
+	     arg_count(cmd, stripesize_ARG))) {
 		unsigned stripes = (arg_count(cmd, stripes_ARG )|| arg_count(cmd, stripes_long_ARG)) ? lp->stripes  : 0;
 		unsigned stripe_size = arg_count(cmd, stripesize_ARG) ? lp->stripe_size  : 0;
 
 		if (seg_is_striped(seg))
 			seg->region_size = lp->region_size;
 
-printf("%s %u lp->segtype=%s stripes=%u stripe_size=%u\n", __func__, __LINE__, lp->segtype->name, stripes, stripe_size);
 		return lv_raid_reshape(lv, lp->segtype, stripes, stripe_size, lp->pvh);
-}
-printf("%s %u Hrmpf!\n", __func__, __LINE__);
-
+	}
 
 	if (arg_count(cmd, replace_ARG))
 		return lv_raid_replace(lv, lp->replace_pvh, lp->pvh);

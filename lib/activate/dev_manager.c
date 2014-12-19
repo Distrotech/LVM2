@@ -2303,7 +2303,6 @@ int add_areas_line(struct dev_manager *dm, struct lv_segment *seg,
 			}
 
 			if (seg->meta_areas && seg_metalv(seg, s)) {
-printf("%u %s metalv=%s\n", __LINE__, __func__, seg_metalv(seg, s)->name);
 				if (!(dlid = build_dm_uuid(dm->mem, seg_metalv(seg, s), NULL)))
 					return_0;
 				if (!dm_tree_node_add_target_area(node, NULL, dlid, extent_size * seg_metale(seg, s)))
@@ -2311,14 +2310,12 @@ printf("%u %s metalv=%s\n", __LINE__, __func__, seg_metalv(seg, s)->name);
 			/* One  for metadata area */
 			} else if (!dm_tree_node_add_null_area(node, 0))
 				return_0;
-printf("%u %s lv=%s\n", __LINE__, __func__, seg_lv(seg, s)->name);
 
 			if (!(dlid = build_dm_uuid(dm->mem, seg_lv(seg, s), NULL)))
 				return_0;
 			if (!dm_tree_node_add_target_area(node, NULL, dlid, extent_size * seg_le(seg, s)))
 				return_0;
 		} else if (seg_type(seg, s) == AREA_LV) {
-printf("%u %s lv=%s\n", __LINE__, __func__, seg_lv(seg, s)->name);
 			if (!(dlid = build_dm_uuid(dm->mem, seg_lv(seg, s), NULL)))
 				return_0;
 			if (!dm_tree_node_add_target_area(node, NULL, dlid, extent_size * seg_le(seg, s)))

@@ -2317,11 +2317,7 @@ static int _mirror_emit_segment_line(struct dm_task *dmt, struct load_segment *s
 }
 
 /* Return 2 if @p != 0 */
-<<<<<<< HEAD
-static int _add_2_if_value(unsigned p)
-=======
 static int _2_if_value(unsigned p)
->>>>>>> RAID_convert_takeover_reshape_resize-merge2
 {
 	return p ? 2 : 0;
 }
@@ -2339,19 +2335,11 @@ static int _raid_emit_segment_line(struct dm_task *dmt, uint32_t major,
 	if ((seg->flags & DM_NOSYNC) || (seg->flags & DM_FORCESYNC))
 		param_count++;
 
-<<<<<<< HEAD
-	param_count += _add_2_if_value(seg->delta_disks) +
-		       _add_2_if_value(seg->region_size) +
-		       _add_2_if_value(seg->writebehind) +
-		       _add_2_if_value(seg->min_recovery_rate) +
-		       _add_2_if_value(seg->max_recovery_rate);
-=======
 	param_count += _2_if_value(seg->delta_disks) +
 		       _2_if_value(seg->region_size) +
 		       _2_if_value(seg->writebehind) +
 		       _2_if_value(seg->min_recovery_rate) +
 		       _2_if_value(seg->max_recovery_rate);
->>>>>>> RAID_convert_takeover_reshape_resize-merge2
 
 	/* rebuilds is 64-bit */
 	param_count += 2 * hweight32(seg->rebuilds & 0xFFFFFFFF);
@@ -4046,7 +4034,6 @@ static int _add_area(struct dm_tree_node *node, struct load_segment *seg, struct
 
 	dm_list_add(&seg->areas, &area->list);
 	seg->area_count++;
-printf("%s %u dev_node=%p\n", __func__, __LINE__, area->dev_node);
 
 	return 1;
 }
@@ -4060,7 +4047,6 @@ int dm_tree_node_add_target_area(struct dm_tree_node *node,
 	struct stat info;
 	struct dm_tree_node *dev_node;
 
-printf("%s %u\n", __func__, __LINE__);
 	if ((!dev_name || !*dev_name) && (!uuid || !*uuid)) {
 		log_error("dm_tree_node_add_target_area called without device");
 		return 0;
@@ -4109,7 +4095,6 @@ int dm_tree_node_add_null_area(struct dm_tree_node *node, uint64_t offset)
 
 	seg = dm_list_item(dm_list_last(&node->props.segs), struct load_segment);
 
-printf("%s %u\n", __func__, __LINE__);
 	switch (seg->type) {
 	case SEG_RAID0:
 	case SEG_RAID1:
