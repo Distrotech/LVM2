@@ -2111,6 +2111,7 @@ static int _emit_areas_line(struct dm_task *dmt __attribute__((unused)),
 			break;
 		case SEG_RAID0:
 		case SEG_RAID1:
+		case SEG_RAID10:
 		case SEG_RAID4:
 		case SEG_RAID4_N:
 		case SEG_RAID5_0:
@@ -2317,7 +2318,7 @@ static int _mirror_emit_segment_line(struct dm_task *dmt, struct load_segment *s
 }
 
 /* Return 2 if @p != 0 */
-static int _add_2_if_value(unsigned p)
+static int _2_if_value(unsigned p)
 {
 	return p ? 2 : 0;
 }
@@ -2335,11 +2336,11 @@ static int _raid_emit_segment_line(struct dm_task *dmt, uint32_t major,
 	if ((seg->flags & DM_NOSYNC) || (seg->flags & DM_FORCESYNC))
 		param_count++;
 
-	param_count += _add_2_if_value(seg->delta_disks) +
-		       _add_2_if_value(seg->region_size) +
-		       _add_2_if_value(seg->writebehind) +
-		       _add_2_if_value(seg->min_recovery_rate) +
-		       _add_2_if_value(seg->max_recovery_rate);
+	param_count += _2_if_value(seg->delta_disks) +
+		       _2_if_value(seg->region_size) +
+		       _2_if_value(seg->writebehind) +
+		       _2_if_value(seg->min_recovery_rate) +
+		       _2_if_value(seg->max_recovery_rate);
 
 	/* rebuilds is 64-bit */
 	param_count += 2 * hweight32(seg->rebuilds & 0xFFFFFFFF);

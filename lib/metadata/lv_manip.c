@@ -1327,11 +1327,21 @@ static uint32_t _calc_area_multiple(const struct segment_type *segtype,
 	if (!area_count)
 		return 1;
 
-printf("%s %u area_count=%u\n", __func__, __LINE__, area_count);
+printf("%s %u area_count=%u stripes=%u\n", __func__, __LINE__, area_count, stripes);
 	/* Striped */
 	if (segtype_is_striped(segtype))
 		return area_count;
-printf("%s %u area_count=%u\n", __func__, __LINE__, area_count);
+
+	/*
+	 * RAID10 - only has 2-way mirror right now.
+	 *          If we are to move beyond 2-way RAID10, then
+	 *          the 'stripes' argument will always need to
+	 *          be given.
+	 */
+	if (segtype_is_raid10(segtype)) {
+printf("%s %u area_count=%u stripes=%u\n", __func__, __LINE__, area_count, stripes);
+		return stripes ?: area_count / 2;
+	}
 
 	/* RAID0 and parity RAID (e.g. RAID 4/5/6) */
 	if (segtype_is_striped_raid(segtype)) {
@@ -1346,18 +1356,6 @@ printf("%s %u area_count=%u\n", __func__, __LINE__, area_count);
 			return 1;
 printf("%s %u area_count=%u\n", __func__, __LINE__, area_count);
 		return area_count - segtype->parity_devs;
-	}
-
-	/*
-	 * RAID10 - only has 2-way mirror right now.
-	 *          If we are to move beyond 2-way RAID10, then
-	 *          the 'stripes' argument will always need to
-	 *          be given.
-	 */
-	if (segtype_is_raid10(segtype)) {
-		if (!stripes)
-			return area_count / 2;
-		return stripes;
 	}
 
 printf("%s %u stripes=%u\n", __func__, __LINE__, stripes);
@@ -1726,7 +1724,9 @@ static struct alloc_handle *_alloc_init(struct cmd_context *cmd,
 	ah->mirror_logs_separate = find_config_tree_bool(cmd, allocation_mirror_logs_require_separate_pvs_CFG, NULL);
 
 	total_extents = (mirrors || stripes) ? new_extents : 0;
+
 printf("%s %u segtype=%s segtype_is_raid=%u ah->area_multiple=%u metatdat_area_count=%u\n", __func__, __LINE__, segtype->name, segtype_is_raid(segtype), ah->area_multiple, metadata_area_count);
+
 	if (segtype_is_raid(segtype)) {
 printf("%s %u\n", __func__, __LINE__);
 		if (metadata_area_count) {
@@ -1736,7 +1736,7 @@ printf("%s %u\n", __func__, __LINE__);
 
 			ah->metadata_area_count = area_count;
 printf("%s %u log_len-new=%u log_len-existing=%u\n", __func__, __LINE__, raid_rmeta_extents(cmd, existing_extents + new_extents, region_size, extent_size), raid_rmeta_extents(cmd, existing_extents, region_size, extent_size));
-			ah->log_len = (existing_extents ? 0 : 1) +
+			ah->log_len = (existing_extents ? 0 : 1) + /* superblock on raid set creation */
 				      raid_rmeta_extents(cmd, existing_extents + new_extents, region_size, extent_size) -
 				      raid_rmeta_extents(cmd, existing_extents, region_size, extent_size);
 			ah->alloc_and_split_meta = ah->log_len ? 1 : 0;
@@ -3687,9 +3687,9 @@ static int _lv_extend_layered_lv(struct alloc_handle *ah,
 	struct logical_volume *sub_lv, *meta_lv;
 	struct lv_segment *seg = first_seg(lv);
 	uint32_t fa, s, area_len;
-	int clear_metadata = (!seg_is_mirrored(seg) && !lv->le_count) ? 1 : 0;
+	int clear_metadata = lv->le_count ? 0 : 1;
 
-printf("%s %u clear_metadata=%d extents=%u\n", __func__, __LINE__, clear_metadata, extents);
+printf("%s %u clear_metadata=%d lv->le_count=%u extents=%u\n", __func__, __LINE__, clear_metadata, lv->le_count, extents);
 
 	segtype = get_segtype_from_string(lv->vg->cmd, "striped");
 
@@ -3746,13 +3746,15 @@ printf("%s %u extended layered %s\n", __func__, __LINE__, meta_lv->name);
 	}
 
 
-seg = first_seg(lv);
-/* Top-level area_len is equal to len */
-seg->area_len += extents;
-seg->len += extents;
-lv->le_count += extents;
-lv->size += (uint64_t) extents * lv->vg->extent_size;
+	/* Top-level area_len is equal to len */
+	seg = first_seg(lv);
+	seg->area_len += extents;
+	seg->len += extents;
+	lv->le_count += extents;
+	lv->size += (uint64_t) extents * lv->vg->extent_size;
+
 printf("%s %u seg->len=%u seg->area_len=%u\n", __func__, __LINE__, seg->len, seg->area_len);
+
 	if (!vg_write(lv->vg) || !vg_commit(lv->vg))
 		return_0;
 
@@ -3761,8 +3763,12 @@ printf("%s %u\n", __func__, __LINE__);
 	 * We must clear the metadata areas only upon creation.
 	 */
 	if (clear_metadata &&
+	    seg->meta_areas &&
 	    !_clear_metadata(lv))
+{
+printf("%s %u\n", __func__, __LINE__);
 		return 0;
+}
 printf("%s %u\n", __func__, __LINE__);
 
 	/* Top-level area_len is equal to len */

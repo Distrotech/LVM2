@@ -577,8 +577,7 @@ uint32_t raid_rmeta_extents(struct cmd_context *cmd,
 {
 	uint64_t bytes, sectors, size = rimage_extents;
 
-	if (!region_size)
-		region_size = get_default_region_size(cmd);
+	region_size = region_size ?: get_default_region_size(cmd);
 
 	bytes = dm_div_up(size * extent_size / region_size, 8);
 	sectors = dm_div_up(bytes, 512);
