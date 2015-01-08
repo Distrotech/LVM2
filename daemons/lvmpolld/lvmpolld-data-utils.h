@@ -63,6 +63,7 @@ typedef struct lvmpolld_lv {
 	const char *const sinterval;
 	lvmpolld_store_t *const pdst;
 	lvmpolld_parse_output_fn_t parse_output_fn;
+	const unsigned abort;
 	const char *const *cmdargv;
 
 	/* pid of polled lvm command */
@@ -71,7 +72,7 @@ typedef struct lvmpolld_lv {
 
 	/*
 	 * cond_update singnals update of one
-	 * or more variable in following block
+	 * or more variables in following block
 	 */
 	pthread_mutex_t lock;
 	pthread_cond_t cond_update;
@@ -86,8 +87,6 @@ typedef struct lvmpolld_lv {
 	/* TODO: read from lvmpolld configuration and change to const */
 	/* unsigned debug:1; */ /* may be read w/o lock */
 	/* unsigned verbose:1; */ /* may be read w/o lock */
-
-	const unsigned abort:1; /* may be read w/o lock */
 } lvmpolld_lv_t;
 
 static inline void pdst_lock(lvmpolld_store_t *pdst)
