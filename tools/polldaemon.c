@@ -352,6 +352,50 @@ err:
 	return ECMD_PROCESSED;
 }
 
+/*
+ * NOTE: Commented out sections related to foreground polling.
+ * 	 It doesn't work anyway right now.
+ *
+ * TODO: investigate whether this branch is accessed from
+ * 	 other command than pvmove.
+ */
+static int _lvmpolld_poll_vg(struct cmd_context *cmd,
+			      const char *vgname __attribute__((unused)),
+			      struct volume_group *vg, void *handle)
+{
+	const char *name;
+	struct lv_list *lvl;
+	struct logical_volume *lv;
+	union lvid lvid;
+	struct daemon_parms *parms = (struct daemon_parms *) handle;
+
+	dm_list_iterate_items(lvl, &vg->lvs) {
+		lv = lvl->lv;
+		if (!(lv->status & parms->lv_type))
+			continue;
+
+		memset(&lvid, 0, sizeof(union lvid));
+
+		name = parms->poll_fns->get_copy_name_from_lv(lv);
+
+		memcpy(&lvid, &vg->id, sizeof(*(lvid.id)));
+
+		if (!lvid.s) {
+			log_print_unless_silent("Failed to extract vgid from VG including PV: %s", name);
+			continue;
+		}
+
+		/* TODO: this is wrong. initialisation and data request has to be separated */
+		/* in bcakground we want to run this only once. otherwise we wait for all to finish */
+		if (lvmpolld(cmd, name, lvid.s, parms->background, parms->lv_type,
+			     parms->progress_title, 0, parms->interval, parms->aborting)) {
+			parms->outstanding_count++;
+		}
+	}
+
+	return ECMD_PROCESSED;
+}
+
 static void _poll_for_all_vgs(struct cmd_context *cmd,
 			      struct processing_handle *handle,
 			      process_single_vg_fn_t process_single_vg)
@@ -365,6 +409,36 @@ static void _poll_for_all_vgs(struct cmd_context *cmd,
 			break;
 		_nanosleep(parms->interval, 1);
 	}
+}
+
+static int _daemon_parms_init(struct cmd_context *cmd, struct daemon_parms *parms,
+			     unsigned background, struct poll_functions *poll_fns,
+			     const char *progress_title, uint64_t lv_type)
+{
+	sign_t interval_sign;
+
+	parms->aborting = arg_is_set(cmd, abort_ARG);
+	parms->background = background;
+	interval_sign = arg_sign_value(cmd, interval_ARG, SIGN_NONE);
+	if (interval_sign == SIGN_MINUS) {
+		log_error("Argument to --interval cannot be negative");
+		return 0;
+	}
+	parms->interval = arg_uint_value(cmd, interval_ARG,
+					find_config_tree_int(cmd, activation_polling_interval_CFG, NULL));
+	parms->wait_before_testing = (interval_sign == SIGN_PLUS);
+	parms->progress_display = 1;
+	parms->progress_title = progress_title;
+	parms->lv_type = lv_type;
+	parms->poll_fns = poll_fns;
+
+	/* FIXME: this is perhaps useless message with lvmpolld */
+	if (parms->interval && !parms->aborting)
+		log_verbose("Checking progress %s waiting every %u seconds",
+			    (parms->wait_before_testing ? "after" : "before"),
+			    parms->interval);
+
+	return 1;
 }
 
 /*
@@ -471,44 +545,20 @@ int poll_daemon(struct cmd_context *cmd, unsigned background,
 	return _poll_daemon(cmd, id, &parms);
 }
 
-/*
- * NOTE: Commented out sections related to foreground polling.
- * 	 It doesn't work anyway right now.
- *
- * TODO: investigate whether this branch is accessed from
- * 	 other command than pvmove.
- */
-static int _lvmpolld_poll_vg(struct cmd_context *cmd,
-			      const char *vgname __attribute__((unused)),
-			      struct volume_group *vg, void *handle)
+static int _lvmpoll_daemon(struct cmd_context *cmd, const char *name,
+			   const char *uuid, struct daemon_parms *parms)
 {
-	const char *name;
-	struct lv_list *lvl;
-	struct logical_volume *lv;
-	union lvid lvid;
-	struct daemon_parms *parms = (struct daemon_parms *) handle;
+	if (name || uuid)
+		return lvmpolld(cmd, name, uuid, parms->background, parms->lv_type,
+				parms->progress_title, !parms->background, parms->interval,
+				parms->aborting) ? ECMD_PROCESSED : ECMD_FAILED;
+	else {
+		/* TODO: investigate whether to remove this or not */
 
-	dm_list_iterate_items(lvl, &vg->lvs) {
-		lv = lvl->lv;
-		if (!(lv->status & parms->lv_type))
-			continue;
+		if (!parms->interval)
+			parms->interval = find_config_tree_int(cmd, activation_polling_interval_CFG, NULL);
 
-		memset(&lvid, 0, sizeof(union lvid));
-
-		name = parms->poll_fns->get_copy_name_from_lv(lv);
-
-		memcpy(&lvid, &vg->id, sizeof(*(lvid.id)));
-
-		if (!lvid.s) {
-			log_print_unless_silent("Failed to extract vgid from VG including PV: %s", name);
-			continue;
-		}
-
-		/* ret_code != 0 means we found the request polling operation and it's active */
-		if (lvmpolld(cmd, name, lvid.s, parms->background, parms->lv_type,
-			     parms->progress_title, 0, parms->interval, parms->aborting))
-			parms->outstanding_count++;
+		_poll_for_all_vgs(cmd, parms, _lvmpolld_poll_vg);
+		return ECMD_PROCESSED;
 	}
-
-	return ECMD_PROCESSED;
 }
