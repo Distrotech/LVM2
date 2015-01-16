@@ -122,7 +122,11 @@
 #define LV_RESHAPE_DELTA_DISKS_PLUS		UINT64_C(0x0008000000000000)    /* LV reshape flag delta disks plus image(s) */
 #define LV_RESHAPE_DELTA_DISKS_MINUS		UINT64_C(0x0010000000000000)    /* LV reshape flag delta disks minus image(s) */
 
-/* Next unused flag:		UINT64_C(0x0020000000000000)    */
+#define PV_ALLOCATION_PROHIBITED	UINT64_C(0x0020000000000000)	/* PV - internal use only - allocation prohibited
+									e.g. to prohibit allocation of a RAID image
+									on a PV already holing an image of the RAID set */
+
+/* Next unused flag:		UINT64_C(0x0040000000000000)    */
 
 /* Format features flags */
 #define FMT_SEGMENTS		0x00000001U	/* Arbitrary segment params? */
