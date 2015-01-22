@@ -2765,7 +2765,7 @@ static int _avoid_pvs_of_lv(struct logical_volume *lv, void *data)
  */
 static void __avoid_pvs_with_other_images_of_lv(struct logical_volume *lv, struct dm_list *allocate_pvs)
 {
-	(void) for_each_sub_lv(lv, _avoid_pvs_of_lv, allocate_pvs);
+	return for_each_sub_lv(lv, _avoid_pvs_of_lv, allocate_pvs);
 }
 
 /*
@@ -2874,7 +2874,11 @@ int lv_raid_replace(struct logical_volume *lv,
 	}
 
 	/* Prevent any PVs holding image components from being used for allocation */
-	__avoid_pvs_with_other_images_of_lv(lv, allocate_pvs);
+	if (!_avoid_pvs_with_other_images_of_lv(lv, allocate_pvs)) {
+		log_error("Failed to prevent PVs holding image components "
+			  "from being used for allocation.");
+		return 0;
+	}
 
 	/*
 	 * Allocate the new image components first
