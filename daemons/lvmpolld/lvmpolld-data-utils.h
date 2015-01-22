@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2014 Red Hat, Inc.
+ * Copyright (C) 2015 Red Hat, Inc.
  *
  * This file is part of LVM2.
  *
@@ -17,9 +17,12 @@
 
 #include <pthread.h>
 
+typedef struct lvmpolld_lv lvmpolld_lv_t;
 typedef struct lvmpolld_state lvmpolld_state_t;
 
-/* replace with configuration option */
+typedef void (*lvmpolld_parse_output_fn_t) (lvmpolld_lv_t *pdlv, const char *line);
+
+/* TODO: replace with configuration option */
 #define PDTIMEOUT_DEF 60
 
 enum poll_type {
@@ -30,8 +33,6 @@ enum poll_type {
 	POLL_TYPE_MAX
 };
 
-typedef struct lvmpolld_lv lvmpolld_lv_t;
-
 typedef struct {
 	pthread_mutex_t lock;
 	void *store;
@@ -39,14 +40,16 @@ typedef struct {
 } lvmpolld_store_t;
 
 typedef struct {
-	int ret_code;
+	int retcode;
 	int signal;
 } lvmpolld_cmd_stat_t;
 
-void pdst_init(lvmpolld_store_t *pdst, const char *name);
-void pdst_destroy(lvmpolld_store_t *pdst);
-
-typedef void (*lvmpolld_parse_output_fn_t) (lvmpolld_lv_t *pdlv, const char *line);
+typedef struct {
+	unsigned internal_error:1;
+	unsigned polling_finished:1;
+	lvmpolld_cmd_stat_t cmd_state;
+	dm_percent_t percent;
+} lvmpolld_lv_state_t;
 
 typedef struct lvmpolld_lv {
 	/*
@@ -63,41 +66,33 @@ typedef struct lvmpolld_lv {
 	const char *const sinterval;
 	lvmpolld_store_t *const pdst;
 	lvmpolld_parse_output_fn_t parse_output_fn;
-	const unsigned abort;
 	const char *const *cmdargv;
 
-	/* pid of polled lvm command */
-	pid_t lvmcmd;
+	/* only used by write */
+	pid_t cmd_pid;
 	pthread_t tid;
 
-	/*
-	 * cond_update singnals update of one
-	 * or more variables in following block
-	 */
 	pthread_mutex_t lock;
-	pthread_cond_t cond_update;
 
-	/* block of shared variables */
-	unsigned int use_count;
+	/* block of shared variables protected by lock */
 	lvmpolld_cmd_stat_t cmd_state;
 	dm_percent_t percent;
-	unsigned polling_finished:1; /* no more update */
-	unsigned internal_error:1; /* unrecoverable error in lvmpolld */
-
-	/* TODO: read from lvmpolld configuration and change to const */
-	/* unsigned debug:1; */ /* may be read w/o lock */
-	/* unsigned verbose:1; */ /* may be read w/o lock */
+	unsigned polling_finished:1; /* no more updates */
+	unsigned internal_error:1; /* unrecoverable error occured in lvmpolld */
+	unsigned background:1; /* 1 if lvmpolld doesn't expect progress readers */
 } lvmpolld_lv_t;
 
-static inline void pdst_lock(lvmpolld_store_t *pdst)
-{
-	pthread_mutex_lock(&pdst->lock);
-}
+/* LVMPOLLD_LV_T section */
 
-static inline void pdst_unlock(lvmpolld_store_t *pdst)
-{
-	pthread_mutex_unlock(&pdst->lock);
-}
+/* only call with appropriate lvmpolld_store_t lock held */
+lvmpolld_lv_t *pdlv_create(struct lvmpolld_state *ls, const char *lvid,
+			   const enum poll_type type, const char *sinterval,
+			   unsigned pdtimeout, lvmpolld_store_t *pdst,
+			   lvmpolld_parse_output_fn_t parse_fn,
+			   unsigned background);
+
+/* only call with appropriate lvmpolld_store_t lock held */
+void pdlv_destroy(lvmpolld_lv_t *pdlv);
 
 static inline void pdlv_lock(lvmpolld_lv_t *pdlv)
 {
@@ -109,44 +104,12 @@ static inline void pdlv_unlock(lvmpolld_lv_t *pdlv)
 	pthread_mutex_unlock(&pdlv->lock);
 }
 
-static inline int pdlv_locked_await_update(lvmpolld_lv_t *pdlv)
-{
-	return !pthread_cond_wait(&pdlv->cond_update, &pdlv->lock);
-}
-
+/*
+ * no lvmpolld_lv_t lock required section
+ */
 static inline int pdlv_is_type(const lvmpolld_lv_t *pdlv, enum poll_type type)
 {
 	return pdlv->type == type;
-}
-
-static inline int pdlv_locked_polling_finished(const lvmpolld_lv_t *pdlv)
-{
-	return pdlv->polling_finished;
-}
-
-static inline dm_percent_t pdlv_locked_get_percent(const lvmpolld_lv_t *pdlv)
-{
-	return pdlv->percent;
-}
-
-static inline lvmpolld_cmd_stat_t pdlv_locked_get_cmd_state(const lvmpolld_lv_t *pdlv)
-{
-	return pdlv->cmd_state;
-}
-
-static inline unsigned pdlv_locked_get_internal_error(const lvmpolld_lv_t *pdlv)
-{
-	return pdlv->internal_error;
-}
-
-static inline void pdlv_set_cmd_pid(lvmpolld_lv_t *pdlv, pid_t pid)
-{
-	pdlv->lvmcmd = pid;
-}
-
-static inline pid_t pdlv_get_cmd_pid(const lvmpolld_lv_t *pdlv)
-{
-	return pdlv->lvmcmd;
 }
 
 static inline unsigned pdlv_get_timeout(const lvmpolld_lv_t *pdlv)
@@ -154,9 +117,57 @@ static inline unsigned pdlv_get_timeout(const lvmpolld_lv_t *pdlv)
 	return pdlv->pdtimeout;
 }
 
-static inline void pdlv_set_cmdargv(lvmpolld_lv_t *pdlv, const char **cmdargv)
+unsigned pdlv_get_and_unset_background(lvmpolld_lv_t *pdlv);
+unsigned pdlv_get_background(lvmpolld_lv_t *pdlv);
+unsigned pdlv_get_polling_finished(lvmpolld_lv_t *pdlv);
+lvmpolld_lv_state_t pdlv_get_status(lvmpolld_lv_t *pdlv);
+void pdlv_set_background(lvmpolld_lv_t *pdlv, unsigned background); /* call with appropriate lvmpolld_store_t lock held */
+void pdlv_set_cmd_state(lvmpolld_lv_t *pdlv, const lvmpolld_cmd_stat_t *cmd_state);
+void pdlv_set_internal_error(lvmpolld_lv_t *pdlv, unsigned error);
+void pdlv_set_percents(lvmpolld_lv_t *pdlv, dm_percent_t percent);
+void pdlv_set_polling_finished(lvmpolld_lv_t *pdlv, unsigned finished);
+
+/*
+ * lvmpolld_lv_t lock required section
+ */
+static inline lvmpolld_cmd_stat_t pdlv_locked_cmd_state(const lvmpolld_lv_t *pdlv)
 {
-	pdlv->cmdargv = cmdargv;
+	return pdlv->cmd_state;
+}
+
+static inline int pdlv_locked_polling_finished(const lvmpolld_lv_t *pdlv)
+{
+	return pdlv->polling_finished;
+}
+
+static inline unsigned pdlv_locked_internal_error(const lvmpolld_lv_t *pdlv)
+{
+	return pdlv->internal_error;
+}
+
+static inline dm_percent_t pdlv_locked_percent(const lvmpolld_lv_t *pdlv)
+{
+	return pdlv->percent;
+}
+
+/* LVMPOLLD_STORE_T manipulation routines */
+
+void pdst_init(lvmpolld_store_t *pdst, const char *name);
+void pdst_destroy(lvmpolld_store_t *pdst);
+
+static inline void pdst_lock(lvmpolld_store_t *pdst)
+{
+	pthread_mutex_lock(&pdst->lock);
+}
+
+static inline void pdst_unlock(lvmpolld_store_t *pdst)
+{
+	pthread_mutex_unlock(&pdst->lock);
+}
+
+static inline int pdst_insert(lvmpolld_store_t *pdst, const char *key, lvmpolld_lv_t *pdlv)
+{
+	return dm_hash_insert(pdst->store, key, pdlv);
 }
 
 static inline lvmpolld_lv_t *pdst_lookup(lvmpolld_store_t *pdst, const char *key)
@@ -168,29 +179,5 @@ static inline void pdst_remove(lvmpolld_store_t *pdst, const char *key)
 {
 	dm_hash_remove(pdst->store, key);
 }
-
-static inline int pdst_insert(lvmpolld_store_t *pdst, const char *key, lvmpolld_lv_t *pdlv)
-{
-	return dm_hash_insert(pdst->store, key, pdlv);
-}
-
-/* pdlv structure has use_count == 1 after create */
-lvmpolld_lv_t *pdlv_create(struct lvmpolld_state *ls, const char *lvid,
-			   const enum poll_type type, const char *sinterval,
-			   unsigned pdtimeout, unsigned abort,
-			   lvmpolld_store_t *pdst,
-			   lvmpolld_parse_output_fn_t parse_fn);
-
-/* use count must not reach 0 when structure is in lvmpolld_store_t */
-void pdlv_put(lvmpolld_lv_t *pdlv);
-void pdlv_get(lvmpolld_lv_t *pdlv);
-
-void pdlv_set_percents(lvmpolld_lv_t *pdlv, dm_percent_t percent);
-
-void pdlv_set_cmd_state(lvmpolld_lv_t *pdlv, const lvmpolld_cmd_stat_t *cmd_state);
-
-dm_percent_t pdlv_get_percents(lvmpolld_lv_t *pdlv);
-
-void pdlv_set_internal_error(lvmpolld_lv_t *pdlv, unsigned error);
 
 #endif /* _LVM_LVMPOLLD_DATA_UTILS_H */

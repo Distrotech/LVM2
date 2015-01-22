@@ -24,9 +24,13 @@ struct cmd_context;
 /* daemon_handle lvmpolld_connect(const char *socket);*/
 void lvmpolld_disconnect(void);
 
-int lvmpolld(struct cmd_context *cmd, const char *name, const char *uuid, unsigned background,
-	     uint64_t lv_type, const char *progress_title, unsigned stream_data,
-	     unsigned interval, unsigned abort);
+int lvmpolld_poll_init(const char *cmd_line, const char *name,
+		       const char *uuid, unsigned background, uint64_t lv_type,
+		       unsigned interval, unsigned abort);
+
+int lvmpolld_request_info(const char *uuid, const char *name,
+			  const char *progress_title, unsigned abort,
+			  uint64_t lv_type, unsigned *finished);
 
 int lvmpolld_use(void);
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2014 Red Hat, Inc.
+ * Copyright (C) 2015 Red Hat, Inc.
  *
  * This file is part of LVM2.
  *
@@ -15,23 +15,11 @@
 #include "libdevmapper.h"
 #include "lvmpolld-data-utils.h"
 
-static void pdlv_destroy(lvmpolld_lv_t *pdlv)
-{
-	dm_free((void *)pdlv->lvid);
-	dm_free((void *)pdlv->sinterval);
-	dm_free((void *)pdlv->cmdargv);
-
-	pthread_mutex_destroy(&pdlv->lock);
-	pthread_cond_destroy(&pdlv->cond_update);
-
-	dm_free((void *)pdlv);
-}
-
 lvmpolld_lv_t *pdlv_create(lvmpolld_state_t *ls, const char *lvid,
 			   enum poll_type type, const char *sinterval,
-			   unsigned pdtimeout, unsigned abort,
-			   lvmpolld_store_t *pdst,
-			   lvmpolld_parse_output_fn_t parse_fn)
+			   unsigned pdtimeout, lvmpolld_store_t *pdst,
+			   lvmpolld_parse_output_fn_t parse_fn,
+			   unsigned background)
 {
 	lvmpolld_lv_t tmp = {
 		.ls = ls,
@@ -40,11 +28,10 @@ lvmpolld_lv_t *pdlv_create(lvmpolld_state_t *ls, const char *lvid,
 		.sinterval = sinterval ? dm_strdup(sinterval) : NULL,
 		.pdtimeout = pdtimeout ?: PDTIMEOUT_DEF,
 		.percent = DM_PERCENT_0,
-		.cmd_state = { .ret_code = -1, .signal = 0 },
-		.use_count = 1,
+		.cmd_state = { .retcode = -1, .signal = 0 },
 		.pdst = pdst,
 		.parse_output_fn = parse_fn,
-		.abort = abort
+		.background = background
 	}, *pdlv = (lvmpolld_lv_t *) dm_malloc(sizeof(lvmpolld_lv_t));
 
 	if (!pdlv) {
@@ -64,12 +51,8 @@ lvmpolld_lv_t *pdlv_create(lvmpolld_state_t *ls, const char *lvid,
 	if (pthread_mutex_init(&pdlv->lock, NULL))
 		goto mutex_err;
 
-	if (pthread_cond_init(&pdlv->cond_update, NULL))
-		goto cond_err;
-
 	return pdlv;
-cond_err:
-	pthread_mutex_destroy(&pdlv->lock);
+
 mutex_err:
 	dm_free((void *)pdlv->sinterval);
 sint_err:
@@ -80,75 +63,98 @@ lvid_err:
 	return NULL;
 }
 
-/* with lvid_to_pdlv lock held only */
-void pdlv_get(lvmpolld_lv_t *pdlv)
+void pdlv_destroy(lvmpolld_lv_t *pdlv)
 {
-	pdlv_lock(pdlv);
-	pdlv->use_count++;
-	pdlv_unlock(pdlv);
+	dm_free((void *)pdlv->lvid);
+	dm_free((void *)pdlv->sinterval);
+	dm_free((void *)pdlv->cmdargv);
+
+	pthread_mutex_destroy(&pdlv->lock);
+
+	dm_free((void *)pdlv);
 }
 
-/*
- * polling thread should first detach the data structure 
- * from lvmpolld_state_t and put it afterwards.
- *
- *  Otherwise we have race use_count == 0 vs use_count == 1
- */
-void pdlv_put(lvmpolld_lv_t *pdlv)
+unsigned pdlv_get_and_unset_background(lvmpolld_lv_t *pdlv)
 {
-	unsigned int r;
+	unsigned old;
 
 	pdlv_lock(pdlv);
-	r = --pdlv->use_count;
+	old = pdlv->background;
+	pdlv->background = 0;
 	pdlv_unlock(pdlv);
 
-	if (!r)
-		pdlv_destroy(pdlv);
+	return old;
 }
 
-void pdlv_set_percents(lvmpolld_lv_t *pdlv, dm_percent_t percent)
+unsigned pdlv_get_background(lvmpolld_lv_t *pdlv)
+{
+	unsigned b;
+
+	pdlv_lock(pdlv);
+	b = pdlv->background;
+	pdlv_unlock(pdlv);
+
+	return b;
+}
+
+unsigned pdlv_get_polling_finished(lvmpolld_lv_t *pdlv)
+{
+	unsigned ret;
+
+	pdlv_lock(pdlv);
+	ret = pdlv->polling_finished;
+	pdlv_unlock(pdlv);
+
+	return ret;
+}
+
+lvmpolld_lv_state_t pdlv_get_status(lvmpolld_lv_t *pdlv)
+{
+	lvmpolld_lv_state_t r;
+
+	pdlv_lock(pdlv);
+	r.internal_error = pdlv_locked_internal_error(pdlv);
+	r.polling_finished = pdlv_locked_polling_finished(pdlv);
+	r.cmd_state = pdlv_locked_cmd_state(pdlv);
+	r.percent = pdlv_locked_percent(pdlv);
+	pdlv_unlock(pdlv);
+
+	return r;
+}
+
+void pdlv_set_background(lvmpolld_lv_t *pdlv, unsigned background)
 {
 	pdlv_lock(pdlv);
-
-	pdlv->percent = percent;
-
-	pthread_cond_broadcast(&pdlv->cond_update);
-
+	pdlv->background = background;
 	pdlv_unlock(pdlv);
 }
 
 void pdlv_set_cmd_state(lvmpolld_lv_t *pdlv, const lvmpolld_cmd_stat_t *cmd_state)
 {
 	pdlv_lock(pdlv);
-
 	pdlv->cmd_state = *cmd_state;
-	pdlv->polling_finished = 1;
-
-	pthread_cond_broadcast(&pdlv->cond_update);
-
 	pdlv_unlock(pdlv);
-}
-
-dm_percent_t pdlv_get_percents(lvmpolld_lv_t *pdlv)
-{
-	dm_percent_t p;
-
-	pdlv_lock(pdlv);
-	p = pdlv_locked_get_percent(pdlv);
-	pdlv_unlock(pdlv);
-
-	return p;
 }
 
 void pdlv_set_internal_error(lvmpolld_lv_t *pdlv, unsigned error)
 {
 	pdlv_lock(pdlv);
-
 	pdlv->internal_error = error;
 	pdlv->polling_finished = 1;
+	pdlv_unlock(pdlv);
+}
 
-	pthread_cond_broadcast(&pdlv->cond_update);
+void pdlv_set_percents(lvmpolld_lv_t *pdlv, dm_percent_t percent)
+{
+	pdlv_lock(pdlv);
+	pdlv->percent = percent;
+	pdlv_unlock(pdlv);
+}
 
+void pdlv_set_polling_finished(lvmpolld_lv_t *pdlv, unsigned finished)
+{
+	pdlv_lock(pdlv);
+	pdlv->polling_finished = finished;
 	pdlv_unlock(pdlv);
 }
 

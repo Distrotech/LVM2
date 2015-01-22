@@ -21,6 +21,14 @@
 #include "polling_ops.h"
 #include "toolcontext.h"
 
+struct progress_info {
+	unsigned error:1;
+	unsigned finished:1;
+	int cmd_signal;
+	int cmd_retcode;
+	dm_percent_t percents;
+};
+
 static int _lvmpolld_use;
 static int _lvmpolld_connected;
 static const char* _lvmpolld_socket;
@@ -70,90 +78,64 @@ void lvmpolld_disconnect(void)
 	}
 }
 
-/* TODO: if we find this reasonable, let's move the code to libdaemon instead */
-static daemon_reply _read_single_response(daemon_request rq)
-{
-	daemon_reply repl = { 0 };
-	buffer_init(&repl.buffer);
-
-	if (!dm_config_write_node(rq.cft->root, buffer_line, &repl.buffer)) {
-		repl.error = ENOMEM;
-		return repl;
-	}
-
-	assert(repl.buffer.mem);
-	if (buffer_read(_lvmpolld.socket_fd, &repl.buffer)) {
-		repl.cft = dm_config_from_string(repl.buffer.mem);
-		if (!repl.cft)
-			repl.error = EPROTO;
-	} else
-		repl.error = errno;
-
-	return repl;
-}
-
-static daemon_reply _receive_data_stream(daemon_request req, const char *name, const char *progress_title)
-{
-	daemon_reply repl = daemon_send(_lvmpolld, req);
-
-	while (!strcmp(daemon_reply_str(repl, "response", ""), "progress_data"))
-	{
-		log_print_unless_silent("%s: %s: %.1f%%", name, progress_title, dm_percent_to_float((dm_percent_t)daemon_reply_int(repl, "data", 0)));
-
-		daemon_reply_destroy(repl);
-
-		repl = _read_single_response(req);
-	}
-
-	return repl;
-}
-
-static int _receive_progress_data(const char *name, const char *uuid, const char *progress_title)
+static struct progress_info _request_progress_info(const char *uuid, unsigned abort)
 {
 	daemon_reply repl;
-	int r = 0;
-	daemon_request req = daemon_request_make("progress_data_single");
+	struct progress_info ret = { .error = 1, .finished = 1 };
+	daemon_request req = daemon_request_make("progress_info");
 
 	if (!daemon_request_extend(req, "lvid = %s", uuid,
+					"abort = %d", abort,
 					NULL)) {
-		log_error("failed to create 'progress_data_single' request");
+		log_error("failed to create 'progress_info' request");
 		goto out_req;
 	}
 
 	repl = daemon_send(_lvmpolld, req);
-
-	if (repl.error)
+	if (repl.error) {
 		log_error("I/O error while communicating with lvmpolld");
-	else if (!strcmp(daemon_reply_str(repl, "response", ""), "progress_data")) {
-		/* this is only response type meaning the polling is still acitve */
-		log_print_unless_silent("%s: %s: %.1f%%", name, progress_title,
-					dm_percent_to_float((dm_percent_t)daemon_reply_int(repl, "data", 0)));
-		r = 1;
-	} else if (!strcmp(daemon_reply_str(repl, "response", ""), "failed") &&
-		 !strcmp(daemon_reply_str(repl, "reason", ""), "not found")) {
-		/* the polled LV is just gone. be silent? */
-		log_verbose("Polling already finished");
-	} else
-		log_error("Unexpected reply, reason: %s",
-			  daemon_reply_str(repl, "reason", ""));
+		goto out_repl;
+	}
 
+	if (!strcmp(daemon_reply_str(repl, "response", ""), "inprogress")) {
+		ret.percents = (dm_percent_t) daemon_reply_int(repl, "progress_data", 0);
+		ret.finished = 0;
+		ret.error = 0;
+	} else if (!strcmp(daemon_reply_str(repl, "response", ""), "finished")) {
+		ret.percents = (dm_percent_t) daemon_reply_int(repl, "progress_data", 0);
+		if (!strcmp(daemon_reply_str(repl, "reason", ""), "signal"))
+			ret.cmd_signal = daemon_reply_int(repl, "value", 0);
+		else
+			ret.cmd_retcode = daemon_reply_int(repl, "value", -1);
+		ret.error = 0;
+	} else if (!strcmp(daemon_reply_str(repl, "response", ""), "not_found")) {
+		log_verbose("lvmpolld: no polling operation in progress regarding LV %s", uuid);
+		ret.error = 0;
+	} else {
+		if (!strcmp(daemon_reply_str(repl, "response", ""), "failed"))
+			log_verbose("lvmpolld: internal error occured. See lvmpolld log file");
+		log_error("failed to receive progress data: The reason: %s",
+			  daemon_reply_str(repl, "reason", "<empty>"));
+	}
+out_repl:
 	daemon_reply_destroy(repl);
 out_req:
 	daemon_request_destroy(req);
 
-	return r;
+	return ret;
 }
 
 /*
  * interval in seconds long
- * enough for year of waiting
+ * enough for more than a year
+ * of waiting
  */
 #define INTERV_SIZE 10
 
-static int _process_request(const struct cmd_context *cmd, const char *poll_type, const char *name,
-			    const char *uuid, unsigned stream_data,
-			    const char *progress_title, unsigned interval,
-			    unsigned abort)
+static int _process_poll_init(const char *cmd_line, const char *poll_type,
+			      const char *name, const char *uuid,
+			      unsigned background, unsigned interval,
+			      unsigned abort)
 {
 	char *str;
 	daemon_reply rep;
@@ -162,7 +144,7 @@ static int _process_request(const struct cmd_context *cmd, const char *poll_type
 
 	str = dm_malloc(INTERV_SIZE * sizeof(char));
 	if (!str)
-		goto out;
+		return r;
 
 	if (snprintf(str, INTERV_SIZE, "%u", interval) >= INTERV_SIZE) {
 		log_warn("interval string conversion got truncated");
@@ -172,54 +154,39 @@ static int _process_request(const struct cmd_context *cmd, const char *poll_type
 	req = daemon_request_make(poll_type);
 	if (!daemon_request_extend(req, "lvid = %s", uuid,
 					"interval = %s", str,
-					"stream_data = %d", stream_data,
+					"background = %d", background,
 					"abort = %d", abort,
-					"cmdline = %s", cmd->cmd_line,
+					"cmdline = %s", cmd_line,
 					NULL)) {
 		log_error("failed to create %s request", poll_type);
 		goto out_req;
 	}
 
-	if (stream_data)
-		rep = _receive_data_stream(req, name, progress_title);
-	else
-		rep = daemon_send(_lvmpolld, req);
+	rep = daemon_send(_lvmpolld, req);
 
-	/* TODO: audit me */
-	if (strcmp(daemon_reply_str(rep, "response", ""), "OK")) {
+	if (!strcmp(daemon_reply_str(rep, "response", ""), "OK"))
+		/* OK */
+		r = 1;
+	else {
 		if (rep.error)
 			log_error("failed to process request with error %s (errno: %d)",
 				  strerror(rep.error), rep.error);
-		else {
-			if (!strcmp(daemon_reply_str(rep, "reason", ""), "ret_code"))
-				log_error("lvmpolld: polling command '%s' exited with ret_code: %" PRIu64,
-					  poll_type, daemon_reply_int(rep, "value", 103));
-			else if (!strcmp(daemon_reply_str(rep, "reason", ""), "signal"))
-				log_error("lvmpolld: polling command '%s' got terminated by signal (%" PRIu64 ")",
-					  poll_type, daemon_reply_int(rep, "value", 0));
-			else
-				log_error("failed to %s. The reason: %s",
-					  stream_data ? "receive progress data stream" : "initiate operation polling",
-					  daemon_reply_str(rep, "reason", ""));
-		}
-		goto out_rep;
+		else
+			log_error("failed to initialise lvmpolld operation: %s. The reason: %s",
+				  poll_type, daemon_reply_str(rep, "reason", ""));
 	}
 
-	r = 1;
-
-out_rep:
 	daemon_reply_destroy(rep);
 out_req:
 	daemon_request_destroy(req);
 	dm_free(str);
-out:
 
 	return r;
 }
 
-int lvmpolld(struct cmd_context *cmd, const char *name, const char *uuid, unsigned background,
-	     uint64_t lv_type, const char *progress_title, unsigned stream_data,
-	     unsigned interval, unsigned abort)
+int lvmpolld_poll_init(const char *cmd_line, const char *name, const char *uuid,
+		       unsigned background, uint64_t lv_type, unsigned interval,
+		       unsigned abort)
 {
 	int r = 0;
 
@@ -228,28 +195,20 @@ int lvmpolld(struct cmd_context *cmd, const char *name, const char *uuid, unsign
 		return 0;
 	}
 
-	if (abort) {
-		log_warn("Enforcing background due to requested abort");
-		background = 1;
-	}
-
-	if (background && stream_data) {
-		stream_data = 0;
-		log_warn("Disabling progress data stream due to background mode already set");
-	}
-
-	if (lv_type & PVMOVE)
-		r =  _process_request(cmd, PVMOVE_POLL, name, uuid, stream_data, progress_title, interval, abort);
-	else if (lv_type & CONVERTING)
-		r =  _process_request(cmd, CONVERT_POLL, name, uuid, stream_data, progress_title, interval, 0);
-	else if (lv_type & MERGING) {
+	if (lv_type & PVMOVE) {
+		log_verbose("lvmpolld: pvmove%s", abort ? "--abort" : "");
+		r =  _process_poll_init(cmd_line, PVMOVE_POLL, name, uuid, background, interval, abort);
+	} else if (lv_type & CONVERTING) {
+		log_verbose("lvmpolld: convert mirror");
+		r =  _process_poll_init(cmd_line, CONVERT_POLL, name, uuid, background, interval, 0);
+	} else if (lv_type & MERGING) {
 		if (lv_type & SNAPSHOT) {
-		log_verbose("Merging snapshot");
-			r =  _process_request(cmd, MERGE_POLL, name, uuid, stream_data, progress_title, interval, 0);
+		log_verbose("lvmpolld: Merge snapshot");
+			r =  _process_poll_init(cmd_line, MERGE_POLL, name, uuid, background, interval, 0);
 		}
 		else if (lv_type & THIN_VOLUME) {
-			log_verbose("Merging thin snapshot");
-			r = _process_request(cmd, MERGE_THIN_POLL, name, uuid, stream_data, progress_title, interval, 0);
+			log_verbose("lvmpolld: Merge thin snapshot");
+			r = _process_poll_init(cmd_line, MERGE_THIN_POLL, name, uuid, background, interval, 0);
 		}
 		else {
 			log_error(INTERNAL_ERROR "Unsupported poll operation");
@@ -257,9 +216,50 @@ int lvmpolld(struct cmd_context *cmd, const char *name, const char *uuid, unsign
 	} else
 		log_error(INTERNAL_ERROR "Unsupported poll operation");
 
-	/* successful init required */
-	if (r && !background && !stream_data)
-		r = _receive_progress_data(name, uuid, progress_title);
-
 	return r;
+}
+
+int lvmpolld_request_info(const char *uuid, const char *name,
+			  const char *progress_title, unsigned abort,
+			  uint64_t lv_type, unsigned *finished)
+{
+	struct progress_info info;
+	int ret = 0;
+
+	*finished = 1;
+
+	if (!uuid) {
+		log_error(INTERNAL_ERROR "use of lvmpolld requires uuid being set");
+		return 0;
+	}
+
+	info = _request_progress_info(uuid, abort);
+	*finished = info.finished;
+
+	if (info.error)
+		return 0;
+
+	/* 
+	 * not interested in progress info with pvmove --abort or
+	 * while converting thin snapshot
+	 */ 
+	if (!abort && !(lv_type & THIN_VOLUME))
+		log_print_unless_silent("%s: %s: %.1f%%", name,
+						progress_title, dm_percent_to_float(info.percents));
+
+	if (info.finished) {
+		if (info.cmd_signal)
+			log_error("lvmpolld: polling command got terminated by signal (%d)",
+				  info.cmd_signal);
+		else if (info.cmd_retcode)
+			log_error("lvmpolld: polling command exited with return code: %d",
+				  info.cmd_retcode);
+		else  {
+			log_verbose("lvmpolld: polling finished successfully");
+			ret = 1;
+		}
+	} else
+		ret = 1;
+
+	return ret;
 }
