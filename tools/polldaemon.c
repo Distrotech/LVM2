@@ -22,6 +22,17 @@
 
 #define WAIT_AT_LEAST_NANOSECS 100000
 
+struct poll_lv_list {
+	struct dm_list list;
+	char *uuid;
+	char *name;
+};
+
+typedef struct {
+	struct daemon_parms *parms;
+	struct dm_list plvs;
+} lvmpolld_parms_t;
+
 progress_t poll_mirror_progress(struct cmd_context *cmd,
 				struct logical_volume *lv, const char *name,
 				struct daemon_parms *parms)
@@ -352,44 +363,46 @@ err:
 	return ECMD_PROCESSED;
 }
 
-/*
- * NOTE: Commented out sections related to foreground polling.
- * 	 It doesn't work anyway right now.
- *
- * TODO: investigate whether this branch is accessed from
- * 	 other command than pvmove.
- */
-static int _lvmpolld_poll_vg(struct cmd_context *cmd,
-			      const char *vgname __attribute__((unused)),
-			      struct volume_group *vg, void *handle)
+static int _lvmpolld_init_poll_vg(struct cmd_context *cmd,
+			          const char *vgname __attribute__((unused)),
+			          struct volume_group *vg, void *handle)
 {
 	const char *name;
+	int r;
 	struct lv_list *lvl;
 	struct logical_volume *lv;
+	struct poll_lv_list *plv;
 	union lvid lvid;
-	struct daemon_parms *parms = (struct daemon_parms *) handle;
+	lvmpolld_parms_t *lpdp = (lvmpolld_parms_t *) handle;
 
 	dm_list_iterate_items(lvl, &vg->lvs) {
 		lv = lvl->lv;
-		if (!(lv->status & parms->lv_type))
+		if (!(lv->status & lpdp->parms->lv_type))
+			continue;
+		name = lpdp->parms->poll_fns->get_copy_name_from_lv(lv);
+		if (!name && !lpdp->parms->aborting)
 			continue;
 
 		memset(&lvid, 0, sizeof(union lvid));
-
-		name = parms->poll_fns->get_copy_name_from_lv(lv);
-
 		memcpy(&lvid, &vg->id, sizeof(*(lvid.id)));
 
 		if (!lvid.s) {
+			/* TODO: rephrase this log message */
 			log_print_unless_silent("Failed to extract vgid from VG including PV: %s", name);
 			continue;
 		}
 
-		/* TODO: this is wrong. initialisation and data request has to be separated */
-		/* in bcakground we want to run this only once. otherwise we wait for all to finish */
-		if (lvmpolld(cmd, name, lvid.s, parms->background, parms->lv_type,
-			     parms->progress_title, 0, parms->interval, parms->aborting)) {
-			parms->outstanding_count++;
+		r = lvmpolld_poll_init(cmd->cmd_line, name, lvid.s,
+				       lpdp->parms->background,
+				       lpdp->parms->lv_type,
+				       lpdp->parms->interval,
+				       lpdp->parms->aborting);
+
+		if (r && !lpdp->parms->background) {
+			plv = (struct poll_lv_list *) dm_malloc(sizeof(struct poll_lv_list));
+			plv->uuid = dm_strdup(lvid.s);
+			plv->name = dm_strdup(name);
+			dm_list_add(&lpdp->plvs, &plv->list);
 		}
 	}
 
@@ -397,23 +410,57 @@ static int _lvmpolld_poll_vg(struct cmd_context *cmd,
 }
 
 static void _poll_for_all_vgs(struct cmd_context *cmd,
-			      struct processing_handle *handle,
-			      process_single_vg_fn_t process_single_vg)
+			      struct processing_handle *handle)
 {
 	struct daemon_parms *parms = (struct daemon_parms *) handle->custom_handle;
 
 	while (1) {
 		parms->outstanding_count = 0;
-		process_each_vg(cmd, 0, NULL, READ_FOR_UPDATE, handle, process_single_vg);
+		process_each_vg(cmd, 0, NULL, READ_FOR_UPDATE, handle, _poll_vg);
 		if (!parms->outstanding_count)
 			break;
 		_nanosleep(parms->interval, 1);
 	}
 }
 
+static void _lvmpolld_poll_for_all_vgs(struct cmd_context *cmd,
+				       struct daemon_parms *parms)
+{
+	int r;
+	struct poll_lv_list *plv, *tlv;
+	unsigned finished;
+	lvmpolld_parms_t lpdp = {
+		.parms = parms
+	};
+
+	dm_list_init(&lpdp.plvs);
+
+	process_each_vg(cmd, 0, NULL, READ_FOR_UPDATE, &lpdp, _lvmpolld_init_poll_vg);
+
+	while (!dm_list_empty(&lpdp.plvs)) {
+		/* TODO: add wait before */
+		dm_list_iterate_items_safe(plv, tlv, &lpdp.plvs) {
+			r = lvmpolld_request_info(plv->uuid, plv->name,
+						  lpdp.parms->progress_title,
+						  lpdp.parms->aborting,
+						  lpdp.parms->lv_type,
+						  &finished);
+			if (!r || finished) {
+				dm_list_del(&plv->list);
+				dm_free(plv->uuid);
+				dm_free(plv->name);
+				dm_free(plv);
+			}
+		}
+		/* TODO: add wait after?*/
+		sleep(lpdp.parms->interval);
+	}
+}
+
 static int _daemon_parms_init(struct cmd_context *cmd, struct daemon_parms *parms,
-			     unsigned background, struct poll_functions *poll_fns,
-			     const char *progress_title, uint64_t lv_type)
+			      unsigned background, struct poll_functions *poll_fns,
+			      const char *progress_title, uint64_t lv_type,
+			      unsigned multicopy)
 {
 	sign_t interval_sign;
 
@@ -432,11 +479,18 @@ static int _daemon_parms_init(struct cmd_context *cmd, struct daemon_parms *parm
 	parms->lv_type = lv_type;
 	parms->poll_fns = poll_fns;
 
-	/* FIXME: this is perhaps useless message with lvmpolld */
 	if (parms->interval && !parms->aborting)
 		log_verbose("Checking progress %s waiting every %u seconds",
 			    (parms->wait_before_testing ? "after" : "before"),
 			    parms->interval);
+
+	if (!parms->interval) {
+		parms->progress_display = 0;
+
+		/* FIXME Disabled multiple-copy wait_event */
+		if (multicopy)
+			parms->interval = find_config_tree_int(cmd, activation_polling_interval_CFG, NULL);
+	}
 
 	return 1;
 }
@@ -548,17 +602,27 @@ int poll_daemon(struct cmd_context *cmd, unsigned background,
 static int _lvmpoll_daemon(struct cmd_context *cmd, const char *name,
 			   const char *uuid, struct daemon_parms *parms)
 {
-	if (name || uuid)
-		return lvmpolld(cmd, name, uuid, parms->background, parms->lv_type,
-				parms->progress_title, !parms->background, parms->interval,
-				parms->aborting) ? ECMD_PROCESSED : ECMD_FAILED;
-	else {
-		/* TODO: investigate whether to remove this or not */
+	int r;
+	unsigned finished = 0;
 
-		if (!parms->interval)
-			parms->interval = find_config_tree_int(cmd, activation_polling_interval_CFG, NULL);
+	if (name || uuid) {
+		r = lvmpolld_poll_init(cmd->cmd_line, name, uuid,
+				       parms->background, parms->lv_type,
+				       parms->interval, parms->aborting);
 
-		_poll_for_all_vgs(cmd, parms, _lvmpolld_poll_vg);
+		while (r && !parms->background && !finished) {
+			r = lvmpolld_request_info(uuid, name,
+						  parms->progress_title,
+						  parms->aborting, parms->lv_type,
+						  &finished);
+			sleep(parms->interval);
+		}
+
+		return r ? ECMD_PROCESSED : ECMD_FAILED;
+	} else {
+		/* process all in-flight operations */
+
+		_lvmpolld_poll_for_all_vgs(cmd, parms);
 		return ECMD_PROCESSED;
 	}
 }
