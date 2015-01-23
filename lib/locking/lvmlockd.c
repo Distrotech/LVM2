@@ -1821,6 +1821,9 @@ int lockd_init_lv_args(struct cmd_context *cmd, struct volume_group *vg,
 	}
 
 	dm_list_iterate_items(lvl, &vg->lvs) {
+		/* An exact match is the lv itself. */
+		if (!strcmp(lvl->lv->name, lv_name))
+			continue;
 		if (!strncmp(lvl->lv->name, lv_name, maxname)) {
 			log_error("LV name %s matches existing LV %s within %s character limit %d",
 				  lv_name, lvl->lv->name, vg->lock_type, maxname);
@@ -1853,9 +1856,9 @@ int lockd_init_lv_args(struct cmd_context *cmd, struct volume_group *vg,
  */
 
 int lockd_init_lv(struct cmd_context *cmd, struct volume_group *vg,
-		     struct lvcreate_params *lp)
+		  const char *lv_name, struct lvcreate_params *lp)
 {
-	const char *lv_name;
+	const char *lv_name_lock;
 	int lock_type_num = lock_type_to_num(lp->lock_type);
 
 	if (cmd->lock_lv_mode && !strcmp(cmd->lock_lv_mode, "na"))
@@ -1934,7 +1937,7 @@ int lockd_init_lv(struct cmd_context *cmd, struct volume_group *vg,
 
 		} else if (!seg_is_thin_volume(lp) && lp->create_pool) {
 			/* Creating a thin pool only. */
-			lv_name = lp->pool_name;
+			lv_name_lock = lp->pool_name;
 
 		} else {
 			log_error("Unknown thin options for lock init.");
@@ -1943,10 +1946,10 @@ int lockd_init_lv(struct cmd_context *cmd, struct volume_group *vg,
 
 	} else {
 		/* Creating a normal lv. */
-		lv_name = lp->lv_name;
+		lv_name_lock = lv_name;
 	}
 
-	return lockd_init_lv_args(cmd, vg, lv_name, lp->lock_type, &lp->lock_args);
+	return lockd_init_lv_args(cmd, vg, lv_name_lock, lp->lock_type, &lp->lock_args);
 }
 
 /* lvremove */
