@@ -7034,13 +7034,22 @@ static struct logical_volume *_lv_create_an_lv(struct volume_group *vg,
 				   lv->major, lv->minor);
 	}
 
+	/*
+	 * lockd_init_lv clears lp lock_type if this LV does not use its own lock.
+	 * TODO: use lockd_free_lv if lv_extend fails below.
+	 */
+	if (lp->lock_type && !lockd_init_lv(vg->cmd, vg, lv->name, lp))
+		return_NULL;
+
 	if (lp->lock_type && !(lv->lock_type = dm_pool_strdup(cmd->mem, lp->lock_type))) {
 		log_error("Failed to allocate lock_type");
+		lockd_free_lv(vg->cmd, vg, lp->lv_name, lp->lock_args);
 		return NULL;
 	}
 
 	if (lp->lock_args && !(lv->lock_args = dm_pool_strdup(cmd->mem, lp->lock_args))) {
 		log_error("Failed to allocate lock_args");
+		lockd_free_lv(vg->cmd, vg, lp->lv_name, lp->lock_args);
 		return NULL;
 	}
 
@@ -7351,6 +7360,9 @@ deactivate_and_revert_new_lv:
 	}
 
 revert_new_lv:
+	if (lp->lock_type)
+		lockd_free_lv(vg->cmd, vg, lp->lv_name, lp->lock_args);
+
 	/* FIXME Better to revert to backup of metadata? */
 	if (!lv_remove(lv) || !vg_write(vg) || !vg_commit(vg))
 		log_error("Manual intervention may be required to remove "
@@ -7366,10 +7378,6 @@ struct logical_volume *lv_create_single(struct volume_group *vg,
 {
 	const struct segment_type *segtype;
 	struct logical_volume *lv;
-
-	/* lockd_init_lv clears lock_type if this LV does not use its own lock. */
-	if (lp->lock_type && !lockd_init_lv(vg->cmd, vg, lp))
-		return_NULL;
 
 	/* Create pool first if necessary */
 	if (lp->create_pool && !seg_is_pool(lp)) {
@@ -7412,11 +7420,8 @@ struct logical_volume *lv_create_single(struct volume_group *vg,
 		lp->segtype = segtype;
 	}
 
-	if (!(lv = _lv_create_an_lv(vg, lp, lp->lv_name))) {
-		if (lp->lock_type)
-			lockd_free_lv(vg->cmd, vg, lp->lv_name, lp->lock_args);
+	if (!(lv = _lv_create_an_lv(vg, lp, lp->lv_name)))
 		return_NULL;
-	}
 
 	if (lp->temporary)
 		log_verbose("Temporary logical volume \"%s\" created.", lv->name);
