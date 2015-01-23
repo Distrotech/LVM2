@@ -129,7 +129,7 @@ int lockd_lv(struct cmd_context *cmd, struct logical_volume *lv,
 /* lvcreate/lvremove use init/free */
 
 int lockd_init_lv(struct cmd_context *cmd, struct volume_group *vg,
-		  struct lvcreate_params *lp);
+		  const char *lv_name, struct lvcreate_params *lp);
 int lockd_free_lv(struct cmd_context *cmd, struct volume_group *vg,
 		  const char *lv_name, const char *lock_args);
 
@@ -166,7 +166,7 @@ int lockd_init_lv_args(struct cmd_context *cmd, struct volume_group *vg,
 #define lockd_lv_name(cmd, vg, lv_name, lock_args, def_mode, flags) (1)
 #define lockd_lv(cmd, lv, def_mode, flags) (1)
 
-#define lockd_init_lv(cmd, vg, lp) (1)
+#define lockd_init_lv(cmd, vg, lv_name, lp) (1)
 #define lockd_free_lv(cmd, vg, lv_name, lock_args) (1)
 #define lockd_init_lv_args(cmd, vg, lv_name, lock_type, lock_args) (1)
 
