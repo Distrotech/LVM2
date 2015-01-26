@@ -881,9 +881,11 @@ xx(pvmove,
    interval_ARG, name_ARG, noudevsync_ARG, test_ARG)
 
 xx(lvpoll,
-   "Poll operation initiated before by either pvmove or lvconvert",
-   ALL_VGS_IS_DEFAULT,
+   "Resume poll operation on logical volume",
+   0,
    "\t[--abort]\n"
+   "\t[-u|--uuid]\n"
+   "\t[-p|--poll-operation\n"
    "\t[-d|--debug]\n "
    "\t[-h|-?|--help]\n"
    "\t[-i|--interval seconds]\n"
@@ -891,7 +893,7 @@ xx(lvpoll,
    "\t[-v|--verbose]\n "
    "\t[--version]\n",
 
-   abort_ARG, interval_ARG, test_ARG)
+   abort_ARG, interval_ARG, polloperation_ARG, uuidstr_ARG, test_ARG)
 
 xx(pvremove,
    "Remove LVM label(s) from physical volume(s)",

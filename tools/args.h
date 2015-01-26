@@ -207,6 +207,9 @@ arg(resizeable_ARG, 'x', "resizeable", yes_no_arg, 0)
 arg(yes_ARG, 'y', "yes", NULL, 0)
 arg(zero_ARG, 'Z', "zero", yes_no_arg, 0)
 
+/* new args for lvpoll */
+arg(polloperation_ARG, 'p', "poll-operation", string_arg, 0)
+
 /* this should always be last */
 arg(ARG_COUNT, '-', "", NULL, 0)
 /* *INDENT-ON* */
