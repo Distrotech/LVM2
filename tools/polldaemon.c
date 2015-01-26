@@ -363,8 +363,7 @@ err:
 	return ECMD_PROCESSED;
 }
 
-static int _lvmpolld_init_poll_vg(struct cmd_context *cmd,
-			          const char *vgname __attribute__((unused)),
+static int _lvmpolld_init_poll_vg(struct cmd_context *cmd, const char *vgname,
 			          struct volume_group *vg, void *handle)
 {
 	const char *name;
@@ -392,7 +391,7 @@ static int _lvmpolld_init_poll_vg(struct cmd_context *cmd,
 			continue;
 		}
 
-		r = lvmpolld_poll_init(cmd->cmd_line, name, lvid.s,
+		r = lvmpolld_poll_init(cmd->cmd_line, vgname, lvid.s,
 				       lpdp->parms->background,
 				       lpdp->parms->lv_type,
 				       lpdp->parms->interval,
@@ -606,8 +605,9 @@ static int _lvmpoll_daemon(struct cmd_context *cmd, const char *name,
 	unsigned finished = 0;
 
 	if (name || uuid) {
-		r = lvmpolld_poll_init(cmd->cmd_line, name, uuid,
-				       parms->background, parms->lv_type,
+		r = lvmpolld_poll_init(cmd->cmd_line,
+				       (parms->lv_type & PVMOVE ? find_vgname_from_pvname(cmd, name) : extract_vgname(cmd, name)),
+				       uuid, parms->background, parms->lv_type,
 				       parms->interval, parms->aborting);
 
 		while (r && !parms->background && !finished) {

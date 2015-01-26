@@ -98,11 +98,11 @@ static struct progress_info _request_progress_info(const char *uuid, unsigned ab
 	}
 
 	if (!strcmp(daemon_reply_str(repl, "response", ""), "inprogress")) {
-		ret.percents = (dm_percent_t) daemon_reply_int(repl, "progress_data", 0);
+		ret.percents = (dm_percent_t) daemon_reply_int(repl, "data", 0);
 		ret.finished = 0;
 		ret.error = 0;
 	} else if (!strcmp(daemon_reply_str(repl, "response", ""), "finished")) {
-		ret.percents = (dm_percent_t) daemon_reply_int(repl, "progress_data", 0);
+		ret.percents = (dm_percent_t) daemon_reply_int(repl, "data", 0);
 		if (!strcmp(daemon_reply_str(repl, "reason", ""), "signal"))
 			ret.cmd_signal = daemon_reply_int(repl, "value", 0);
 		else
@@ -133,7 +133,7 @@ out_req:
 #define INTERV_SIZE 10
 
 static int _process_poll_init(const char *cmd_line, const char *poll_type,
-			      const char *name, const char *uuid,
+			      const char *vgname, const char *uuid,
 			      unsigned background, unsigned interval,
 			      unsigned abort)
 {
@@ -153,6 +153,7 @@ static int _process_poll_init(const char *cmd_line, const char *poll_type,
 
 	req = daemon_request_make(poll_type);
 	if (!daemon_request_extend(req, "lvid = %s", uuid,
+					"vgname = %s", vgname,
 					"interval = %s", str,
 					"background = %d", background,
 					"abort = %d", abort,
@@ -184,31 +185,36 @@ out_req:
 	return r;
 }
 
-int lvmpolld_poll_init(const char *cmd_line, const char *name, const char *uuid,
+int lvmpolld_poll_init(const char *cmd_line, const char *vgname, const char *uuid,
 		       unsigned background, uint64_t lv_type, unsigned interval,
 		       unsigned abort)
 {
 	int r = 0;
 
 	if (!uuid) {
-		log_error(INTERNAL_ERROR "use of lvmpolld requires uuid being set");
+		log_error(INTERNAL_ERROR "use of lvmpolld requires uuid set");
+		return 0;
+	}
+
+	if (!vgname) {
+		log_error(INTERNAL_ERROR "use of lvmpolld requires vgname set");
 		return 0;
 	}
 
 	if (lv_type & PVMOVE) {
 		log_verbose("lvmpolld: pvmove%s", abort ? "--abort" : "");
-		r =  _process_poll_init(cmd_line, PVMOVE_POLL, name, uuid, background, interval, abort);
+		r =  _process_poll_init(cmd_line, PVMOVE_POLL, vgname, uuid, background, interval, abort);
 	} else if (lv_type & CONVERTING) {
 		log_verbose("lvmpolld: convert mirror");
-		r =  _process_poll_init(cmd_line, CONVERT_POLL, name, uuid, background, interval, 0);
+		r =  _process_poll_init(cmd_line, CONVERT_POLL, vgname, uuid, background, interval, 0);
 	} else if (lv_type & MERGING) {
 		if (lv_type & SNAPSHOT) {
 		log_verbose("lvmpolld: Merge snapshot");
-			r =  _process_poll_init(cmd_line, MERGE_POLL, name, uuid, background, interval, 0);
+			r =  _process_poll_init(cmd_line, MERGE_POLL, vgname, uuid, background, interval, 0);
 		}
 		else if (lv_type & THIN_VOLUME) {
 			log_verbose("lvmpolld: Merge thin snapshot");
-			r = _process_poll_init(cmd_line, MERGE_THIN_POLL, name, uuid, background, interval, 0);
+			r = _process_poll_init(cmd_line, MERGE_THIN_POLL, vgname, uuid, background, interval, 0);
 		}
 		else {
 			log_error(INTERNAL_ERROR "Unsupported poll operation");
