@@ -386,12 +386,18 @@ static const char **cmdargv_ctr(lvmpolld_lv_t *pdlv, unsigned abort)
 		!add_to_cmdargv(&cmd_argv, "--abort", &i, MIN_SIZE))
 		goto err;
 
-	/* FIXME: one of: "convert", "pvmove", "merge", "merge_thin" */
-	if (!add_to_cmdargv(&cmd_argv, polling_ops[pdlv->type], &i, MIN_SIZE))
+	/* one of: "convert", "pvmove", "merge", "merge_thin" */
+	if (!add_to_cmdargv(&cmd_argv, "--poll-operation", &i, MIN_SIZE) ||
+	    !add_to_cmdargv(&cmd_argv, polling_ops[pdlv->type], &i, MIN_SIZE))
 		goto err;
 
 	/* either vg_uuid+\0\0\0\0... or vg_uuid+lv_uuid */
-	if (!add_to_cmdargv(&cmd_argv, pdlv->lvid, &i, MIN_SIZE))
+	if (!add_to_cmdargv(&cmd_argv, "--uuid", &i, MIN_SIZE) ||
+	    !add_to_cmdargv(&cmd_argv, pdlv->lvid, &i, MIN_SIZE))
+		goto err;
+
+	/* vgname */
+	if (!add_to_cmdargv(&cmd_argv, pdlv->vgname, &i, MIN_SIZE))
 		goto err;
 
 	/* terminating NULL */
@@ -577,9 +583,9 @@ static response progress_info(client_handle h, lvmpolld_state_t *ls, request req
 }
 
 static lvmpolld_lv_t *construct_pdlv(request req, lvmpolld_state_t *ls,
-				     const char *lvid, enum poll_type type,
-				     unsigned abort, lvmpolld_store_t *pdst,
-				     unsigned background)
+				     const char *lvid, const char *vgname,
+				     enum poll_type type, unsigned abort,
+				     lvmpolld_store_t *pdst, unsigned background)
 {
 	const char **cmdargv;
 	lvmpolld_lv_t *pdlv;
@@ -592,7 +598,7 @@ static lvmpolld_lv_t *construct_pdlv(request req, lvmpolld_state_t *ls,
 		return NULL;
 	}
 
-	pdlv = pdlv_create(ls, lvid, type, sinterval, 2 * interval, pdst,
+	pdlv = pdlv_create(ls, lvid, vgname, type, sinterval, 2 * interval, pdst,
 			   (abort ? NULL : parse_line_for_percents), background);
 
 	if (!pdlv) {
@@ -633,9 +639,20 @@ static response poll_init(client_handle h, lvmpolld_state_t *ls, request req, en
 	lvmpolld_store_t *pdst;
 
 	const char *lvid = daemon_request_str(req, "lvid", NULL);
+	const char *vgname = daemon_request_str(req, "vgname", NULL);
 	unsigned abort = daemon_request_int(req, "abort", 0);
 	/* make background default on purpose */
 	unsigned background = daemon_request_int(req, "background", 1);
+
+	if (!lvid)
+		/* TODO: "response" == "fail" is used with internall errors only */
+		/* perhaps add new type of response */
+		return reply_fail("lvid required");
+
+	if (!vgname)
+		/* TODO: "response" == "fail" is used with internall errors only */
+		/* perhaps add new type of response */
+		return reply_fail("vgname required");
 
 	background = background > 1 ? 1 : 0;
 
@@ -675,7 +692,8 @@ static response poll_init(client_handle h, lvmpolld_state_t *ls, request req, en
 		if (!background)
 			pdlv_set_background(pdlv, background);
 	} else {
-		pdlv = construct_pdlv(req, ls, lvid, type, abort, pdst, background);
+		pdlv = construct_pdlv(req, ls, lvid, vgname, type, abort, pdst,
+				      background);
 		if (!pdlv) {
 			pdst_unlock(pdst);
 			return reply_fail("lvmpolld internal error");
@@ -696,6 +714,8 @@ static response poll_init(client_handle h, lvmpolld_state_t *ls, request req, en
 
 	pdst_unlock(pdst);
 
+	/* TODO: "response" == "fail" is used with internall errors only */
+	/* perhaps add new type of response */
 	return daemon_reply_simple("OK", NULL);
 }
 

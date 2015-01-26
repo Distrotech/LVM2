@@ -16,8 +16,9 @@
 #include "lvmpolld-data-utils.h"
 
 lvmpolld_lv_t *pdlv_create(lvmpolld_state_t *ls, const char *lvid,
-			   enum poll_type type, const char *sinterval,
-			   unsigned pdtimeout, lvmpolld_store_t *pdst,
+			   const char *vgname, enum poll_type type,
+			   const char *sinterval, unsigned pdtimeout,
+			   lvmpolld_store_t *pdst,
 			   lvmpolld_parse_output_fn_t parse_fn,
 			   unsigned background)
 {
@@ -25,6 +26,7 @@ lvmpolld_lv_t *pdlv_create(lvmpolld_state_t *ls, const char *lvid,
 		.ls = ls,
 		.type = type,
 		.lvid = dm_strdup(lvid),
+		.vgname = dm_strdup(vgname),
 		.sinterval = sinterval ? dm_strdup(sinterval) : NULL,
 		.pdtimeout = pdtimeout ?: PDTIMEOUT_DEF,
 		.percent = DM_PERCENT_0,
@@ -34,30 +36,24 @@ lvmpolld_lv_t *pdlv_create(lvmpolld_state_t *ls, const char *lvid,
 		.background = background
 	}, *pdlv = (lvmpolld_lv_t *) dm_malloc(sizeof(lvmpolld_lv_t));
 
-	if (!pdlv) {
+	if (!pdlv || !tmp.lvid || !tmp.vgname || (sinterval && !tmp.sinterval)) {
 		dm_free((void *)tmp.lvid);
+		dm_free((void *)tmp.vgname);
 		dm_free((void *)tmp.sinterval);
 		return NULL;
 	}
 
 	memcpy(pdlv, &tmp, sizeof(*pdlv));
 
-	if (!pdlv->lvid)
-		goto lvid_err;
-
-	if (sinterval && !pdlv->sinterval)
-		goto sint_err;
-
 	if (pthread_mutex_init(&pdlv->lock, NULL))
-		goto mutex_err;
+		goto err;
 
 	return pdlv;
 
-mutex_err:
+err:
 	dm_free((void *)pdlv->sinterval);
-sint_err:
 	dm_free((void *)pdlv->lvid);
-lvid_err:
+	dm_free((void *)pdlv->vgname);
 	dm_free((void *)pdlv);
 
 	return NULL;
@@ -66,6 +62,7 @@ lvid_err:
 void pdlv_destroy(lvmpolld_lv_t *pdlv)
 {
 	dm_free((void *)pdlv->lvid);
+	dm_free((void *)pdlv->vgname);
 	dm_free((void *)pdlv->sinterval);
 	dm_free((void *)pdlv->cmdargv);
 

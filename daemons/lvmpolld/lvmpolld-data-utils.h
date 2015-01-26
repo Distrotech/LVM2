@@ -60,6 +60,7 @@ typedef struct lvmpolld_lv {
 	const enum poll_type type;
 	/* full lvid vguuid+lvuuid. may also be vguuid+zeroes -> PVMOVE */
 	const char *const lvid;
+	const char *const vgname;
 	/* either fullname vg/lv or vgname only */
 	/* const char *name; */
 	const unsigned pdtimeout; /* in seconds */
@@ -86,8 +87,9 @@ typedef struct lvmpolld_lv {
 
 /* only call with appropriate lvmpolld_store_t lock held */
 lvmpolld_lv_t *pdlv_create(struct lvmpolld_state *ls, const char *lvid,
-			   const enum poll_type type, const char *sinterval,
-			   unsigned pdtimeout, lvmpolld_store_t *pdst,
+			   const char *vgname, const enum poll_type type,
+			   const char *sinterval, unsigned pdtimeout,
+			   lvmpolld_store_t *pdst,
 			   lvmpolld_parse_output_fn_t parse_fn,
 			   unsigned background);
 
