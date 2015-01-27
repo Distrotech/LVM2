@@ -47,8 +47,9 @@
  * configure script
  */
 
-#define LVPOLL_CMD "lvpoll"
 /* extract this info from autoconf/automake files */
+#define LVPOLL_CMD "lvpoll"
+#define LVM2_BIN_PATH "/usr/sbin/lvm"
 
 typedef struct lvmpolld_state {
 	log_state *log;
@@ -57,8 +58,7 @@ typedef struct lvmpolld_state {
 	lvmpolld_store_t lvid_to_pdlv_abort;
 	lvmpolld_store_t lvid_to_pdlv_poll;
 
-	const char *prefix_dir;
-	const char *cmd;
+	const char *lvm_binary;
 } lvmpolld_state_t;
 
 static const char *const const polling_ops[] = { [PVMOVE] = PVMOVE_POLL,
@@ -83,8 +83,6 @@ static void usage(const char *prog, FILE *file)
 
 static int init(struct daemon_state *s)
 {
-	char *tmp;
-	size_t n;
 	lvmpolld_state_t *ls = s->private;
 	ls->log = s->log;
 
@@ -96,16 +94,12 @@ static int init(struct daemon_state *s)
 
 	DEBUGLOG(ls, "%s: LVM_SYSTEM_DIR=%s", PD_LOG_PREFIX, getenv("LVM_SYSTEM_DIR") ?: "<not set>");
 
-	/* TODO: this HAS TO be removed. I feel sick of it */
-	ls->prefix_dir = ls->prefix_dir ?: LVMPOLLD_SBIN_DIR;
-	n = strlen(ls->prefix_dir) + strlen(LVPOLL_CMD) + 2; /* PREFIX_DIR + / + LVPOLL_CMD + \0 */
-	tmp = dm_malloc(n * sizeof(char));
-	memcpy(tmp, ls->prefix_dir, strlen(ls->prefix_dir));
-	*(tmp + strlen(ls->prefix_dir)) = '/';
-	memcpy(tmp + strlen(ls->prefix_dir) + 1, LVPOLL_CMD, strlen(LVPOLL_CMD));
-	*(tmp + n - 1) = '\0';
+	ls->lvm_binary = ls->lvm_binary ?: LVM2_BIN_PATH;
 
-	ls->cmd = tmp;
+	if (access(ls->lvm_binary, X_OK)) {
+		ERROR(ls, "%s: %s %s", PD_LOG_PREFIX, "Execute rights denied on", ls->lvm_binary);
+		return 0;
+	}
 
 	return 1;
 }
@@ -116,8 +110,6 @@ static int fini(struct daemon_state *s)
 
 	pdst_destroy(&ls->lvid_to_pdlv_poll);
 	pdst_destroy(&ls->lvid_to_pdlv_abort);
-
-	dm_free((void *)ls->cmd);
 
 	return 1;
 }
@@ -367,7 +359,12 @@ static const char **cmdargv_ctr(lvmpolld_lv_t *pdlv, unsigned abort)
 		return NULL;
 	}
 
-	if (!add_to_cmdargv(&cmd_argv, pdlv->ls->cmd, &i, MIN_SIZE))
+	/* path to lvm2 binary */
+	if (!add_to_cmdargv(&cmd_argv, pdlv->ls->lvm_binary, &i, MIN_SIZE))
+		goto err;
+
+	/* cmd to execute */
+	if (!add_to_cmdargv(&cmd_argv, LVPOLL_CMD, &i, MIN_SIZE))
 		goto err;
 
 	/* by default run under global filter */
@@ -714,8 +711,6 @@ static response poll_init(client_handle h, lvmpolld_state_t *ls, request req, en
 
 	pdst_unlock(pdst);
 
-	/* TODO: "response" == "fail" is used with internall errors only */
-	/* perhaps add new type of response */
 	return daemon_reply_simple("OK", NULL);
 }
 
@@ -775,8 +770,8 @@ int main(int argc, char *argv[])
 		case 's': // --socket
 			s.socket_path = optarg;
 			break;
-		case 'U': /* --prefix */
-			ls.prefix_dir = optarg;
+		case 'B': /* --binary */
+			ls.lvm_binary = optarg;
 			break;
 		case 'V':
 			printf("lvmpolld version: " LVM_VERSION "\n");
