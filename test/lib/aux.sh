@@ -139,7 +139,7 @@ notify_lvmetad() {
 prepare_lvmpolld() {
 	set -x
 	rm -f debug.log
-	# skip if we don't have our own lvmetad...
+	# skip if we don't have our own lvmpolld...
 	(which lvmpolld 2>/dev/null | grep "$abs_builddir") || skip
 
 	lvmconf "global/use_lvmpolld = 1"
@@ -320,6 +320,10 @@ teardown() {
 		vgremove -ff $cfg  \
 			$vg $vg1 $vg2 $vg3 $vg4 &>/dev/null || rm -f debug.log strace.log
 	}
+
+	kill_sleep_kill_ LOCAL_LVMPOLLD ${LVM_VALGRIND_LVMPOLLD:-0}
+
+	echo -n .
 
 	kill_sleep_kill_ LOCAL_CLVMD ${LVM_VALGRIND_CLVMD:-0}
 
