@@ -750,7 +750,7 @@ int main(int argc, char *argv[])
 	};
 
 	// use getopt_long
-	while ((opt = getopt(argc, argv, "?fhVl:p:s:U:")) != EOF) {
+	while ((opt = getopt(argc, argv, "?fhVl:p:s:B:")) != EOF) {
 		switch (opt) {
 		case 'h':
 			usage(argv[0], stdout);

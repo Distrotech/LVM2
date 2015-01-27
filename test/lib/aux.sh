@@ -148,7 +148,7 @@ prepare_lvmpolld() {
 	test "${LVM_VALGRIND_LVMPOLLD:-0}" -eq 0 || run_valgrind="run_valgrind"
 
 	echo "preparing lvmpolld..."
-	$run_valgrind lvmpolld -f "$@" -s "$TESTDIR/lvmpolld.socket" -U "$TESTDIR/lib" -l all,debug &
+	$run_valgrind lvmpolld -f "$@" -s "$TESTDIR/lvmpolld.socket" -B "$TESTDIR/lib/lvm" -l all,debug &
 	echo $! > LOCAL_LVMPOLLD
 	while ! test -e "$TESTDIR/lvmpolld.socket"; do echo -n .; sleep .1; done # wait for the socket
 	echo ok
