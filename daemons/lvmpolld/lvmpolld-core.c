@@ -23,12 +23,6 @@
 #include <wait.h>
 #include <sys/types.h>
 
-/*
- * FIXME: should be removed together with code supposed
- * to become general (single_read/single_write). or shouldn't?
- */
-#include "daemon-io.h"
-/* */
 #include "configure.h"
 #include "daemon-server.h"
 #include "daemon-log.h"
@@ -50,6 +44,15 @@
 /* extract this info from autoconf/automake files */
 #define LVPOLL_CMD "lvpoll"
 #define LVM2_BIN_PATH "/usr/sbin/lvm"
+
+/* predefined reason for response = "failed" case */
+#define REASON_REQ_NOT_IMPLEMENTED "request not implemented"
+#define REASON_MISSING_LVID "request requires lvid set"
+#define REASON_MISSING_VGNAME "request requires vgname set"
+#define REASON_POLLING_FAILED "polling of lvm command failed"
+#define REASON_ILLEGAL_ABORT_REQUEST "abort only supported with PVMOVE polling operation"
+#define REASON_DIFFERENT_OPERATION_IN_PROGRESS "Different operation on LV already in progress"
+#define REASON_INTERNAL_ERROR "lvmpolld internal error"
 
 typedef struct lvmpolld_state {
 	log_state *log;
@@ -76,7 +79,8 @@ static void usage(const char *prog, FILE *file)
 		"   -f       Don't fork, run in the foreground\n"
 		"   -l       Logging message level (-l {all|wire|debug})\n"
 		"   -p       Set path to the pidfile\n"
-		"   -s       Set path to the socket to listen on\n\n", prog);
+		"   -s       Set path to the socket to listen on\n"
+		"   -B       Path to lvm2 binary\n\n", prog);
 }
 
 #define LVMPOLLD_SBIN_DIR "/usr/sbin/"
@@ -528,7 +532,7 @@ static response progress_info(client_handle h, lvmpolld_state_t *ls, request req
 	unsigned abort = daemon_request_int(req, "abort", 0);
 
 	if (!lvid)
-		return reply_fail("requires UUID");
+		return reply_fail(REASON_MISSING_LVID);
 
 	pdst = abort ? &ls->lvid_to_pdlv_abort : &ls->lvid_to_pdlv_poll;
 
@@ -560,7 +564,7 @@ static response progress_info(client_handle h, lvmpolld_state_t *ls, request req
 
 	if (pdlv) {
 		if (st.internal_error)
-			return reply_fail("lvmpolld internal error occured");
+			return reply_fail(REASON_POLLING_FAILED);
 
 		if (st.polling_finished)
 			r = daemon_reply_simple("finished",
@@ -642,23 +646,17 @@ static response poll_init(client_handle h, lvmpolld_state_t *ls, request req, en
 	unsigned background = daemon_request_int(req, "background", 1);
 
 	if (!lvid)
-		/* TODO: "response" == "fail" is used with internall errors only */
-		/* perhaps add new type of response */
-		return reply_fail("lvid required");
+		return reply_fail(REASON_MISSING_LVID);
 
 	if (!vgname)
-		/* TODO: "response" == "fail" is used with internall errors only */
-		/* perhaps add new type of response */
-		return reply_fail("vgname required");
+		return reply_fail(REASON_MISSING_VGNAME);
 
 	background = background > 1 ? 1 : 0;
 
 	assert(type < POLL_TYPE_MAX);
 
 	if (abort && type != PVMOVE)
-		/* TODO: "response" == "fail" is used with internall errors only */
-		/* perhaps add new type of response */
-		return reply_fail("abort is not supported with requested poll operation");
+		return reply_fail(REASON_ILLEGAL_ABORT_REQUEST);
 
 	pdst = abort ? &ls->lvid_to_pdlv_abort : &ls->lvid_to_pdlv_poll;
 
@@ -680,10 +678,8 @@ static response poll_init(client_handle h, lvmpolld_state_t *ls, request req, en
 
 	if (pdlv) {
 		if (!pdlv_is_type(pdlv, type)) {
-			/* TODO: "response" == "fail" is used with internall errors only */
-			/* perhaps add new type of response */
 			pdst_unlock(pdst);
-			return reply_fail("different operation with same lvid already running");
+			return reply_fail(REASON_DIFFERENT_OPERATION_IN_PROGRESS);
 		}
 		/* notify lvmpolld about future requests for info */
 		if (!background)
@@ -693,19 +689,19 @@ static response poll_init(client_handle h, lvmpolld_state_t *ls, request req, en
 				      background);
 		if (!pdlv) {
 			pdst_unlock(pdst);
-			return reply_fail("lvmpolld internal error");
+			return reply_fail(REASON_INTERNAL_ERROR);
 		}
 		if (!pdst_insert(pdst, lvid, pdlv)) {
 			pdlv_destroy(pdlv);
 			pdst_unlock(pdst);
-			return reply_fail("lvmpolld internal error");
+			return reply_fail(REASON_INTERNAL_ERROR);
 		}
 		if (!spawn_detached_thread(pdlv)) {
 			ERROR(ls, "%s: %s", PD_LOG_PREFIX, "failed to spawn detached thread");
 			pdst_remove(pdst, lvid);
 			pdlv_destroy(pdlv);
 			pdst_unlock(pdst);
-			return reply_fail("lvmpolld internal error");
+			return reply_fail(REASON_INTERNAL_ERROR);
 		}
 	}
 
@@ -730,7 +726,7 @@ static response handler(struct daemon_state s, client_handle h, request r)
 	if (!strcmp(rq, "progress_info"))
 		return progress_info(h, ls, r);
 
-	return reply_fail("request not implemented");
+	return reply_fail(REASON_REQ_NOT_IMPLEMENTED);
 }
 
 int main(int argc, char *argv[])

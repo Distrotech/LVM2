@@ -93,7 +93,7 @@ static struct progress_info _request_progress_info(const char *uuid, unsigned ab
 
 	repl = daemon_send(_lvmpolld, req);
 	if (repl.error) {
-		log_error("I/O error while communicating with lvmpolld");
+		log_error("failed to process request/response to/from lvmpolld");
 		goto out_repl;
 	}
 
@@ -111,12 +111,12 @@ static struct progress_info _request_progress_info(const char *uuid, unsigned ab
 	} else if (!strcmp(daemon_reply_str(repl, "response", ""), "not_found")) {
 		log_verbose("lvmpolld: no polling operation in progress regarding LV %s", uuid);
 		ret.error = 0;
-	} else {
-		if (!strcmp(daemon_reply_str(repl, "response", ""), "failed"))
-			log_verbose("lvmpolld: internal error occured. See lvmpolld log file");
+	} else if (!strcmp(daemon_reply_str(repl, "response", ""), "failed"))
 		log_error("failed to receive progress data: The reason: %s",
 			  daemon_reply_str(repl, "reason", "<empty>"));
-	}
+	else
+		log_error("Unexpected lvmpolld response: %s",
+			  daemon_reply_str(repl, "response", ""));
 out_repl:
 	daemon_reply_destroy(repl);
 out_req:
