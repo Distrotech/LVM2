@@ -27,7 +27,7 @@ lvmpolld_lv_t *pdlv_create(lvmpolld_state_t *ls, const char *lvid,
 		.type = type,
 		.lvid = dm_strdup(lvid),
 		.vgname = dm_strdup(vgname),
-		.sinterval = sinterval ? dm_strdup(sinterval) : NULL,
+		.sinterval = dm_strdup(sinterval),
 		.pdtimeout = pdtimeout ?: PDTIMEOUT_DEF,
 		.percent = DM_PERCENT_0,
 		.cmd_state = { .retcode = -1, .signal = 0 },
@@ -36,7 +36,7 @@ lvmpolld_lv_t *pdlv_create(lvmpolld_state_t *ls, const char *lvid,
 		.background = background
 	}, *pdlv = (lvmpolld_lv_t *) dm_malloc(sizeof(lvmpolld_lv_t));
 
-	if (!pdlv || !tmp.lvid || !tmp.vgname || (sinterval && !tmp.sinterval)) {
+	if (!pdlv || !tmp.lvid || !tmp.vgname || !tmp.sinterval) {
 		dm_free((void *)tmp.lvid);
 		dm_free((void *)tmp.vgname);
 		dm_free((void *)tmp.sinterval);

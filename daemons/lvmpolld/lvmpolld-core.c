@@ -52,6 +52,7 @@
 #define REASON_POLLING_FAILED "polling of lvm command failed"
 #define REASON_ILLEGAL_ABORT_REQUEST "abort only supported with PVMOVE polling operation"
 #define REASON_DIFFERENT_OPERATION_IN_PROGRESS "Different operation on LV already in progress"
+#define REASON_INVALID_INTERVAL "request requires interval set"
 #define REASON_INTERNAL_ERROR "lvmpolld internal error"
 
 typedef struct lvmpolld_state {
@@ -101,7 +102,7 @@ static int init(struct daemon_state *s)
 	ls->lvm_binary = ls->lvm_binary ?: LVM2_BIN_PATH;
 
 	if (access(ls->lvm_binary, X_OK)) {
-		ERROR(ls, "%s: %s %s", PD_LOG_PREFIX, "Execute rights denied on", ls->lvm_binary);
+		ERROR(ls, "%s: %s %s", PD_LOG_PREFIX, "Execute access rights denied on", ls->lvm_binary);
 		return 0;
 	}
 
@@ -353,7 +354,7 @@ static int add_to_cmdargv(const char ***cmdargv, const char *str, int *index, in
 	return 1;
 }
 
-static const char **cmdargv_ctr(lvmpolld_lv_t *pdlv, unsigned abort)
+static const char **cmdargv_ctr(lvmpolld_lv_t *pdlv, unsigned abort, unsigned handle_missing_pvs)
 {
 	int i = 0;
 	const char **cmd_argv = dm_malloc(MIN_SIZE * sizeof(char *));
@@ -384,7 +385,12 @@ static const char **cmdargv_ctr(lvmpolld_lv_t *pdlv, unsigned abort)
 
 	/* pass abort param */
 	if (abort &&
-		!add_to_cmdargv(&cmd_argv, "--abort", &i, MIN_SIZE))
+	    !add_to_cmdargv(&cmd_argv, "--abort", &i, MIN_SIZE))
+		goto err;
+
+	/* pass handle-missing-pvs. used by mirror polling operation */
+	if (handle_missing_pvs &&
+	    !add_to_cmdargv(&cmd_argv, "--handle-missing-pvs", &i, MIN_SIZE))
 		goto err;
 
 	/* one of: "convert", "pvmove", "merge", "merge_thin" */
@@ -584,33 +590,29 @@ static response progress_info(client_handle h, lvmpolld_state_t *ls, request req
 }
 
 static lvmpolld_lv_t *construct_pdlv(request req, lvmpolld_state_t *ls,
-				     const char *lvid, const char *vgname,
-				     enum poll_type type, unsigned abort,
-				     lvmpolld_store_t *pdst, unsigned background)
+				     lvmpolld_store_t *pdst,
+				     const char *interval, const char *lvid,
+				     const char *vgname, enum poll_type type,
+				     unsigned abort, unsigned background,
+				     unsigned uinterval)
 {
 	const char **cmdargv;
 	lvmpolld_lv_t *pdlv;
-	unsigned interval;
-	const char *sinterval = daemon_request_str(req, "interval", NULL);
+	unsigned handle_missing_pvs = daemon_request_int(req, "handle_missing_pvs", 0);
 
-	if (!sinterval || strpbrk(sinterval, "-") || sscanf(sinterval, "%u", &interval) != 1) {
-		ERROR(ls, "%s: %s: %s", PD_LOG_PREFIX, "Illegal mandatory interval parameter",
-		      sinterval ?: "<empty>");
-		return NULL;
-	}
-
-	pdlv = pdlv_create(ls, lvid, vgname, type, sinterval, 2 * interval, pdst,
-			   (abort ? NULL : parse_line_for_percents), background);
+	pdlv = pdlv_create(ls, lvid, vgname, type, interval, 2 * uinterval,
+			   pdst, (abort ? NULL : parse_line_for_percents),
+			   background);
 
 	if (!pdlv) {
 		ERROR(ls, "%s: %s", PD_LOG_PREFIX, "Failed to create pdlv");
 		return NULL;
 	}
 
-	cmdargv = cmdargv_ctr(pdlv, abort);
+	cmdargv = cmdargv_ctr(pdlv, abort, handle_missing_pvs);
 	if (!cmdargv) {
 		pdlv_destroy(pdlv);
-		ERROR(pdlv->ls, "%s: %s", PD_LOG_PREFIX, "failed to construct cmd arguments for lvpoll command");
+		ERROR(ls, "%s: %s", PD_LOG_PREFIX, "failed to construct cmd arguments for lvpoll command");
 		return NULL;
 	}
 
@@ -638,12 +640,21 @@ static response poll_init(client_handle h, lvmpolld_state_t *ls, request req, en
 {
 	lvmpolld_lv_t *pdlv;
 	lvmpolld_store_t *pdst;
+	unsigned uinterval;
 
 	const char *lvid = daemon_request_str(req, "lvid", NULL);
+	const char *interval = daemon_request_str(req, "interval", NULL);
 	const char *vgname = daemon_request_str(req, "vgname", NULL);
 	unsigned abort = daemon_request_int(req, "abort", 0);
-	/* make background default on purpose */
 	unsigned background = daemon_request_int(req, "background", 1);
+
+	assert(type < POLL_TYPE_MAX);
+
+	if (abort && type != PVMOVE)
+		return reply_fail(REASON_ILLEGAL_ABORT_REQUEST);
+
+	if (!interval || strpbrk(interval, "-") || sscanf(interval, "%u", &uinterval) != 1)
+		return reply_fail(REASON_INVALID_INTERVAL);
 
 	if (!lvid)
 		return reply_fail(REASON_MISSING_LVID);
@@ -651,12 +662,7 @@ static response poll_init(client_handle h, lvmpolld_state_t *ls, request req, en
 	if (!vgname)
 		return reply_fail(REASON_MISSING_VGNAME);
 
-	background = background > 1 ? 1 : 0;
-
-	assert(type < POLL_TYPE_MAX);
-
-	if (abort && type != PVMOVE)
-		return reply_fail(REASON_ILLEGAL_ABORT_REQUEST);
+	background = background > 1 ? 1 : background;
 
 	pdst = abort ? &ls->lvid_to_pdlv_abort : &ls->lvid_to_pdlv_poll;
 
@@ -685,8 +691,8 @@ static response poll_init(client_handle h, lvmpolld_state_t *ls, request req, en
 		if (!background)
 			pdlv_set_background(pdlv, background);
 	} else {
-		pdlv = construct_pdlv(req, ls, lvid, vgname, type, abort, pdst,
-				      background);
+		pdlv = construct_pdlv(req, ls, pdst, interval, lvid, vgname,
+				      type, abort, background, uinterval);
 		if (!pdlv) {
 			pdst_unlock(pdst);
 			return reply_fail(REASON_INTERNAL_ERROR);
