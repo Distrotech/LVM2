@@ -391,7 +391,7 @@ static int _lvmpolld_init_poll_vg(struct cmd_context *cmd, const char *vgname,
 			continue;
 		}
 
-		r = lvmpolld_poll_init(cmd->cmd_line, vgname, lvid.s,
+		r = lvmpolld_poll_init(cmd, vgname, lvid.s,
 				       lpdp->parms->background,
 				       lpdp->parms->lv_type,
 				       lpdp->parms->interval,
@@ -605,7 +605,7 @@ static int _lvmpoll_daemon(struct cmd_context *cmd, const char *name,
 	unsigned finished = 0;
 
 	if (name || uuid) {
-		r = lvmpolld_poll_init(cmd->cmd_line,
+		r = lvmpolld_poll_init(cmd,
 				       (parms->lv_type & PVMOVE ? find_vgname_from_pvname(cmd, name) : extract_vgname(cmd, name)),
 				       uuid, parms->background, parms->lv_type,
 				       parms->interval, parms->aborting);

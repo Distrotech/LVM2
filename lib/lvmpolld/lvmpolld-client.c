@@ -132,7 +132,7 @@ out_req:
  */
 #define INTERV_SIZE 10
 
-static int _process_poll_init(const char *cmd_line, const char *poll_type,
+static int _process_poll_init(const struct cmd_context *cmd, const char *poll_type,
 			      const char *vgname, const char *uuid,
 			      unsigned background, unsigned interval,
 			      unsigned abort)
@@ -155,11 +155,24 @@ static int _process_poll_init(const char *cmd_line, const char *poll_type,
 	if (!daemon_request_extend(req, "lvid = %s", uuid,
 					"vgname = %s", vgname,
 					"interval = %s", str,
-					"background = %d", background,
-					"abort = %d", abort,
-					"cmdline = %s", cmd_line,
+					"cmdline = %s", cmd->cmd_line,
 					NULL)) {
 		log_error("failed to create %s request", poll_type);
+		goto out_req;
+	}
+
+	if (abort && !(daemon_request_extend(req, "abort = %d", abort, NULL))) {
+		log_error("failed to create %s request" , poll_type);
+		goto out_req;
+	}
+
+	if (!background && !(daemon_request_extend(req, "background = %d", background, NULL))) {
+		log_error("failed to create %s request" , poll_type);
+		goto out_req;
+	}
+
+	if (cmd->handles_missing_pvs && !(daemon_request_extend(req, "handle_missing_pvs = %d", cmd->handles_missing_pvs, NULL))) {
+		log_error("failed to create %s request" , poll_type);
 		goto out_req;
 	}
 
@@ -185,7 +198,7 @@ out_req:
 	return r;
 }
 
-int lvmpolld_poll_init(const char *cmd_line, const char *vgname, const char *uuid,
+int lvmpolld_poll_init(const struct cmd_context *cmd, const char *vgname, const char *uuid,
 		       unsigned background, uint64_t lv_type, unsigned interval,
 		       unsigned abort)
 {
@@ -203,18 +216,18 @@ int lvmpolld_poll_init(const char *cmd_line, const char *vgname, const char *uui
 
 	if (lv_type & PVMOVE) {
 		log_verbose("lvmpolld: pvmove%s", abort ? "--abort" : "");
-		r =  _process_poll_init(cmd_line, PVMOVE_POLL, vgname, uuid, background, interval, abort);
+		r =  _process_poll_init(cmd, PVMOVE_POLL, vgname, uuid, background, interval, abort);
 	} else if (lv_type & CONVERTING) {
 		log_verbose("lvmpolld: convert mirror");
-		r =  _process_poll_init(cmd_line, CONVERT_POLL, vgname, uuid, background, interval, 0);
+		r =  _process_poll_init(cmd, CONVERT_POLL, vgname, uuid, background, interval, 0);
 	} else if (lv_type & MERGING) {
 		if (lv_type & SNAPSHOT) {
 		log_verbose("lvmpolld: Merge snapshot");
-			r =  _process_poll_init(cmd_line, MERGE_POLL, vgname, uuid, background, interval, 0);
+			r =  _process_poll_init(cmd, MERGE_POLL, vgname, uuid, background, interval, 0);
 		}
 		else if (lv_type & THIN_VOLUME) {
 			log_verbose("lvmpolld: Merge thin snapshot");
-			r = _process_poll_init(cmd_line, MERGE_THIN_POLL, vgname, uuid, background, interval, 0);
+			r = _process_poll_init(cmd, MERGE_THIN_POLL, vgname, uuid, background, interval, 0);
 		}
 		else {
 			log_error(INTERNAL_ERROR "Unsupported poll operation");
