@@ -27,8 +27,8 @@
 #include "daemon-server.h"
 #include "daemon-log.h"
 #include "config-util.h"
+#include "lvmpolld-protocol.h"
 #include "lvmpolld-data-utils.h"
-#include "polling_ops.h"
 #include "lvm-version.h"  /* ??? */
 
 #define LVMPOLLD_SOCKET DEFAULT_RUN_DIR "/lvmpolld.socket"
@@ -65,11 +65,10 @@ typedef struct lvmpolld_state {
 	const char *lvm_binary;
 } lvmpolld_state_t;
 
-static const char *const const polling_ops[] = { [PVMOVE] = PVMOVE_POLL,
-						 [CONVERT] = CONVERT_POLL,
-						 [MERGE] = MERGE_POLL,
-						 [MERGE_THIN] = MERGE_THIN_POLL };
-
+static const char *const const polling_ops[] = { [PVMOVE] = LVMPD_REQ_PVMOVE,
+						 [CONVERT] = LVMPD_REQ_CONVERT,
+						 [MERGE] = LVMPD_REQ_MERGE,
+						 [MERGE_THIN] = LVMPD_REQ_MERGE_THIN };
 
 static void usage(const char *prog, FILE *file)
 {
@@ -534,8 +533,8 @@ static response progress_info(client_handle h, lvmpolld_state_t *ls, request req
 	lvmpolld_store_t *pdst;
 	lvmpolld_lv_state_t st;
 	response r;
-	const char *lvid = daemon_request_str(req, "lvid", NULL);
-	unsigned abort = daemon_request_int(req, "abort", 0);
+	const char *lvid = daemon_request_str(req, LVMPD_PARM_LVID, NULL);
+	unsigned abort = daemon_request_int(req, LVMPD_PARM_ABORT, 0);
 
 	if (!lvid)
 		return reply_fail(REASON_MISSING_LVID);
@@ -573,18 +572,18 @@ static response progress_info(client_handle h, lvmpolld_state_t *ls, request req
 			return reply_fail(REASON_POLLING_FAILED);
 
 		if (st.polling_finished)
-			r = daemon_reply_simple("finished",
-						"data = %d", st.percent,
-						"reason = %s", st.cmd_state.signal ? "signal" : "retcode",
-						"value = %d", st.cmd_state.signal ?: st.cmd_state.retcode,
+			r = daemon_reply_simple(LVMPD_RESP_FINISHED,
+						LVMPD_PARM_DATA " = %d", st.percent,
+						"reason = %s", st.cmd_state.signal ? LVMPD_REAS_SIGNAL : LVMPD_REAS_RETCODE,
+						LVMPD_PARM_VALUE " = %d", st.cmd_state.signal ?: st.cmd_state.retcode,
 						NULL);
 		else
-			r = daemon_reply_simple("inprogress",
-						"data = %d", st.percent,
+			r = daemon_reply_simple(LVMPD_RESP_IN_PROGRESS,
+						LVMPD_PARM_DATA " = %d", st.percent,
 						NULL);
 	}
 	else
-		r = daemon_reply_simple("not_found", NULL);
+		r = daemon_reply_simple(LVMPD_RESP_NOT_FOUND, NULL);
 
 	return r;
 }
@@ -598,7 +597,7 @@ static lvmpolld_lv_t *construct_pdlv(request req, lvmpolld_state_t *ls,
 {
 	const char **cmdargv;
 	lvmpolld_lv_t *pdlv;
-	unsigned handle_missing_pvs = daemon_request_int(req, "handle_missing_pvs", 0);
+	unsigned handle_missing_pvs = daemon_request_int(req, LVMPD_PARM_HANDLE_MISSING_PVS, 0);
 
 	pdlv = pdlv_create(ls, lvid, vgname, type, interval, 2 * uinterval,
 			   pdst, (abort ? NULL : parse_line_for_percents),
@@ -642,11 +641,11 @@ static response poll_init(client_handle h, lvmpolld_state_t *ls, request req, en
 	lvmpolld_store_t *pdst;
 	unsigned uinterval;
 
-	const char *lvid = daemon_request_str(req, "lvid", NULL);
-	const char *interval = daemon_request_str(req, "interval", NULL);
-	const char *vgname = daemon_request_str(req, "vgname", NULL);
-	unsigned abort = daemon_request_int(req, "abort", 0);
-	unsigned background = daemon_request_int(req, "background", 1);
+	const char *lvid = daemon_request_str(req, LVMPD_PARM_LVID, NULL);
+	const char *interval = daemon_request_str(req, LVMPD_PARM_INTERVAL, NULL);
+	const char *vgname = daemon_request_str(req, LVMPD_PARM_VGNAME, NULL);
+	unsigned abort = daemon_request_int(req, LVMPD_PARM_ABORT, 0);
+	unsigned background = daemon_request_int(req, LVMPD_PARM_BACKGROUND, 1);
 
 	assert(type < POLL_TYPE_MAX);
 
@@ -713,7 +712,7 @@ static response poll_init(client_handle h, lvmpolld_state_t *ls, request req, en
 
 	pdst_unlock(pdst);
 
-	return daemon_reply_simple("OK", NULL);
+	return daemon_reply_simple(LVMPD_RESP_OK, NULL);
 }
 
 static response handler(struct daemon_state s, client_handle h, request r)
@@ -721,15 +720,15 @@ static response handler(struct daemon_state s, client_handle h, request r)
 	lvmpolld_state_t *ls = s.private;
 	const char *rq = daemon_request_str(r, "request", "NONE");
 
-	if (!strcmp(rq, PVMOVE_POLL))
+	if (!strcmp(rq, LVMPD_REQ_PVMOVE))
 		return poll_init(h, ls, r, PVMOVE);
-	if (!strcmp(rq, CONVERT_POLL))
+	if (!strcmp(rq, LVMPD_REQ_CONVERT))
 		return poll_init(h, ls, r, CONVERT);
-	if (!strcmp(rq, MERGE_POLL))
+	if (!strcmp(rq, LVMPD_REQ_MERGE))
 		return poll_init(h, ls, r, MERGE);
-	if (!strcmp(rq, MERGE_THIN_POLL))
+	if (!strcmp(rq, LVMPD_REQ_MERGE_THIN))
 		return poll_init(h, ls, r, MERGE_THIN);
-	if (!strcmp(rq, "progress_info"))
+	if (!strcmp(rq, LVMPD_REQ_PROGRESS))
 		return progress_info(h, ls, r);
 
 	return reply_fail(REASON_REQ_NOT_IMPLEMENTED);
@@ -743,11 +742,11 @@ int main(int argc, char *argv[])
 		.daemon_fini = fini,
 		.daemon_init = init,
 		.handler = handler,
-		.name = "lvmpolld",
+		.name = LVMPOLLD_PROTOCOL,
 		.pidfile = getenv("LVM_LVMPOLLD_PIDFILE") ?: LVMPOLLD_PIDFILE,
 		.private = &ls,
 		.protocol = "lvmpolld",
-		.protocol_version = 1,
+		.protocol_version = LVMPOLLD_PROTOCOL_VERSION,
 		.socket_path = getenv("LVM_LVMPOLLD_SOCKET") ?: LVMPOLLD_SOCKET,
 	};
 

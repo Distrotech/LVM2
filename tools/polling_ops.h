@@ -15,6 +15,8 @@
 #ifndef _LVM_TOOL_POLLING_OPS_H
 #define _LVM_TOOL_POLLING_OPS_H
 
+/* this file is also part of lvmpolld protocol */
+
 #define PVMOVE_POLL "pvmove"
 #define CONVERT_POLL "convert"
 #define MERGE_POLL "merge"
