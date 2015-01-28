@@ -1453,6 +1453,12 @@ int lv_raid_split(struct logical_volume *lv, const char *split_name,
 		return 0;
 	}
 
+	if (vg_is_clustered(lv->vg) && !lv_is_active_exclusive_locally(lv)) {
+		log_error("%s/%s must be active exclusive locally to"
+			  " perform this operation.", lv->vg->name, lv->name);
+		return 0;
+	}
+
 	if (find_lv_in_vg(lv->vg, split_name)) {
 		log_error("Logical Volume \"%s\" already exists in %s",
 			  split_name, lv->vg->name);
