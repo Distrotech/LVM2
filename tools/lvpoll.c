@@ -85,7 +85,6 @@ static int set_daemon_parms(struct cmd_context *cmd, struct daemon_parms *parms)
 	} else if (!strcmp(poll_oper, CONVERT_POLL)) {
 		parms->progress_title = "Converted";
 		parms->poll_fns = &_convert_fns;
-		cmd->handles_missing_pvs = 1; /* TODO: handle with explicit --handlemissing parameter or similar */
 	} else if (!strcmp(poll_oper, MERGE_POLL)) {
 		parms->progress_title = "Merged";
 		parms->poll_fns = &_merge_fns;
@@ -96,6 +95,8 @@ static int set_daemon_parms(struct cmd_context *cmd, struct daemon_parms *parms)
 		log_error("Unknown polling operation %s", poll_oper);
 		return 0;
 	}
+
+	cmd->handles_missing_pvs = arg_count(cmd, handlemissingpvs_ARG);
 
 	return 1;
 }
@@ -112,8 +113,6 @@ static int poll_vg(struct cmd_context *cmd, const char *vgname)
 
 	strncpy(lvid.s, arg_str_value(cmd, uuidstr_ARG, ""), sizeof(union lvid));
 	lvid.s[sizeof(lvid.s) - 1] = '\0';
-
-	log_verbose("lvid: %s", lvid.s);
 
 	if (!id_valid(lvid.id)) {
 		log_error("Invalid VG UUID format");

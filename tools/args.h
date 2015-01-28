@@ -208,6 +208,7 @@ arg(yes_ARG, 'y', "yes", NULL, 0)
 arg(zero_ARG, 'Z', "zero", yes_no_arg, 0)
 
 /* new args for lvpoll */
+arg(handlemissingpvs_ARG, 'm', "handle-missing-pvs", NULL, 0)
 arg(polloperation_ARG, 'p', "poll-operation", string_arg, 0)
 
 /* this should always be last */

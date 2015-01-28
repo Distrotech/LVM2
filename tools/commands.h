@@ -889,11 +889,13 @@ xx(lvpoll,
    "\t[-d|--debug]\n "
    "\t[-h|-?|--help]\n"
    "\t[-i|--interval seconds]\n"
+   "\t[-m|--handle-missing-pvs]\n"
    "\t[-t|--test]\n "
    "\t[-v|--verbose]\n "
    "\t[--version]\n",
 
-   abort_ARG, interval_ARG, polloperation_ARG, uuidstr_ARG, test_ARG)
+   abort_ARG, handlemissingpvs_ARG, interval_ARG, polloperation_ARG, uuidstr_ARG,
+   test_ARG)
 
 xx(pvremove,
    "Remove LVM label(s) from physical volume(s)",
