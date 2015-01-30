@@ -1016,12 +1016,14 @@ static uint32_t __round_to_stripe_boundary(struct logical_volume *lv, uint32_t e
 	if (!stripes)
 		return extents;
 
+printf("%s %d extents=%u stripes=%u\n", __func__, __LINE__, extents, stripes);
 	/* Round up extents to stripe divisable amount */
 	if ((rest = extents % stripes)) {
 		extents += up ? stripes - rest : -rest;
 		log_print_unless_silent("Rounding up size to full stripe size %s",
 			  		display_size(lv->vg->cmd, extents * lv->vg->extent_size));
 	}
+printf("%s %d extents=%u stripes=%u rest=%u\n", __func__, __LINE__, extents, stripes, rest);
 
 	return extents;
 }
