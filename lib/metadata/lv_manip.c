@@ -31,6 +31,8 @@
 #include "lvm-signal.h"
 #include "memlock.h"
 
+#define printf(a ...)
+
 typedef enum {
 	PREFERRED,
 	USE_AREA,

@@ -26,6 +26,8 @@
 #include "dump.h"
 #endif
 
+#define printf(a ...)
+
 static void _ensure_min_region_size(struct logical_volume *lv)
 {
 	struct lv_segment *seg = first_seg(lv);

@@ -1900,6 +1900,7 @@ static int _lvconvert_raid(struct logical_volume *lv, struct lvconvert_params *l
 	struct lv_segment *seg = first_seg(lv);
 	dm_percent_t sync_percent;
 
+#define printf(a ...)
 printf("stripes_ARG=%u stripes_long_ARG=%u\n", arg_count(lv->vg->cmd, stripes_ARG), arg_count(lv->vg->cmd, stripes_long_ARG));
 	if (!arg_count(cmd, type_ARG))
 		lp->segtype = seg->segtype;
