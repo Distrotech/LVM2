@@ -16,6 +16,8 @@
 #include "polldaemon.h"
 #include "lv_alloc.h"
 
+#define printf(a ...)
+
 struct lvconvert_params {
 	int cache;
 	int force;
@@ -1900,7 +1902,6 @@ static int _lvconvert_raid(struct logical_volume *lv, struct lvconvert_params *l
 	struct lv_segment *seg = first_seg(lv);
 	dm_percent_t sync_percent;
 
-#define printf(a ...)
 printf("stripes_ARG=%u stripes_long_ARG=%u\n", arg_count(lv->vg->cmd, stripes_ARG), arg_count(lv->vg->cmd, stripes_long_ARG));
 	if (!arg_count(cmd, type_ARG))
 		lp->segtype = seg->segtype;
@@ -1935,6 +1936,7 @@ printf("stripes_ARG=%u stripes_long_ARG=%u\n", arg_count(lv->vg->cmd, stripes_AR
 			image_count -= lp->mirrors;
 		else
 			image_count = lp->mirrors + 1;
+printf("image_count=%u", image_count);
 
 		track = arg_count(cmd, trackchanges_ARG);
 		if (image_count < 1 || (track && lp->mirrors != 1)) {
