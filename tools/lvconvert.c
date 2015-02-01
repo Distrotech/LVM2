@@ -1970,8 +1970,9 @@ printf("image_count=%u", image_count);
 	     arg_count(cmd, stripes_ARG) ||
 	     arg_count(cmd, stripes_long_ARG) ||
 	     arg_count(cmd, stripesize_ARG))) {
-		unsigned stripes = (arg_count(cmd, stripes_ARG )|| arg_count(cmd, stripes_long_ARG)) ? lp->stripes  : 0;
+		unsigned stripes = (arg_count(cmd, stripes_ARG) || arg_count(cmd, stripes_long_ARG)) ? lp->stripes  : 0;
 		unsigned stripe_size = arg_count(cmd, stripesize_ARG) ? lp->stripe_size  : 0;
+printf("stripes=%u stripe_size=%u\n", stripes, stripe_size);
 
 		if (seg_is_striped(seg))
 			seg->region_size = lp->region_size;
