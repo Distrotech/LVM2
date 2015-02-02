@@ -2363,6 +2363,8 @@ static int _convert_reshape(struct logical_volume *lv,
 		return 0;
 	}
 
+	seg->stripe_size = new_stripe_size;
+
 	if (!archive(lv->vg))
 		return_0;
 
@@ -2588,28 +2590,37 @@ static int _convert_raid_to_raid(struct logical_volume *lv,
 	unsigned stripes = new_stripes ?: _data_rimages_count(seg, seg->area_count);
 	unsigned stripe_size = new_stripe_size ?: seg->stripe_size;
 
+	if (new_segtype == seg->segtype &&
+	    stripes == _data_rimages_count(seg, seg->area_count) &&
+	    stripe_size == seg->stripe_size) {
+printf("%s %d stripes=%u stripe_size=%u seg->stripe_size=%u\n", __func__, __LINE__, stripes, stripe_size, seg->stripe_size);
+		log_error("Nothing to do");
+		return 0;
+	}
+
+printf("%s %d stripes=%u stripe_size=%u seg->stripe_size=%u\n", __func__, __LINE__, stripes, stripe_size, seg->stripe_size);
 	/* Check + apply stripe size change */
-	if (stripe_size && !(stripe_size & (stripe_size - 1)) &&
-	    seg->stripe_size != stripe_size) {
+	if (stripe_size / stripes < 8 ||
+	    (stripe_size / stripes) % 8) {
+		log_error("Invalid stripe size on %s", lv->name);
+		return_0;
+	}
+
+	if (seg->stripe_size != stripe_size) {
 		if (seg_is_striped(seg) || seg_is_raid0(seg)) {
 			log_error("Cannot change stripe size on \"%s\"", lv->name);
 			return_0;
 		}
 
-		if (new_stripe_size > seg->region_size) {
-			log_error("New stripe size for %s larger than region size", lv->name);
+		if (stripe_size / stripes > lv->vg->extent_size) {
+			log_error("Stripe size for %s too large for volume group extent size", lv->name);
 			return_0;
 		}
 
-		seg->stripe_size = new_stripe_size;
-		log_debug_metadata("Setting new stripe size for %s", lv->name);
-	}
-
-	if (new_segtype == seg->segtype &&
-	    stripes == _data_rimages_count(seg, seg->area_count) &&
-	    stripe_size == seg->stripe_size) {
-		log_error("Nothing to do");
-		return 0;
+		if (stripe_size > seg->region_size) {
+			log_error("New stripe size for %s larger than region size", lv->name);
+			return_0;
+		}
 	}
 
 #if 1
@@ -2622,6 +2633,7 @@ static int _convert_raid_to_raid(struct logical_volume *lv,
 #endif
 	/* Staying on the same level -> reshape required to change stripes, stripe size or algorithm */
 	if (is_same_level(seg->segtype, new_segtype)) {
+printf("%s %d stripes=%u stripe_size=%u seg->stripe_size=%u\n", __func__, __LINE__, stripes, stripe_size, seg->stripe_size);
 		if (!_convert_reshape(lv, new_segtype, stripes, stripe_size, allocate_pvs))
 			return 0;
 
@@ -2730,8 +2742,7 @@ int lv_raid_reshape(struct logical_volume *lv,
 		return _convert_raid0_to_striped(lv, new_segtype);
 
 	/* All the rest of the raid conversions... */
-	if (_convert_raid_to_raid(lv, new_segtype, new_stripes, new_stripe_size, allocate_pvs))
-		return 1;
+	return _convert_raid_to_raid(lv, new_segtype, new_stripes, new_stripe_size, allocate_pvs);
 
 err:
 	/* FIXME: enhance message */
