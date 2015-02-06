@@ -43,20 +43,4 @@ static inline void lvmlockd_close(daemon_handle h)
 #define EOTHERVG  212 /* vg sysid specifies other host */
 #define ESTARTING 213 /* lockspace is starting */
 
-/*
- * Also see lvmlockd-sanlock GL_LOCK_BEGIN, VG_LOCK_BEGIN, LV_LOCK_BEGIN.
- * gl lock at sanlock lease area 65
- * vg lock at sanlock lease area 66
- * lv locks begin at sanlock lease area 67
- *
- * LV_LOCK_BEGIN + MAX_LVS_IN_VG = sanlock lease areas required
- * with 512 byte sectors, each lease area is 1MB
- * with 4k byte sectors, each lease area is 8MB (use this for sizing)
- *
- * 66+190 = 256 sanlock lease areas,
- * so we need 256 * 8MB = 2GB lock lv size to hold 190 lv leases.
- */
-#define LVMLOCKD_SANLOCK_MAX_LVS_IN_VG 190
-#define LVMLOCKD_SANLOCK_LV_SIZE       2147483648 /* 2GB */
-
 #endif

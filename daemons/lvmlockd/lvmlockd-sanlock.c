@@ -383,10 +383,15 @@ int lm_init_vg_sanlock(char *ls_name, char *vg_name, uint32_t flags, char *vg_ar
 
 	log_debug("S %s init_vg_san clearing lv lease areas", ls_name);
 
-	for (i = 0; i < LVMLOCKD_SANLOCK_MAX_LVS_IN_VG; i++) {
+	for (i = 0; ; i++) {
 		rd.rs.disks[0].offset = offset;
 
 		rv = sanlock_write_resource(&rd.rs, 0, 0, 0);
+		if (rv == -EMSGSIZE) {
+			/* This indicates the end of the device is reached. */
+			break;
+		}
+
 		if (rv) {
 			log_error("clear lv resource area %llu error %d",
 				  (unsigned long long)offset, rv);
@@ -414,7 +419,6 @@ int lm_init_lv_sanlock(char *ls_name, char *vg_name, char *lv_name,
 	char lock_args_version[MAX_ARGS];
 	uint64_t offset;
 	int align_size;
-	int lv_count = 0;
 	int rv;
 
 	memset(&rd, 0, sizeof(rd));
@@ -456,6 +460,13 @@ int lm_init_lv_sanlock(char *ls_name, char *vg_name, char *lv_name,
 		memset(rd.rs.name, 0, SANLK_NAME_LEN);
 
 		rv = sanlock_read_resource(&rd.rs, 0);
+		if (rv == -EMSGSIZE) {
+			/* This indicates the end of the device is reached. */
+			log_debug("S %s init_lv_san read limit offset %llu",
+				  ls_name, (unsigned long long)offset);
+			return rv;
+		}
+
 		if (rv) {
 			log_error("S %s init_lv_san read error %d offset %llu",
 				  ls_name, rv, (unsigned long long)offset);
@@ -486,12 +497,6 @@ int lm_init_lv_sanlock(char *ls_name, char *vg_name, char *lv_name,
 		}
 
 		offset += align_size;
-
-		if (lv_count++ >= LVMLOCKD_SANLOCK_MAX_LVS_IN_VG) {
-			log_error("S %s init_lv_san too many lvs %d", ls_name, lv_count);
-			rv = -ENOENT;
-			break;
-		}
 	}
 
 	return rv;
@@ -625,13 +630,18 @@ int lm_rename_vg_sanlock(char *ls_name, char *vg_name, uint32_t flags, char *vg_
 
 	offset = align_size * LV_LOCK_BEGIN;
 
-	for (i = 0; i < LVMLOCKD_SANLOCK_MAX_LVS_IN_VG; i++) {
+	for (i = 0; ; i++) {
 		memset(&rd, 0, sizeof(rd));
 		memcpy(rd.rs.disks[0].path, disk.path, SANLK_PATH_LEN);
 		rd.rs.disks[0].offset = offset;
 		rd.rs.num_disks = 1;
 
 		rv = sanlock_read_resource(&rd.rs, 0);
+		if (rv == -EMSGSIZE) {
+			/* This indicates the end of the device is reached. */
+			break;
+		}
+
 		if (rv < 0) {
 			log_error("S %s rename_vg_san read_resource resource area %llu error %d",
 				  ls_name, (unsigned long long)offset, rv);
@@ -1091,6 +1101,11 @@ static int find_lv_offset(struct lockspace *ls, struct resource *r,
 		memset(rd.rs.name, 0, SANLK_NAME_LEN);
 
 		rv = sanlock_read_resource(&rd.rs, 0);
+		if (rv == -EMSGSIZE) {
+			/* This indicates the end of the device is reached. */
+			break;
+		}
+
 		if (rv) {
 			log_error("S %s find_lv_offset read error %d offset %llu",
 				  ls->name, rv, (unsigned long long)offset);
@@ -1105,12 +1120,6 @@ static int find_lv_offset(struct lockspace *ls, struct resource *r,
 		}
 
 		offset += align_size;
-
-		if (lv_count++ >= LVMLOCKD_SANLOCK_MAX_LVS_IN_VG) {
-			rv = -EBADSLT;
-			break;
-		}
-
 	}
 	return rv;
 }
@@ -1257,6 +1266,21 @@ int lm_lock_sanlock(struct lockspace *ls, struct resource *r, int ld_mode,
 		log_debug("S %s R %s lock_san acquire mode %d rv EAGAIN", ls->name, r->name, ld_mode);
 		*retry = 0;
 		return -EAGAIN;
+	}
+
+	if ((rv == -EMSGSIZE) && (r->type == LD_RT_LV)) {
+		/*
+		 * sanlock tried to read beyond the end of the device,
+		 * so the offset of the lv lease is beyond the end of the
+		 * device, which means that the lease lv was extended, and
+		 * the lease for this lv was allocated in the new space.
+		 * The lvm command will see this error, refresh the lvmlock
+		 * lv, and try again.
+		 */
+		log_debug("S %s R %s lock_san acquire offset %llu rv EMSGSIZE",
+			  ls->name, r->name, (unsigned long long)rs->disks[0].offset);
+		*retry = 0;
+		return -EMSGSIZE;
 	}
 
 	if (adopt && (rv == -EUCLEAN)) {
