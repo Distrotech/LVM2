@@ -1398,6 +1398,28 @@ int replace_lv_with_error_segment(struct logical_volume *lv)
 	return 1;
 }
 
+int lv_refresh_suspend_resume(struct cmd_context *cmd, struct logical_volume *lv)
+{
+	if (!cmd->partial_activation && (lv->status & PARTIAL_LV)) {
+		log_error("Refusing refresh of partial LV %s."
+			  " Use '--activationmode partial' to override.",
+			  lv->name);
+		return 0;
+	}
+
+	if (!suspend_lv(cmd, lv)) {
+		log_error("Failed to suspend %s.", lv->name);
+		return 0;
+	}
+
+	if (!resume_lv(cmd, lv)) {
+		log_error("Failed to reactivate %s.", lv->name);
+		return 0;
+	}
+
+	return 1;
+}
+
 /*
  * Remove given number of extents from LV.
  */
@@ -4420,7 +4442,9 @@ static int _lvresize_check_lv(struct cmd_context *cmd, struct logical_volume *lv
 		return 0;
 	}
 
-	if (!lv_is_visible(lv) && !lv_is_thin_pool_metadata(lv)) {
+	/* FIXME: use a status flag instead of the name "lvmlock". */
+
+	if (!lv_is_visible(lv) && !lv_is_thin_pool_metadata(lv) && strcmp(lv->name, "lvmlock")) {
 		log_error("Can't resize internal logical volume %s", lv->name);
 		return 0;
 	}
