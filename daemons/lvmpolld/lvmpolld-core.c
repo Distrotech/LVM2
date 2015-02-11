@@ -56,13 +56,13 @@
 #define REASON_INTERNAL_ERROR "lvmpolld internal error"
 
 typedef struct lvmpolld_state {
+	daemon_idle *idle;
 	log_state *log;
 	const char *log_config;
+	const char *lvm_binary;
 
 	lvmpolld_store_t lvid_to_pdlv_abort;
 	lvmpolld_store_t lvid_to_pdlv_poll;
-
-	const char *lvm_binary;
 } lvmpolld_state_t;
 
 static const char *const const polling_ops[] = { [PVMOVE] = LVMPD_REQ_PVMOVE,
@@ -185,6 +185,21 @@ static void parse_line_for_percents(lvmpolld_lv_t *pdlv, const char *line)
 		 "parsed", dm_percent_to_float(perc));
 
 	pdlv_set_percents(pdlv, perc);
+}
+
+static void update_active_state(lvmpolld_state_t *ls)
+{
+	if (!ls->idle)
+		return;
+
+	pdst_lock(&ls->lvid_to_pdlv_poll);
+	pdst_lock(&ls->lvid_to_pdlv_abort);
+
+	ls->idle->is_idle = !ls->lvid_to_pdlv_poll.active_polling_count &&
+			    !ls->lvid_to_pdlv_abort.active_polling_count;
+
+	pdst_unlock(&ls->lvid_to_pdlv_abort);
+	pdst_unlock(&ls->lvid_to_pdlv_poll);
 }
 
 /* make this configurable */
@@ -490,7 +505,7 @@ err:
 
 	if (pdlv_get_background(pdlv)) {
 		/* holding store lock provides there's no single reader */
-		pdst_remove(pdst, pdlv->lvid);
+		pdst_locked_remove(pdst, pdlv->lvid);
 		pdlv_destroy(pdlv);
 	} else if (error) {
 		/* last reader is responsible for pdlv cleanup */
@@ -499,11 +514,15 @@ err:
 	} else
 		pdlv_set_polling_finished(pdlv, 1);
 
+	pdst_locked_dec(pdst);
+
 	pdst_unlock(pdst);
 	/*
 	 * after the store get unlocked pdlv
 	 * may be already removed by some reader
 	 */
+
+	update_active_state(pdlv->ls);
 
 	if (outpipe[0] != -1)
 		close(outpipe[0]);
@@ -544,7 +563,7 @@ static response progress_info(client_handle h, lvmpolld_state_t *ls, request req
 	pdst_lock(pdst);
 	/* store locked */
 
-	pdlv = pdst_lookup(pdst, lvid);
+	pdlv = pdst_locked_lookup(pdst, lvid);
 	if (pdlv) {
 		if (pdlv_get_and_unset_background(pdlv))
 			WARN(ls, "%s: %s", PD_LOG_PREFIX,
@@ -558,7 +577,7 @@ static response progress_info(client_handle h, lvmpolld_state_t *ls, request req
 			INFO(ls, "%s: %s %s", PD_LOG_PREFIX,
 			     "Polling finished. Removing related data structure for LV",
 			     lvid);
-			pdst_remove(pdst, lvid);
+			pdst_locked_remove(pdst, lvid);
 			pdlv_destroy(pdlv);
 		}
 	}
@@ -667,16 +686,16 @@ static response poll_init(client_handle h, lvmpolld_state_t *ls, request req, en
 
 	pdst_lock(pdst);
 
-	pdlv = pdst_lookup(pdst, lvid);
+	pdlv = pdst_locked_lookup(pdst, lvid);
 	if (pdlv && pdlv_get_polling_finished(pdlv)) {
-		WARN(ls, "%s: %s %s", PD_LOG_PREFIX, "Removing uncollected info for LV",
+		WARN(ls, "%s: %s %s", PD_LOG_PREFIX, "Force removal of uncollected info for LV",
 			 lvid);
 		/* 
 		 * lvmpolld has to remove uncollected results in this case.
 		 * otherwise it would have to refuse request for new polling
 		 * lv with same id.
 		 */
-		pdst_remove(pdst, lvid);
+		pdst_locked_remove(pdst, lvid);
 		pdlv_destroy(pdlv);
 		pdlv = NULL;
 	}
@@ -696,24 +715,29 @@ static response poll_init(client_handle h, lvmpolld_state_t *ls, request req, en
 			pdst_unlock(pdst);
 			return reply_fail(REASON_INTERNAL_ERROR);
 		}
-		if (!pdst_insert(pdst, lvid, pdlv)) {
+		if (!pdst_locked_insert(pdst, lvid, pdlv)) {
 			pdlv_destroy(pdlv);
 			pdst_unlock(pdst);
 			return reply_fail(REASON_INTERNAL_ERROR);
 		}
 		if (!spawn_detached_thread(pdlv)) {
 			ERROR(ls, "%s: %s", PD_LOG_PREFIX, "failed to spawn detached thread");
-			pdst_remove(pdst, lvid);
+			pdst_locked_remove(pdst, lvid);
 			pdlv_destroy(pdlv);
 			pdst_unlock(pdst);
 			return reply_fail(REASON_INTERNAL_ERROR);
 		}
+
+		pdst_locked_inc(pdst);
+		if (ls->idle)
+			ls->idle->is_idle = 0;
 	}
 
 	pdst_unlock(pdst);
 
 	return daemon_reply_simple(LVMPD_RESP_OK, NULL);
 }
+
 
 static response handler(struct daemon_state s, client_handle h, request r)
 {
@@ -722,61 +746,88 @@ static response handler(struct daemon_state s, client_handle h, request r)
 
 	if (!strcmp(rq, LVMPD_REQ_PVMOVE))
 		return poll_init(h, ls, r, PVMOVE);
-	if (!strcmp(rq, LVMPD_REQ_CONVERT))
+	else if (!strcmp(rq, LVMPD_REQ_CONVERT))
 		return poll_init(h, ls, r, CONVERT);
-	if (!strcmp(rq, LVMPD_REQ_MERGE))
+	else if (!strcmp(rq, LVMPD_REQ_MERGE))
 		return poll_init(h, ls, r, MERGE);
-	if (!strcmp(rq, LVMPD_REQ_MERGE_THIN))
+	else if (!strcmp(rq, LVMPD_REQ_MERGE_THIN))
 		return poll_init(h, ls, r, MERGE_THIN);
-	if (!strcmp(rq, LVMPD_REQ_PROGRESS))
+	else if (!strcmp(rq, LVMPD_REQ_PROGRESS))
 		return progress_info(h, ls, r);
+	else
+		return reply_fail(REASON_REQ_NOT_IMPLEMENTED);
+}
 
-	return reply_fail(REASON_REQ_NOT_IMPLEMENTED);
+static int process_timeout_arg(const char *str, unsigned *max_timeouts)
+{
+	char *endptr;
+	unsigned long l;
+
+	l = strtoul(str, &endptr, 10);
+	if (errno || *endptr || l >= UINT_MAX)
+		return 0;
+
+	*max_timeouts = (unsigned) l;
+
+	return 1;
 }
 
 int main(int argc, char *argv[])
 {
 	signed char opt;
+	struct timeval timeout;
+	daemon_idle di = { .ptimeout = &timeout };
 	lvmpolld_state_t ls = { .log_config = "" };
 	daemon_state s = {
 		.daemon_fini = fini,
 		.daemon_init = init,
 		.handler = handler,
-		.name = LVMPOLLD_PROTOCOL,
+		.name = "lvmpolld",
 		.pidfile = getenv("LVM_LVMPOLLD_PIDFILE") ?: LVMPOLLD_PIDFILE,
 		.private = &ls,
-		.protocol = "lvmpolld",
+		.protocol = LVMPOLLD_PROTOCOL,
 		.protocol_version = LVMPOLLD_PROTOCOL_VERSION,
 		.socket_path = getenv("LVM_LVMPOLLD_SOCKET") ?: LVMPOLLD_SOCKET,
 	};
 
 	// use getopt_long
-	while ((opt = getopt(argc, argv, "?fhVl:p:s:B:")) != EOF) {
+	while ((opt = getopt(argc, argv, "?fhVl:p:s:B:t:")) != EOF) {
 		switch (opt) {
-		case 'h':
-			usage(argv[0], stdout);
-			exit(0);
 		case '?':
 			usage(argv[0], stderr);
 			exit(0);
-		case 'f':
-			s.foreground = 1;
-			break;
-		case 'l':
-			ls.log_config = optarg;
-			break;
-		case 'p':
-			s.pidfile = optarg;
-			break;
-		case 's': // --socket
-			s.socket_path = optarg;
-			break;
 		case 'B': /* --binary */
 			ls.lvm_binary = optarg;
 			break;
 		case 'V':
 			printf("lvmpolld version: " LVM_VERSION "\n");
 			exit(1);
+		case 'f':
+			s.foreground = 1;
+			break;
+		case 'h':
+			usage(argv[0], stdout);
+			exit(0);
+		case 'l':
+			ls.log_config = optarg;
+			break;
+		case 'p':
+			s.pidfile = optarg;
+			break;
+		case 's': /* --socket */
+			s.socket_path = optarg;
+			break;
+		case 't': /* --timeout in seconds */
+			if (!process_timeout_arg(optarg, &di.max_timeouts)) {
+				fprintf(stderr, "Invalid value of timeout parameter");
+				exit(1);
+			}
+			/* 0 equals to wait indefinitely */
+			if (di.max_timeouts) {
+				ls.idle = &di;
+				s.idle = &di;
+			}
+			break;
 		}
 	}
 

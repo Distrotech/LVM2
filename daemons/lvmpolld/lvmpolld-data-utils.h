@@ -37,6 +37,7 @@ typedef struct {
 	pthread_mutex_t lock;
 	void *store;
 	const char *name;
+	unsigned active_polling_count;
 } lvmpolld_store_t;
 
 typedef struct {
@@ -167,17 +168,32 @@ static inline void pdst_unlock(lvmpolld_store_t *pdst)
 	pthread_mutex_unlock(&pdst->lock);
 }
 
-static inline int pdst_insert(lvmpolld_store_t *pdst, const char *key, lvmpolld_lv_t *pdlv)
+static inline void pdst_locked_inc(lvmpolld_store_t *pdst)
+{
+	pdst->active_polling_count++;
+}
+
+static inline void pdst_locked_dec(lvmpolld_store_t *pdst)
+{
+	pdst->active_polling_count--;
+}
+
+static inline unsigned pdst_locked_get_active_polling_count(const lvmpolld_store_t *pdst)
+{
+	return pdst->active_polling_count;
+}
+
+static inline int pdst_locked_insert(lvmpolld_store_t *pdst, const char *key, lvmpolld_lv_t *pdlv)
 {
 	return dm_hash_insert(pdst->store, key, pdlv);
 }
 
-static inline lvmpolld_lv_t *pdst_lookup(lvmpolld_store_t *pdst, const char *key)
+static inline lvmpolld_lv_t *pdst_locked_lookup(lvmpolld_store_t *pdst, const char *key)
 {
 	return dm_hash_lookup(pdst->store, key);
 }
 
-static inline void pdst_remove(lvmpolld_store_t *pdst, const char *key)
+static inline void pdst_locked_remove(lvmpolld_store_t *pdst, const char *key)
 {
 	dm_hash_remove(pdst->store, key);
 }
