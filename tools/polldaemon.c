@@ -363,36 +363,39 @@ err:
 	return ECMD_PROCESSED;
 }
 
+/* FIXME: this requires audit after code modifications due to bug in pvmove handling */
 static int _lvmpolld_init_poll_vg(struct cmd_context *cmd, const char *vgname,
 			          struct volume_group *vg, void *handle)
 {
-	const char *name;
 	int r;
 	struct lv_list *lvl;
 	struct logical_volume *lv;
 	struct poll_lv_list *plv;
 	union lvid lvid;
 	lvmpolld_parms_t *lpdp = (lvmpolld_parms_t *) handle;
+	struct poll_operation_id id = { 0 };
 
 	dm_list_iterate_items(lvl, &vg->lvs) {
 		lv = lvl->lv;
 		if (!(lv->status & lpdp->parms->lv_type))
 			continue;
-		name = lpdp->parms->poll_fns->get_copy_name_from_lv(lv);
-		if (!name && !lpdp->parms->aborting)
+		id.display_name = lpdp->parms->poll_fns->get_copy_name_from_lv(lv);
+		if (!id.display_name && !lpdp->parms->aborting)
 			continue;
 
 		memset(&lvid, 0, sizeof(union lvid));
-		memcpy(&lvid, &vg->id, sizeof(*(lvid.id)));
+		memcpy(&lvid, &lv->lvid, sizeof(*(lvid.id)));
 
 		if (!lvid.s) {
 			/* TODO: rephrase this log message */
-			log_print_unless_silent("Failed to extract vgid from VG including PV: %s", name);
+			log_print_unless_silent("Failed to extract vgid from VG including PV: %s", id.display_name);
 			continue;
 		}
 
-		r = lvmpolld_poll_init(cmd, vgname, lvid.s,
-				       lpdp->parms->background,
+		id.vg_name = lv->vg->name;
+		id.lv_name = lv->name;
+
+		r = lvmpolld_poll_init(cmd, &id,
 				       lpdp->parms->lv_type,
 				       lpdp->parms->interval,
 				       lpdp->parms->aborting);
@@ -400,7 +403,7 @@ static int _lvmpolld_init_poll_vg(struct cmd_context *cmd, const char *vgname,
 		if (r && !lpdp->parms->background) {
 			plv = (struct poll_lv_list *) dm_malloc(sizeof(struct poll_lv_list));
 			plv->uuid = dm_strdup(lvid.s);
-			plv->name = dm_strdup(name);
+			plv->name = dm_strdup(id.display_name);
 			dm_list_add(&lpdp->plvs, &plv->list);
 		}
 	}
@@ -431,6 +434,7 @@ static void _lvmpolld_poll_for_all_vgs(struct cmd_context *cmd,
 	lvmpolld_parms_t lpdp = {
 		.parms = parms
 	};
+	struct poll_operation_id id = { 0 };
 
 	dm_list_init(&lpdp.plvs);
 
@@ -439,7 +443,9 @@ static void _lvmpolld_poll_for_all_vgs(struct cmd_context *cmd,
 	while (!dm_list_empty(&lpdp.plvs)) {
 		/* TODO: add wait before */
 		dm_list_iterate_items_safe(plv, tlv, &lpdp.plvs) {
-			r = lvmpolld_request_info(plv->uuid, plv->name,
+			id.display_name = plv->name;
+			id.uuid = plv->uuid;
+			r = lvmpolld_request_info(&id,
 						  lpdp.parms->progress_title,
 						  lpdp.parms->aborting,
 						  lpdp.parms->lv_type,
@@ -598,23 +604,21 @@ int poll_daemon(struct cmd_context *cmd, unsigned background,
 	return _poll_daemon(cmd, id, &parms);
 }
 
-static int _lvmpoll_daemon(struct cmd_context *cmd, const char *name,
-			   const char *uuid, struct daemon_parms *parms)
+static int _lvmpoll_daemon(struct cmd_context *cmd, struct poll_operation_id *id,
+			   struct daemon_parms *parms)
 {
 	int r;
 	unsigned finished = 0;
 
-	if (name || uuid) {
-		r = lvmpolld_poll_init(cmd,
-				       (parms->lv_type & PVMOVE ? find_vgname_from_pvname(cmd, name) : extract_vgname(cmd, name)),
-				       uuid, parms->background, parms->lv_type,
-				       parms->interval, parms->aborting);
+	if (id) {
+		r = lvmpolld_poll_init(cmd, id, parms->lv_type, parms->interval,
+				       parms->aborting);
 
 		while (r && !parms->background && !finished) {
-			r = lvmpolld_request_info(uuid, name,
-						  parms->progress_title,
+			r = lvmpolld_request_info(id, parms->progress_title,
 						  parms->aborting, parms->lv_type,
 						  &finished);
+			/* TODO: add minimal sleep time to avoid abundance of queries */
 			sleep(parms->interval);
 		}
 

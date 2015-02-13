@@ -826,13 +826,6 @@ int pvmove(struct cmd_context *cmd, int argc, char **argv)
 		return ECMD_FAILED;
 	}
 
-	if (!(lvid = dm_pool_alloc(cmd->mem, sizeof(*lvid)))) {
-		log_error("Failed to alloc lvid");
-		return ECMD_FAILED;
-	}
-
-	memset(lvid, 0, sizeof(*lvid));
-
 	if (argc) {
 		if (!(lvid = dm_pool_alloc(cmd->mem, sizeof(*lvid)))) {
 			log_error("Failed to allocate lvid.");
