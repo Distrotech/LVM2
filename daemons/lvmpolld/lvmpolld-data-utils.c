@@ -16,29 +16,27 @@
 #include "lvmpolld-data-utils.h"
 
 lvmpolld_lv_t *pdlv_create(lvmpolld_state_t *ls, const char *lvid,
-			   const char *vgname, enum poll_type type,
+			   const char *lvname, enum poll_type type,
 			   const char *sinterval, unsigned pdtimeout,
 			   lvmpolld_store_t *pdst,
-			   lvmpolld_parse_output_fn_t parse_fn,
-			   unsigned background)
+			   lvmpolld_parse_output_fn_t parse_fn)
 {
 	lvmpolld_lv_t tmp = {
 		.ls = ls,
 		.type = type,
 		.lvid = dm_strdup(lvid),
-		.vgname = dm_strdup(vgname),
+		.lvname = dm_strdup(lvname),
 		.sinterval = dm_strdup(sinterval),
 		.pdtimeout = pdtimeout ?: PDTIMEOUT_DEF,
 		.percent = DM_PERCENT_0,
 		.cmd_state = { .retcode = -1, .signal = 0 },
 		.pdst = pdst,
-		.parse_output_fn = parse_fn,
-		.background = background
+		.parse_output_fn = parse_fn
 	}, *pdlv = (lvmpolld_lv_t *) dm_malloc(sizeof(lvmpolld_lv_t));
 
-	if (!pdlv || !tmp.lvid || !tmp.vgname || !tmp.sinterval) {
+	if (!pdlv || !tmp.lvid || !tmp.lvname || !tmp.sinterval) {
 		dm_free((void *)tmp.lvid);
-		dm_free((void *)tmp.vgname);
+		dm_free((void *)tmp.lvname);
 		dm_free((void *)tmp.sinterval);
 		return NULL;
 	}
@@ -53,7 +51,7 @@ lvmpolld_lv_t *pdlv_create(lvmpolld_state_t *ls, const char *lvid,
 err:
 	dm_free((void *)pdlv->sinterval);
 	dm_free((void *)pdlv->lvid);
-	dm_free((void *)pdlv->vgname);
+	dm_free((void *)pdlv->lvname);
 	dm_free((void *)pdlv);
 
 	return NULL;
@@ -62,36 +60,13 @@ err:
 void pdlv_destroy(lvmpolld_lv_t *pdlv)
 {
 	dm_free((void *)pdlv->lvid);
-	dm_free((void *)pdlv->vgname);
+	dm_free((void *)pdlv->lvname);
 	dm_free((void *)pdlv->sinterval);
 	dm_free((void *)pdlv->cmdargv);
 
 	pthread_mutex_destroy(&pdlv->lock);
 
 	dm_free((void *)pdlv);
-}
-
-unsigned pdlv_get_and_unset_background(lvmpolld_lv_t *pdlv)
-{
-	unsigned old;
-
-	pdlv_lock(pdlv);
-	old = pdlv->background;
-	pdlv->background = 0;
-	pdlv_unlock(pdlv);
-
-	return old;
-}
-
-unsigned pdlv_get_background(lvmpolld_lv_t *pdlv)
-{
-	unsigned b;
-
-	pdlv_lock(pdlv);
-	b = pdlv->background;
-	pdlv_unlock(pdlv);
-
-	return b;
 }
 
 unsigned pdlv_get_polling_finished(lvmpolld_lv_t *pdlv)
@@ -117,13 +92,6 @@ lvmpolld_lv_state_t pdlv_get_status(lvmpolld_lv_t *pdlv)
 	pdlv_unlock(pdlv);
 
 	return r;
-}
-
-void pdlv_set_background(lvmpolld_lv_t *pdlv, unsigned background)
-{
-	pdlv_lock(pdlv);
-	pdlv->background = background;
-	pdlv_unlock(pdlv);
 }
 
 void pdlv_set_cmd_state(lvmpolld_lv_t *pdlv, const lvmpolld_cmd_stat_t *cmd_state)

@@ -32,6 +32,7 @@
 #define LVMPD_PARM_HANDLE_MISSING_PVS	"handle_missing_pvs"
 #define LVMPD_PARM_INTERVAL		"interval"
 #define LVMPD_PARM_LVID			"lvid"
+#define LVMPD_PARM_LVNAME		"lvname"
 #define LVMPD_PARM_VALUE		"value" /* either retcode or signal value */
 #define LVMPD_PARM_VGNAME		"vgname"
 

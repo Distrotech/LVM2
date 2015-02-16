@@ -48,6 +48,7 @@
 /* predefined reason for response = "failed" case */
 #define REASON_REQ_NOT_IMPLEMENTED "request not implemented"
 #define REASON_MISSING_LVID "request requires lvid set"
+#define REASON_MISSING_LVNAME "request requires lvname set"
 #define REASON_MISSING_VGNAME "request requires vgname set"
 #define REASON_POLLING_FAILED "polling of lvm command failed"
 #define REASON_ILLEGAL_ABORT_REQUEST "abort only supported with PVMOVE polling operation"
@@ -412,13 +413,8 @@ static const char **cmdargv_ctr(lvmpolld_lv_t *pdlv, unsigned abort, unsigned ha
 	    !add_to_cmdargv(&cmd_argv, polling_ops[pdlv->type], &i, MIN_SIZE))
 		goto err;
 
-	/* either vg_uuid+\0\0\0\0... or vg_uuid+lv_uuid */
-	if (!add_to_cmdargv(&cmd_argv, "--uuid", &i, MIN_SIZE) ||
-	    !add_to_cmdargv(&cmd_argv, pdlv->lvid, &i, MIN_SIZE))
-		goto err;
-
-	/* vgname */
-	if (!add_to_cmdargv(&cmd_argv, pdlv->vgname, &i, MIN_SIZE))
+	/* vg/lv name */
+	if (!add_to_cmdargv(&cmd_argv, pdlv->lvname, &i, MIN_SIZE))
 		goto err;
 
 	/* terminating NULL */
@@ -439,6 +435,7 @@ static void *fork_and_poll(void *args)
 	int error = 1;
 
 	lvmpolld_lv_t *pdlv = (lvmpolld_lv_t *) args;
+	lvmpolld_state_t *ls = pdlv->ls;
 
 	int outpipe[2] = { -1, -1 }, errpipe[2] = { -1, -1 };
 
@@ -450,13 +447,13 @@ static void *fork_and_poll(void *args)
 	/* FIXME: failure to set O_CLOEXEC will perhaps result in broken polling anyway */
 	/* don't duplicate read end of the pipe */
 	if (fcntl(outpipe[0], F_SETFD, FD_CLOEXEC))
-		WARN(pdlv->ls, "%s: %s", PD_LOG_PREFIX, "failed to set FD_CLOEXEC on read end of pipe");
+		WARN(ls, "%s: %s", PD_LOG_PREFIX, "failed to set FD_CLOEXEC on read end of pipe");
 	if (fcntl(outpipe[1], F_SETFD, FD_CLOEXEC))
-		WARN(pdlv->ls, "%s: %s", PD_LOG_PREFIX, "failed to set FD_CLOEXEC on write end of pipe");
+		WARN(ls, "%s: %s", PD_LOG_PREFIX, "failed to set FD_CLOEXEC on write end of pipe");
 	if (fcntl(errpipe[0], F_SETFD, FD_CLOEXEC))
-		WARN(pdlv->ls, "%s: %s", PD_LOG_PREFIX, "failed to set FD_CLOEXEC on read end of err pipe");
+		WARN(ls, "%s: %s", PD_LOG_PREFIX, "failed to set FD_CLOEXEC on read end of err pipe");
 	if (fcntl(errpipe[1], F_SETFD, FD_CLOEXEC))
-		WARN(pdlv->ls, "%s: %s", PD_LOG_PREFIX, "failed to set FD_CLOEXEC on write end of err pipe");
+		WARN(ls, "%s: %s", PD_LOG_PREFIX, "failed to set FD_CLOEXEC on write end of err pipe");
 
 	r = fork();
 	if (!r) {
@@ -473,28 +470,28 @@ static void *fork_and_poll(void *args)
 	} else {
 		/* parent */
 		if (r == -1) {
-			ERROR(pdlv->ls, "%s: %s", PD_LOG_PREFIX, "fork failed");
+			ERROR(ls, "%s: %s", PD_LOG_PREFIX, "fork failed");
 			goto err;
 		}
 
-		INFO(pdlv->ls, "%s: LVM2 cmd \"%s\" (PID: %d)", PD_LOG_PREFIX, *(pdlv->cmdargv), r);
+		INFO(ls, "%s: LVM2 cmd \"%s\" (PID: %d)", PD_LOG_PREFIX, *(pdlv->cmdargv), r);
 
 		pdlv->cmd_pid = r;
 
 		/* failure to close write end of any pipe will result in broken polling */
 		if (close(outpipe[1])) {
-			ERROR(pdlv->ls, "%s: %s", PD_LOG_PREFIX, "failed to close write end of pipe");
+			ERROR(ls, "%s: %s", PD_LOG_PREFIX, "failed to close write end of pipe");
 			goto err;
 		}
 		if (close(errpipe[1])) {
-			ERROR(pdlv->ls, "%s: %s", PD_LOG_PREFIX, "failed to close write end of err pipe");
+			ERROR(ls, "%s: %s", PD_LOG_PREFIX, "failed to close write end of err pipe");
 			goto err;
 		}
 
 		outpipe[1] = errpipe[1] = -1;
 
 		error = poll_for_output(pdlv, *outpipe, *errpipe);
-		DEBUGLOG(pdlv->ls, "%s: %s", PD_LOG_PREFIX, "polling command finished");
+		DEBUGLOG(ls, "%s: %s", PD_LOG_PREFIX, "polling command finished");
 	}
 
 err:
@@ -503,11 +500,7 @@ err:
 
 	pdst_lock(pdst);
 
-	if (pdlv_get_background(pdlv)) {
-		/* holding store lock provides there's no single reader */
-		pdst_locked_remove(pdst, pdlv->lvid);
-		pdlv_destroy(pdlv);
-	} else if (error) {
+	if (error) {
 		/* last reader is responsible for pdlv cleanup */
 		r = pdlv->cmd_pid;
 		pdlv_set_internal_error(pdlv, 1);
@@ -517,12 +510,8 @@ err:
 	pdst_locked_dec(pdst);
 
 	pdst_unlock(pdst);
-	/*
-	 * after the store get unlocked pdlv
-	 * may be already removed by some reader
-	 */
 
-	update_active_state(pdlv->ls);
+	update_active_state(ls);
 
 	if (outpipe[0] != -1)
 		close(outpipe[0]);
@@ -565,9 +554,6 @@ static response progress_info(client_handle h, lvmpolld_state_t *ls, request req
 
 	pdlv = pdst_locked_lookup(pdst, lvid);
 	if (pdlv) {
-		if (pdlv_get_and_unset_background(pdlv))
-			WARN(ls, "%s: %s", PD_LOG_PREFIX,
-			     "Client asked for progress info on LV with background flag set");
 		/*
 		 * with store lock held, I'm the only reader accessing the pdlv
 		 */
@@ -610,17 +596,15 @@ static response progress_info(client_handle h, lvmpolld_state_t *ls, request req
 static lvmpolld_lv_t *construct_pdlv(request req, lvmpolld_state_t *ls,
 				     lvmpolld_store_t *pdst,
 				     const char *interval, const char *lvid,
-				     const char *vgname, enum poll_type type,
-				     unsigned abort, unsigned background,
-				     unsigned uinterval)
+				     const char *lvname, enum poll_type type,
+				     unsigned abort, unsigned uinterval)
 {
 	const char **cmdargv;
 	lvmpolld_lv_t *pdlv;
 	unsigned handle_missing_pvs = daemon_request_int(req, LVMPD_PARM_HANDLE_MISSING_PVS, 0);
 
-	pdlv = pdlv_create(ls, lvid, vgname, type, interval, 2 * uinterval,
-			   pdst, (abort ? NULL : parse_line_for_percents),
-			   background);
+	pdlv = pdlv_create(ls, lvid, lvname, type, interval, 2 * uinterval,
+			   pdst, (abort ? NULL : parse_line_for_percents));
 
 	if (!pdlv) {
 		ERROR(ls, "%s: %s", PD_LOG_PREFIX, "Failed to create pdlv");
@@ -656,15 +640,17 @@ static int spawn_detached_thread(lvmpolld_lv_t *pdlv)
 
 static response poll_init(client_handle h, lvmpolld_state_t *ls, request req, enum poll_type type)
 {
+	char *full_lvname;
 	lvmpolld_lv_t *pdlv;
 	lvmpolld_store_t *pdst;
+	size_t len;
 	unsigned uinterval;
 
-	const char *lvid = daemon_request_str(req, LVMPD_PARM_LVID, NULL);
 	const char *interval = daemon_request_str(req, LVMPD_PARM_INTERVAL, NULL);
+	const char *lvid = daemon_request_str(req, LVMPD_PARM_LVID, NULL);
+	const char *lvname = daemon_request_str(req, LVMPD_PARM_LVNAME, NULL);
 	const char *vgname = daemon_request_str(req, LVMPD_PARM_VGNAME, NULL);
 	unsigned abort = daemon_request_int(req, LVMPD_PARM_ABORT, 0);
-	unsigned background = daemon_request_int(req, LVMPD_PARM_BACKGROUND, 1);
 
 	assert(type < POLL_TYPE_MAX);
 
@@ -674,13 +660,22 @@ static response poll_init(client_handle h, lvmpolld_state_t *ls, request req, en
 	if (!interval || strpbrk(interval, "-") || sscanf(interval, "%u", &uinterval) != 1)
 		return reply_fail(REASON_INVALID_INTERVAL);
 
+	if (!lvname)
+		return reply_fail(REASON_MISSING_LVNAME);
+
 	if (!lvid)
 		return reply_fail(REASON_MISSING_LVID);
 
 	if (!vgname)
 		return reply_fail(REASON_MISSING_VGNAME);
 
-	background = background > 1 ? 1 : background;
+	len = strlen(lvname) + strlen(vgname) + 2; /* vg/lv and \0 */
+	full_lvname = dm_malloc(len);
+	if (!full_lvname || dm_snprintf(full_lvname, len, "%s/%s", vgname, lvname) < 1) {
+		ERROR(ls, "%s: %s", PD_LOG_PREFIX, "Failed to clone vg/lv name");
+		dm_free(full_lvname);
+		return reply_fail(REASON_INTERNAL_ERROR);
+	}
 
 	pdst = abort ? &ls->lvid_to_pdlv_abort : &ls->lvid_to_pdlv_poll;
 
@@ -703,21 +698,21 @@ static response poll_init(client_handle h, lvmpolld_state_t *ls, request req, en
 	if (pdlv) {
 		if (!pdlv_is_type(pdlv, type)) {
 			pdst_unlock(pdst);
+			dm_free(full_lvname);
 			return reply_fail(REASON_DIFFERENT_OPERATION_IN_PROGRESS);
 		}
-		/* notify lvmpolld about future requests for info */
-		if (!background)
-			pdlv_set_background(pdlv, background);
 	} else {
-		pdlv = construct_pdlv(req, ls, pdst, interval, lvid, vgname,
-				      type, abort, background, uinterval);
+		pdlv = construct_pdlv(req, ls, pdst, interval, lvid, full_lvname,
+				      type, abort, uinterval);
 		if (!pdlv) {
 			pdst_unlock(pdst);
+			dm_free(full_lvname);
 			return reply_fail(REASON_INTERNAL_ERROR);
 		}
 		if (!pdst_locked_insert(pdst, lvid, pdlv)) {
 			pdlv_destroy(pdlv);
 			pdst_unlock(pdst);
+			dm_free(full_lvname);
 			return reply_fail(REASON_INTERNAL_ERROR);
 		}
 		if (!spawn_detached_thread(pdlv)) {
@@ -725,6 +720,7 @@ static response poll_init(client_handle h, lvmpolld_state_t *ls, request req, en
 			pdst_locked_remove(pdst, lvid);
 			pdlv_destroy(pdlv);
 			pdst_unlock(pdst);
+			dm_free(full_lvname);
 			return reply_fail(REASON_INTERNAL_ERROR);
 		}
 
@@ -734,6 +730,8 @@ static response poll_init(client_handle h, lvmpolld_state_t *ls, request req, en
 	}
 
 	pdst_unlock(pdst);
+
+	dm_free(full_lvname);
 
 	return daemon_reply_simple(LVMPD_RESP_OK, NULL);
 }

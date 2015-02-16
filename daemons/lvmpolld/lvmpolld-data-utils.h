@@ -59,11 +59,8 @@ typedef struct lvmpolld_lv {
 	 */
 	struct lvmpolld_state *const ls;
 	const enum poll_type type;
-	/* full lvid vguuid+lvuuid. may also be vguuid+zeroes -> PVMOVE */
 	const char *const lvid;
-	const char *const vgname;
-	/* either fullname vg/lv or vgname only */
-	/* const char *name; */
+	const char *const lvname; /* full vg/lv name */
 	const unsigned pdtimeout; /* in seconds */
 	const char *const sinterval;
 	lvmpolld_store_t *const pdst;
@@ -81,18 +78,16 @@ typedef struct lvmpolld_lv {
 	dm_percent_t percent;
 	unsigned polling_finished:1; /* no more updates */
 	unsigned internal_error:1; /* unrecoverable error occured in lvmpolld */
-	unsigned background:1; /* 1 if lvmpolld doesn't expect progress readers */
 } lvmpolld_lv_t;
 
 /* LVMPOLLD_LV_T section */
 
 /* only call with appropriate lvmpolld_store_t lock held */
 lvmpolld_lv_t *pdlv_create(struct lvmpolld_state *ls, const char *lvid,
-			   const char *vgname, const enum poll_type type,
+			   const char *lvname, const enum poll_type type,
 			   const char *sinterval, unsigned pdtimeout,
 			   lvmpolld_store_t *pdst,
-			   lvmpolld_parse_output_fn_t parse_fn,
-			   unsigned background);
+			   lvmpolld_parse_output_fn_t parse_fn);
 
 /* only call with appropriate lvmpolld_store_t lock held */
 void pdlv_destroy(lvmpolld_lv_t *pdlv);
@@ -120,11 +115,8 @@ static inline unsigned pdlv_get_timeout(const lvmpolld_lv_t *pdlv)
 	return pdlv->pdtimeout;
 }
 
-unsigned pdlv_get_and_unset_background(lvmpolld_lv_t *pdlv);
-unsigned pdlv_get_background(lvmpolld_lv_t *pdlv);
 unsigned pdlv_get_polling_finished(lvmpolld_lv_t *pdlv);
 lvmpolld_lv_state_t pdlv_get_status(lvmpolld_lv_t *pdlv);
-void pdlv_set_background(lvmpolld_lv_t *pdlv, unsigned background); /* call with appropriate lvmpolld_store_t lock held */
 void pdlv_set_cmd_state(lvmpolld_lv_t *pdlv, const lvmpolld_cmd_stat_t *cmd_state);
 void pdlv_set_internal_error(lvmpolld_lv_t *pdlv, unsigned error);
 void pdlv_set_percents(lvmpolld_lv_t *pdlv, dm_percent_t percent);
