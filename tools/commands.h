@@ -884,7 +884,6 @@ xx(lvpoll,
    "Resume poll operation on logical volume",
    0,
    "\t[--abort]\n"
-   "\t[-u|--uuid]\n"
    "\t[-p|--poll-operation\n"
    "\t[-d|--debug]\n "
    "\t[-h|-?|--help]\n"
@@ -894,7 +893,7 @@ xx(lvpoll,
    "\t[-v|--verbose]\n "
    "\t[--version]\n",
 
-   abort_ARG, handlemissingpvs_ARG, interval_ARG, polloperation_ARG, uuidstr_ARG,
+   abort_ARG, handlemissingpvs_ARG, interval_ARG, polloperation_ARG,
    test_ARG)
 
 xx(pvremove,
