@@ -92,7 +92,7 @@ int wait_for_single_lv(struct cmd_context *cmd, struct poll_operation_id *id,
 		       struct daemon_parms *parms);
 
 struct volume_group *get_poll_vg(struct cmd_context *cmd, const char *name,
-				 const char *uuid);
+				 const char *uuid, unsigned read_only);
 
 struct logical_volume *get_poll_lv(struct cmd_context *cmd,
 				   struct volume_group *vg, const char *name,
@@ -100,5 +100,8 @@ struct logical_volume *get_poll_lv(struct cmd_context *cmd,
 
 int wait_for_single_lv(struct cmd_context *cmd, struct poll_operation_id *id,
 		       struct daemon_parms *parms);
+
+int report_progress(struct cmd_context *cmd, struct poll_operation_id *id,
+		    struct daemon_parms *parms);
 
 #endif

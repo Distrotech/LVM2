@@ -33,6 +33,10 @@ typedef struct {
 	struct dm_list plvs;
 } lvmpolld_parms_t;
 
+static const struct timespec _mintime = {
+	.tv_nsec = 100000
+};
+
 progress_t poll_mirror_progress(struct cmd_context *cmd,
 				struct logical_volume *lv, const char *name,
 				struct daemon_parms *parms)
@@ -227,7 +231,7 @@ int wait_for_single_lv(struct cmd_context *cmd, struct poll_operation_id *id,
 		/*
 		 * FIXME Sleeping after testing, while preferred, also works around
 		 * unreliable "finished" state checking in _percent_run.  If the
-		 * above check_lv_status is deferred until after the first sleep it
+		 * above _check_lv_status is deferred until after the first sleep it
 		 * may be that a polldaemon will run without ever completing.
 		 *
 		 * This happens when one snapshot-merge polldaemon is racing with
@@ -291,6 +295,50 @@ static struct poll_id_list* poll_id_list_create(struct dm_pool *mem,
 	}
 
 	return idl;
+}
+
+int report_progress(struct cmd_context *cmd, struct poll_operation_id *id,
+		    struct daemon_parms *parms)
+{
+	struct volume_group *vg;
+	struct logical_volume *lv;
+
+	vg = parms->poll_fns->get_copy_vg(cmd, id->vg_name, NULL, 1);
+	if (vg_read_error(vg)) {
+		release_vg(vg);
+		log_error("Can't reread VG for %s", id->display_name);
+		return 0;
+	}
+
+	lv = parms->poll_fns->get_copy_lv(cmd, vg, id->lv_name, id->uuid, parms->lv_type);
+	if (!lv && parms->lv_type == PVMOVE) {
+		log_print_unless_silent("%s: no pvmove in progress - already finished or aborted.",
+					id->display_name);
+		unlock_and_release_vg(cmd, vg, vg->name);
+		return 1;
+	}
+
+	if (!lv) {
+		log_warn("Can't find LV in %s for %s. Already finished or removed.",
+			  vg->name, id->display_name);
+		unlock_and_release_vg(cmd, vg, vg->name);
+		return 1;
+	}
+
+	if (!lv_is_active_locally(lv)) {
+		log_print_unless_silent("%s: Interrupted: No longer active.", id->display_name);
+		unlock_and_release_vg(cmd, vg, vg->name);
+		return 1;
+	}
+
+	if (parms->poll_fns->poll_progress(cmd, lv, id->display_name, parms) == PROGRESS_CHECK_FAILED) {
+		unlock_and_release_vg(cmd, vg, vg->name);
+		return_0;
+	}
+
+	unlock_and_release_vg(cmd, vg, vg->name);
+
+	return 1;
 }
 
 static int _poll_vg(struct cmd_context *cmd, const char *vgname,
@@ -364,6 +412,10 @@ err:
 }
 
 /* FIXME: this requires audit after code modifications due to bug in pvmove handling */
+/* FIXME: this requires audit after code modifications due to bug in pvmove handling */
+/* FIXME: this requires audit after code modifications due to bug in pvmove handling */
+/* FIXME: this requires audit after code modifications due to bug in pvmove handling */
+/* FIXME: this requires audit after code modifications due to bug in pvmove handling */
 static int _lvmpolld_init_poll_vg(struct cmd_context *cmd, const char *vgname,
 			          struct volume_group *vg, void *handle)
 {
@@ -395,10 +447,8 @@ static int _lvmpolld_init_poll_vg(struct cmd_context *cmd, const char *vgname,
 		id.vg_name = lv->vg->name;
 		id.lv_name = lv->name;
 
-		r = lvmpolld_poll_init(cmd, &id,
-				       lpdp->parms->lv_type,
-				       lpdp->parms->interval,
-				       lpdp->parms->aborting);
+		r = lvmpolld_poll_init(cmd,lv->vg->name, lv->name, lvid.s, lpdp->parms->lv_type,
+				       lpdp->parms->interval, lpdp->parms->aborting);
 
 		if (r && !lpdp->parms->background) {
 			plv = (struct poll_lv_list *) dm_malloc(sizeof(struct poll_lv_list));
@@ -425,6 +475,16 @@ static void _poll_for_all_vgs(struct cmd_context *cmd,
 	}
 }
 
+/* FIXME: better name? */
+static void _sleep_a_while(unsigned seconds)
+{
+	const struct timespec req = {
+		.tv_sec = seconds
+	};
+
+	nanosleep(seconds ? &req : &_mintime, NULL);
+}
+
 static void _lvmpolld_poll_for_all_vgs(struct cmd_context *cmd,
 				       struct daemon_parms *parms)
 {
@@ -438,17 +498,14 @@ static void _lvmpolld_poll_for_all_vgs(struct cmd_context *cmd,
 
 	dm_list_init(&lpdp.plvs);
 
+	/* TODO perhaps I don't need update lock here */
 	process_each_vg(cmd, 0, NULL, READ_FOR_UPDATE, &lpdp, _lvmpolld_init_poll_vg);
 
 	while (!dm_list_empty(&lpdp.plvs)) {
-		/* TODO: add wait before */
 		dm_list_iterate_items_safe(plv, tlv, &lpdp.plvs) {
 			id.display_name = plv->name;
 			id.uuid = plv->uuid;
-			r = lvmpolld_request_info(&id,
-						  lpdp.parms->progress_title,
-						  lpdp.parms->aborting,
-						  lpdp.parms->lv_type,
+			r = lvmpolld_request_info(id.uuid, lpdp.parms->aborting,
 						  &finished);
 			if (!r || finished) {
 				dm_list_del(&plv->list);
@@ -456,9 +513,11 @@ static void _lvmpolld_poll_for_all_vgs(struct cmd_context *cmd,
 				dm_free(plv->name);
 				dm_free(plv);
 			}
+			else
+				report_progress(cmd, &id, lpdp.parms);
 		}
-		/* TODO: add wait after?*/
-		sleep(lpdp.parms->interval);
+
+		_sleep_a_while(lpdp.parms->interval);
 	}
 }
 
@@ -611,15 +670,17 @@ static int _lvmpoll_daemon(struct cmd_context *cmd, struct poll_operation_id *id
 	unsigned finished = 0;
 
 	if (id) {
-		r = lvmpolld_poll_init(cmd, id, parms->lv_type, parms->interval,
+		r = lvmpolld_poll_init(cmd, id->vg_name, id->lv_name, id->uuid,
+				       parms->lv_type, parms->interval,
 				       parms->aborting);
 
 		while (r && !parms->background && !finished) {
-			r = lvmpolld_request_info(id, parms->progress_title,
-						  parms->aborting, parms->lv_type,
-						  &finished);
-			/* TODO: add minimal sleep time to avoid abundance of queries */
-			sleep(parms->interval);
+			if (!(r = lvmpolld_request_info(id->uuid, parms->aborting, &finished)))
+				break;
+			if (!finished && !(r = report_progress(cmd, id, parms)))
+				break;
+
+			_sleep_a_while(parms->interval);
 		}
 
 		return r ? ECMD_PROCESSED : ECMD_FAILED;
