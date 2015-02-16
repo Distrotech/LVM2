@@ -134,60 +134,6 @@ static int read_single_line(char **line, size_t *lsize, FILE *file)
 	return (r > 0);
 }
 
-static inline const char *get_keyword(const enum poll_type type)
-{
-	switch (type) {
-	case PVMOVE:
-		return "Moved";
-	case CONVERT:
-		return "Converted";
-	case MERGE:
-	case MERGE_THIN:
-		return "Merged";
-	default:
-		return NULL;
-	}
-}
-
-static void parse_line_for_percents(lvmpolld_lv_t *pdlv, const char *line)
-{
-	char *endptr, *keyw, *nr;
-	dm_percent_t perc;
-	double d;
-
-	if (!(keyw = strstr(line, get_keyword(pdlv->type))) || keyw == line
-	    || !strchr(keyw, DM_PERCENT_CHAR)) {
-		INFO(pdlv->ls, "%s: %s", PD_LOG_PREFIX,
-		     "parsing percentage from lvm2 command failed");
-		return;
-	}
-
-	nr = strpbrk(keyw, "+-0123456789");
-	if (!nr) {
-		INFO(pdlv->ls, "%s: %s", PD_LOG_PREFIX,
-		     "parsing percentage from lvm2 command failed");
-		return;
-	}
-
-	d = strtod(nr, &endptr);
-	if (nr == endptr) {
-		INFO(pdlv->ls, "%s: %s", PD_LOG_PREFIX,
-		     "parsing percentage from lvm2 command failed");
-		return;
-	} else if (d > 100.0) {
-		WARN(pdlv->ls, "%s: %s", PD_LOG_PREFIX,
-		     "parsing percentage from lvm2 command returned invalid value");
-		return;
-	}
-
-	perc = dm_make_percent((uint64_t)(d * DM_PERCENT_1), DM_PERCENT_100);
-
-	DEBUGLOG(pdlv->ls, "%s: %s %.1f%%", PD_LOG_PREFIX,
-		 "parsed", dm_percent_to_float(perc));
-
-	pdlv_set_percents(pdlv, perc);
-}
-
 static void update_active_state(lvmpolld_state_t *ls)
 {
 	if (!ls->idle)
@@ -578,13 +524,11 @@ static response progress_info(client_handle h, lvmpolld_state_t *ls, request req
 
 		if (st.polling_finished)
 			r = daemon_reply_simple(LVMPD_RESP_FINISHED,
-						LVMPD_PARM_DATA " = %d", st.percent,
 						"reason = %s", st.cmd_state.signal ? LVMPD_REAS_SIGNAL : LVMPD_REAS_RETCODE,
 						LVMPD_PARM_VALUE " = %d", st.cmd_state.signal ?: st.cmd_state.retcode,
 						NULL);
 		else
 			r = daemon_reply_simple(LVMPD_RESP_IN_PROGRESS,
-						LVMPD_PARM_DATA " = %d", st.percent,
 						NULL);
 	}
 	else
@@ -604,7 +548,7 @@ static lvmpolld_lv_t *construct_pdlv(request req, lvmpolld_state_t *ls,
 	unsigned handle_missing_pvs = daemon_request_int(req, LVMPD_PARM_HANDLE_MISSING_PVS, 0);
 
 	pdlv = pdlv_create(ls, lvid, lvname, type, interval, 2 * uinterval,
-			   pdst, (abort ? NULL : parse_line_for_percents));
+			   pdst, NULL);
 
 	if (!pdlv) {
 		ERROR(ls, "%s: %s", PD_LOG_PREFIX, "Failed to create pdlv");

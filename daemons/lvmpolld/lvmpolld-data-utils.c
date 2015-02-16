@@ -28,7 +28,6 @@ lvmpolld_lv_t *pdlv_create(lvmpolld_state_t *ls, const char *lvid,
 		.lvname = dm_strdup(lvname),
 		.sinterval = dm_strdup(sinterval),
 		.pdtimeout = pdtimeout ?: PDTIMEOUT_DEF,
-		.percent = DM_PERCENT_0,
 		.cmd_state = { .retcode = -1, .signal = 0 },
 		.pdst = pdst,
 		.parse_output_fn = parse_fn
@@ -88,7 +87,6 @@ lvmpolld_lv_state_t pdlv_get_status(lvmpolld_lv_t *pdlv)
 	r.internal_error = pdlv_locked_internal_error(pdlv);
 	r.polling_finished = pdlv_locked_polling_finished(pdlv);
 	r.cmd_state = pdlv_locked_cmd_state(pdlv);
-	r.percent = pdlv_locked_percent(pdlv);
 	pdlv_unlock(pdlv);
 
 	return r;
@@ -106,13 +104,6 @@ void pdlv_set_internal_error(lvmpolld_lv_t *pdlv, unsigned error)
 	pdlv_lock(pdlv);
 	pdlv->internal_error = error;
 	pdlv->polling_finished = 1;
-	pdlv_unlock(pdlv);
-}
-
-void pdlv_set_percents(lvmpolld_lv_t *pdlv, dm_percent_t percent)
-{
-	pdlv_lock(pdlv);
-	pdlv->percent = percent;
 	pdlv_unlock(pdlv);
 }
 
