@@ -25,12 +25,10 @@ struct cmd_context;
 void lvmpolld_disconnect(void);
 
 int lvmpolld_poll_init(const struct cmd_context *cmd, const char *vgname,
-		       const char *uuid, unsigned background, uint64_t lv_type,
+		       const char *lvname, const char *uuid, uint64_t lv_type,
 		       unsigned interval, unsigned abort);
 
-int lvmpolld_request_info(const char *uuid, const char *name,
-			  const char *progress_title, unsigned abort,
-			  uint64_t lv_type, unsigned *finished);
+int lvmpolld_request_info(const char *uuid, unsigned abort, unsigned *finished);
 
 int lvmpolld_use(void);
 
