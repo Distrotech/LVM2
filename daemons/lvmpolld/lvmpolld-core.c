@@ -615,7 +615,7 @@ static response poll_init(client_handle h, lvmpolld_state_t *ls, request req, en
 
 	len = strlen(lvname) + strlen(vgname) + 2; /* vg/lv and \0 */
 	full_lvname = dm_malloc(len);
-	if (!full_lvname || dm_snprintf(full_lvname, len, "%s/%s", vgname, lvname) < 1) {
+	if (!full_lvname || dm_snprintf(full_lvname, len, "%s/%s", vgname, lvname) < 0) {
 		ERROR(ls, "%s: %s", PD_LOG_PREFIX, "Failed to clone vg/lv name");
 		dm_free(full_lvname);
 		return reply_fail(REASON_INTERNAL_ERROR);
