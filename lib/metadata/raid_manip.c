@@ -26,7 +26,7 @@
 #include "dump.h"
 #endif
 
-#define printf(a ...)
+// #define printf(a ...)
 
 static void _ensure_min_region_size(struct logical_volume *lv)
 {
@@ -117,6 +117,7 @@ printf("%s %d lvl->lv->name=%s\n", __func__, __LINE__,  lvl->lv->name);
 		if (!deactivate_lv(vg->cmd, lvl->lv))
 			return_0;
 
+printf("%s %d lvl->lv->name=%s\n", __func__, __LINE__,  lvl->lv->name);
 		if (!lv_remove(lvl->lv))
 			return_0;
 	}
@@ -197,7 +198,7 @@ static int _raid_remove_top_layer(struct logical_volume *lv,
 	seg_metatype(seg, 0) = AREA_UNASSIGNED;
 	dm_list_add(removal_list, &(lvl_array[0].list));
 
-	/* Remove RAID layer and add residual LV to removal_list*/
+	/* Add remaining last image lv to removal_list */
 	lv_tmp = seg_lv(seg, 0);
 	lv_tmp->status &= ~RAID_IMAGE;
 	lv_set_visible(lv_tmp);
@@ -414,6 +415,7 @@ static char *_generate_raid_name(struct logical_volume *lv,
 	if (dm_snprintf(name, len, format, lv->name, suffix, count) < 0)
 		return_NULL;
 
+printf("%s name=%s\n", __func__, name);
 	if (!validate_name(name)) {
 		log_error("New logical volume name \"%s\" is not valid.", name);
 		return NULL;
@@ -869,7 +871,7 @@ static int _convert_linear_to_raid1(struct logical_volume *lv)
 	struct lv_segment *seg = first_seg(lv);
 	uint32_t region_size = seg->region_size;
 
-	if (!_insert_raid_layer_for_lv(lv, "_rimage0", 0))
+	if (!_insert_raid_layer_for_lv(lv, "_rimage_0", 0))
 		return 0;
 
 	/* Segment has changed */
@@ -929,6 +931,7 @@ static int _raid_add_images(struct logical_volume *lv, struct segment_type *segt
 	struct dm_list meta_lvs, data_lvs;
 
 	segtype = segtype ?: (struct segment_type *) seg->segtype;
+printf("%s count=%u\n", __func__, count);
 
 	if (!(linear = seg_is_linear(seg)) &&
 	    !seg_is_raid(seg)) {
@@ -1371,11 +1374,11 @@ printf("%s %d\n", __func__, __LINE__);
 	if (!_vg_write_lv_suspend_vg_commit(lv))
 		return 0;
 
-
 	/*
 	 * We activate the extracted sub-LVs first so they are
 	 * renamed and won't conflict with the remaining sub-LVs.
 	 */
+#if 0
 printf("%s %d\n", __func__, __LINE__);
 	dm_list_iterate_items(lvl, &removal_list) {
 		if (!activate_lv_excl_local(lv->vg->cmd, lvl->lv)) {
@@ -1383,6 +1386,7 @@ printf("%s %d\n", __func__, __LINE__);
 			return 0;
 		}
 	}
+#endif
 
 printf("%s %d\n", __func__, __LINE__);
 	if (!resume_lv(lv->vg->cmd, lv)) {
@@ -2600,8 +2604,9 @@ printf("%s %d stripes=%u stripe_size=%u seg->stripe_size=%u\n", __func__, __LINE
 
 printf("%s %d stripes=%u stripe_size=%u seg->stripe_size=%u\n", __func__, __LINE__, stripes, stripe_size, seg->stripe_size);
 	/* Check + apply stripe size change */
-	if (stripe_size / stripes < 8 ||
-	    (stripe_size / stripes) % 8) {
+	if (stripe_size &&
+	    (stripe_size & (stripe_size - 1) ||
+	     stripe_size < 8)) {
 		log_error("Invalid stripe size on %s", lv->name);
 		return_0;
 	}
@@ -2612,7 +2617,7 @@ printf("%s %d stripes=%u stripe_size=%u seg->stripe_size=%u\n", __func__, __LINE
 			return_0;
 		}
 
-		if (stripe_size / stripes > lv->vg->extent_size) {
+		if (stripe_size > lv->vg->extent_size) {
 			log_error("Stripe size for %s too large for volume group extent size", lv->name);
 			return_0;
 		}
