@@ -444,11 +444,11 @@ printf("%s %d\n", __func__, __LINE__);
 
 		if (!vg_write(vg) || !vg_commit(vg))
 			return_0;
-
-		if (!backup(vg))
-			log_error("Backup of VG %s failed after removal of image component LVs", vg->name);
 	}
 printf("%s %d\n", __func__, __LINE__);
+
+	if (!backup(vg))
+		log_error("Backup of VG %s failed after removal of image component LVs", vg->name);
 
 	return 1;
 }
@@ -1182,7 +1182,7 @@ static int _vg_write_lv_suspend_vg_commit(struct logical_volume *lv)
 		return 0;
 	}
 
-	if (!suspend_lv(lv->vg->cmd, lv_lock_holder(lv))) {
+	if (!suspend_lv(lv->vg->cmd, lv)) {
 		log_error("Failed to suspend %s/%s before committing changes",
 			  lv->vg->name, lv->name);
 		vg_revert(lv->vg);
@@ -1329,7 +1329,6 @@ static int _raid_remove_images(struct logical_volume *lv,
 	struct lv_segment *seg = first_seg(lv);
 #endif
 
-printf("%s %d\n", __func__, __LINE__);
 	if (!archive(lv->vg))
 		return_0;
 
