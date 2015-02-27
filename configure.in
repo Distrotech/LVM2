@@ -1080,7 +1080,7 @@ fi
 
 ################################################################################
 dnl -- Build lvmpolld
-AC_MSG_CHECKING(whether to build LVMPollD)
+AC_MSG_CHECKING(whether to build lvmpolld)
 AC_ARG_ENABLE(lvmpolld,
 	      AC_HELP_STRING([--enable-lvmpolld],
 			     [enable the LVM Polling Daemon]),
