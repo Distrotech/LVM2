@@ -59,12 +59,14 @@ typedef struct lvmpolld_lv {
 	struct lvmpolld_state *const ls;
 	const enum poll_type type;
 	const char *const lvid;
+	const char *const lvmpolld_id;
 	const char *const lvname; /* full vg/lv name */
 	const unsigned pdtimeout; /* in seconds */
 	const char *const sinterval;
+	const char *const lvm_system_dir_env;
 	lvmpolld_store_t *const pdst;
-	lvmpolld_parse_output_fn_t parse_output_fn;
 	const char *const *cmdargv;
+	const char *const *cmdenvp;
 
 	/* only used by write */
 	pid_t cmd_pid;
@@ -81,11 +83,11 @@ typedef struct lvmpolld_lv {
 /* LVMPOLLD_LV_T section */
 
 /* only call with appropriate lvmpolld_store_t lock held */
-lvmpolld_lv_t *pdlv_create(struct lvmpolld_state *ls, const char *lvid,
-			   const char *lvname, const enum poll_type type,
+lvmpolld_lv_t *pdlv_create(lvmpolld_state_t *ls, const char *id,
+			   const char *vgname, const char *lvname,
+			   const char *sysdir, enum poll_type type,
 			   const char *sinterval, unsigned pdtimeout,
-			   lvmpolld_store_t *pdst,
-			   lvmpolld_parse_output_fn_t parse_fn);
+			   lvmpolld_store_t *pdst);
 
 /* only call with appropriate lvmpolld_store_t lock held */
 void pdlv_destroy(lvmpolld_lv_t *pdlv);

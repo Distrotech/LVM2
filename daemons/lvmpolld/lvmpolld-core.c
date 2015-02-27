@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2014 Red Hat, Inc.
+ * Copyright (C) 2015 Red Hat, Inc.
  *
  * This file is part of LVM2.
  *
@@ -23,12 +23,13 @@
 #include <wait.h>
 #include <sys/types.h>
 
+#include "config-util.h"
 #include "configure.h"
 #include "daemon-server.h"
 #include "daemon-log.h"
-#include "config-util.h"
-#include "lvmpolld-protocol.h"
+#include "lvmpolld-cmd-utils.h"
 #include "lvmpolld-data-utils.h"
+#include "lvmpolld-protocol.h"
 #include "lvm-version.h"  /* ??? */
 
 #define LVMPOLLD_SOCKET DEFAULT_RUN_DIR "/lvmpolld.socket"
@@ -42,7 +43,6 @@
  */
 
 /* extract this info from autoconf/automake files */
-#define LVPOLL_CMD "lvpoll"
 #define LVM2_BIN_PATH "/usr/sbin/lvm"
 
 /* predefined reason for response = "failed" case */
@@ -62,14 +62,9 @@ typedef struct lvmpolld_state {
 	const char *log_config;
 	const char *lvm_binary;
 
-	lvmpolld_store_t lvid_to_pdlv_abort;
-	lvmpolld_store_t lvid_to_pdlv_poll;
+	lvmpolld_store_t id_to_pdlv_abort;
+	lvmpolld_store_t id_to_pdlv_poll;
 } lvmpolld_state_t;
-
-static const char *const const polling_ops[] = { [PVMOVE] = LVMPD_REQ_PVMOVE,
-						 [CONVERT] = LVMPD_REQ_CONVERT,
-						 [MERGE] = LVMPD_REQ_MERGE,
-						 [MERGE_THIN] = LVMPD_REQ_MERGE_THIN };
 
 static void usage(const char *prog, FILE *file)
 {
@@ -94,8 +89,8 @@ static int init(struct daemon_state *s)
 	if (!daemon_log_parse(ls->log, DAEMON_LOG_OUTLET_STDERR, ls->log_config, 1))
 		return 0;
 
-	pdst_init(&ls->lvid_to_pdlv_poll, "polling");
-	pdst_init(&ls->lvid_to_pdlv_abort, "abort");
+	pdst_init(&ls->id_to_pdlv_poll, "polling");
+	pdst_init(&ls->id_to_pdlv_abort, "abort");
 
 	DEBUGLOG(ls, "%s: LVM_SYSTEM_DIR=%s", PD_LOG_PREFIX, getenv("LVM_SYSTEM_DIR") ?: "<not set>");
 
@@ -113,8 +108,8 @@ static int fini(struct daemon_state *s)
 {
 	lvmpolld_state_t *ls = s->private;
 
-	pdst_destroy(&ls->lvid_to_pdlv_poll);
-	pdst_destroy(&ls->lvid_to_pdlv_abort);
+	pdst_destroy(&ls->id_to_pdlv_poll);
+	pdst_destroy(&ls->id_to_pdlv_abort);
 
 	return 1;
 }
@@ -139,14 +134,14 @@ static void update_active_state(lvmpolld_state_t *ls)
 	if (!ls->idle)
 		return;
 
-	pdst_lock(&ls->lvid_to_pdlv_poll);
-	pdst_lock(&ls->lvid_to_pdlv_abort);
+	pdst_lock(&ls->id_to_pdlv_poll);
+	pdst_lock(&ls->id_to_pdlv_abort);
 
-	ls->idle->is_idle = !ls->lvid_to_pdlv_poll.active_polling_count &&
-			    !ls->lvid_to_pdlv_abort.active_polling_count;
+	ls->idle->is_idle = !ls->id_to_pdlv_poll.active_polling_count &&
+			    !ls->id_to_pdlv_abort.active_polling_count;
 
-	pdst_unlock(&ls->lvid_to_pdlv_abort);
-	pdst_unlock(&ls->lvid_to_pdlv_poll);
+	pdst_unlock(&ls->id_to_pdlv_abort);
+	pdst_unlock(&ls->id_to_pdlv_poll);
 }
 
 /* make this configurable */
@@ -206,9 +201,6 @@ static int poll_for_output(lvmpolld_lv_t *pdlv, int outfd, int errfd)
 			assert(read_single_line(&line, &lsize, fout)); /* may block indef. anyway */
 			INFO(pdlv->ls, "%s: PID %d: %s: '%s'", LVM2_LOG_PREFIX,
 			     pdlv->cmd_pid, "STDOUT", line);
-
-			if (pdlv->parse_output_fn)
-				pdlv->parse_output_fn(pdlv, line);
 		} else if (fds[0].revents) {
 			if (fds[0].revents & POLLHUP)
 				DEBUGLOG(pdlv->ls, "%s: %s", PD_LOG_PREFIX, "caught POLLHUP");
@@ -263,8 +255,6 @@ static int poll_for_output(lvmpolld_lv_t *pdlv, int outfd, int errfd)
 		while (read_single_line(&line, &lsize, fout)) {
 			assert(r > 0);
 			INFO(pdlv->ls, "%s: PID %d: %s: %s", LVM2_LOG_PREFIX, pdlv->cmd_pid, "STDOUT", line);
-			if (pdlv->parse_output_fn)
-				pdlv->parse_output_fn(pdlv, line);
 		}
 	if (fds[1].fd >= 0)
 		while (read_single_line(&line, &lsize, ferr)) {
@@ -297,87 +287,24 @@ out:
 	return err;
 }
 
-#define MIN_SIZE 16
-
-static int add_to_cmdargv(const char ***cmdargv, const char *str, int *index, int renameme)
+static void debug_print(lvmpolld_state_t *ls, const char * const* ptr)
 {
-	const char **newargv = *cmdargv;
+	const char * const* tmp = ptr;
 
-	if (*index && !(*index % renameme)) {
-		newargv = dm_realloc(*cmdargv, (*index / renameme + 1) * renameme * sizeof(char *));
-		if (!newargv)
-			return 0;
-		*cmdargv = newargv;
+	if (!tmp)
+		return;
+
+	while (*tmp) {
+		DEBUGLOG(ls, "%s: %s", PD_LOG_PREFIX, *tmp);
+		tmp++;
 	}
-
-	*(*cmdargv + (*index)++) = str;
-
-	return 1;
-}
-
-static const char **cmdargv_ctr(lvmpolld_lv_t *pdlv, unsigned abort, unsigned handle_missing_pvs)
-{
-	int i = 0;
-	const char **cmd_argv = dm_malloc(MIN_SIZE * sizeof(char *));
-
-	if (!cmd_argv) {
-		ERROR(pdlv->ls, "%s: %s", PD_LOG_PREFIX, "construct_cmdargv: malloc failed");
-		return NULL;
-	}
-
-	/* path to lvm2 binary */
-	if (!add_to_cmdargv(&cmd_argv, pdlv->ls->lvm_binary, &i, MIN_SIZE))
-		goto err;
-
-	/* cmd to execute */
-	if (!add_to_cmdargv(&cmd_argv, LVPOLL_CMD, &i, MIN_SIZE))
-		goto err;
-
-	/* by default run under global filter */
-	if (!add_to_cmdargv(&cmd_argv, "--config", &i, MIN_SIZE) ||
-	    !add_to_cmdargv(&cmd_argv, "devices { filter = [ \"a/.*/\" ] }", &i, MIN_SIZE))
-		goto err;
-
-	/* transfer internal polling interval */
-	if (pdlv->sinterval &&
-	    (!add_to_cmdargv(&cmd_argv, "--interval", &i, MIN_SIZE) ||
-	     !add_to_cmdargv(&cmd_argv, pdlv->sinterval, &i, MIN_SIZE)))
-		goto err;
-
-	/* pass abort param */
-	if (abort &&
-	    !add_to_cmdargv(&cmd_argv, "--abort", &i, MIN_SIZE))
-		goto err;
-
-	/* pass handle-missing-pvs. used by mirror polling operation */
-	if (handle_missing_pvs &&
-	    !add_to_cmdargv(&cmd_argv, "--handle-missing-pvs", &i, MIN_SIZE))
-		goto err;
-
-	/* one of: "convert", "pvmove", "merge", "merge_thin" */
-	if (!add_to_cmdargv(&cmd_argv, "--poll-operation", &i, MIN_SIZE) ||
-	    !add_to_cmdargv(&cmd_argv, polling_ops[pdlv->type], &i, MIN_SIZE))
-		goto err;
-
-	/* vg/lv name */
-	if (!add_to_cmdargv(&cmd_argv, pdlv->lvname, &i, MIN_SIZE))
-		goto err;
-
-	/* terminating NULL */
-	if (!add_to_cmdargv(&cmd_argv, NULL, &i, MIN_SIZE))
-		goto err;
-
-	return cmd_argv;
-err:
-	ERROR(pdlv->ls, "%s: %s", PD_LOG_PREFIX, "construct_cmdargv: realloc failed");
-	dm_free(cmd_argv);
-	return NULL;
 }
 
 static void *fork_and_poll(void *args)
 {
 	lvmpolld_store_t *pdst;
 	pid_t r;
+	char buf[128];
 	int error = 1;
 
 	lvmpolld_lv_t *pdlv = (lvmpolld_lv_t *) args;
@@ -401,6 +328,14 @@ static void *fork_and_poll(void *args)
 	if (fcntl(errpipe[1], F_SETFD, FD_CLOEXEC))
 		WARN(ls, "%s: %s", PD_LOG_PREFIX, "failed to set FD_CLOEXEC on write end of err pipe");
 
+	DEBUGLOG(ls, "%s: %s", PD_LOG_PREFIX, "cmd line arguments:");
+	debug_print(ls, pdlv->cmdargv);
+	DEBUGLOG(ls, "%s: %s", PD_LOG_PREFIX, "---end---");
+
+	DEBUGLOG(ls, "%s: %s", PD_LOG_PREFIX, "cmd environment variables:");
+	debug_print(ls, pdlv->cmdenvp);
+	DEBUGLOG(ls, "%s: %s", PD_LOG_PREFIX, "---end---");
+
 	r = fork();
 	if (!r) {
 		/* child */
@@ -410,7 +345,12 @@ static void *fork_and_poll(void *args)
 		    (dup2(errpipe[1], STDERR_FILENO ) != STDERR_FILENO))
 			_exit(100);
 
-		execv(*(pdlv->cmdargv), (char *const *)pdlv->cmdargv);
+		execve(*(pdlv->cmdargv), (char *const *)pdlv->cmdargv, (char *const *)pdlv->cmdenvp);
+
+		/* FIXME: This is illegal remove it (thread aware syscall) */
+		strerror_r(errno, buf, sizeof(buf));
+
+		ERROR(ls, "%s: %s: %s", PD_LOG_PREFIX, "Failed to exec command", buf);
 
 		_exit(101);
 	} else {
@@ -481,24 +421,56 @@ err:
 	return NULL;
 }
 
+static char *construct_id(const char *sysdir, const char *uuid)
+{
+	char *id;
+	int r;
+	size_t l;
+
+	l = strlen(uuid) + (sysdir ? strlen(sysdir) : 0) + 1;
+	id = (char *) dm_malloc(l * sizeof(char));
+	if (!id)
+		return NULL;
+
+	r = sysdir ? dm_snprintf(id, l, "%s%s", sysdir, uuid) :
+		     dm_snprintf(id, l, "%s", uuid);
+
+	if (!r) {
+		dm_free(id);
+		id = NULL;
+	}
+
+	return id;
+}
+
 static response progress_info(client_handle h, lvmpolld_state_t *ls, request req)
 {
+	char *id;
 	lvmpolld_lv_t *pdlv;
 	lvmpolld_store_t *pdst;
 	lvmpolld_lv_state_t st;
 	response r;
 	const char *lvid = daemon_request_str(req, LVMPD_PARM_LVID, NULL);
+	const char *sysdir = daemon_request_str(req, LVMPD_PARM_SYSDIR, NULL);
 	unsigned abort = daemon_request_int(req, LVMPD_PARM_ABORT, 0);
 
 	if (!lvid)
 		return reply_fail(REASON_MISSING_LVID);
 
-	pdst = abort ? &ls->lvid_to_pdlv_abort : &ls->lvid_to_pdlv_poll;
+	id = construct_id(sysdir, lvid);
+	if (!id) {
+		ERROR(ls, "%s: %s", PD_LOG_PREFIX, "failed to construct id");
+		return reply_fail(REASON_INTERNAL_ERROR);
+	}
+
+	DEBUGLOG(ls, "%s: %s: %s", PD_LOG_PREFIX, "ID", id);
+
+	pdst = abort ? &ls->id_to_pdlv_abort : &ls->id_to_pdlv_poll;
 
 	pdst_lock(pdst);
 	/* store locked */
 
-	pdlv = pdst_locked_lookup(pdst, lvid);
+	pdlv = pdst_locked_lookup(pdst, id);
 	if (pdlv) {
 		/*
 		 * with store lock held, I'm the only reader accessing the pdlv
@@ -509,7 +481,7 @@ static response progress_info(client_handle h, lvmpolld_state_t *ls, request req
 			INFO(ls, "%s: %s %s", PD_LOG_PREFIX,
 			     "Polling finished. Removing related data structure for LV",
 			     lvid);
-			pdst_locked_remove(pdst, lvid);
+			pdst_locked_remove(pdst, id);
 			pdlv_destroy(pdlv);
 		}
 	}
@@ -517,6 +489,8 @@ static response progress_info(client_handle h, lvmpolld_state_t *ls, request req
 
 	pdst_unlock(pdst);
 	/* store unlocked */
+
+	dm_free(id);
 
 	if (pdlv) {
 		if (st.internal_error)
@@ -539,30 +513,39 @@ static response progress_info(client_handle h, lvmpolld_state_t *ls, request req
 
 static lvmpolld_lv_t *construct_pdlv(request req, lvmpolld_state_t *ls,
 				     lvmpolld_store_t *pdst,
-				     const char *interval, const char *lvid,
-				     const char *lvname, enum poll_type type,
+				     const char *interval, const char *id,
+				     const char *vgname, const char *lvname,
+				     const char *sysdir, enum poll_type type,
 				     unsigned abort, unsigned uinterval)
 {
-	const char **cmdargv;
+	const char **cmdargv, **cmdenvp;
 	lvmpolld_lv_t *pdlv;
 	unsigned handle_missing_pvs = daemon_request_int(req, LVMPD_PARM_HANDLE_MISSING_PVS, 0);
 
-	pdlv = pdlv_create(ls, lvid, lvname, type, interval, 2 * uinterval,
-			   pdst, NULL);
+	pdlv = pdlv_create(ls, id, vgname, lvname, sysdir, type,
+			   interval, 2 * uinterval, pdst);
 
 	if (!pdlv) {
 		ERROR(ls, "%s: %s", PD_LOG_PREFIX, "Failed to create pdlv");
 		return NULL;
 	}
 
-	cmdargv = cmdargv_ctr(pdlv, abort, handle_missing_pvs);
+	cmdargv = cmdargv_ctr(pdlv, pdlv->ls->lvm_binary, abort, handle_missing_pvs);
 	if (!cmdargv) {
 		pdlv_destroy(pdlv);
 		ERROR(ls, "%s: %s", PD_LOG_PREFIX, "failed to construct cmd arguments for lvpoll command");
 		return NULL;
 	}
 
+	cmdenvp = cmdenvp_ctr(pdlv);
+	if (!cmdenvp) {
+		pdlv_destroy(pdlv);
+		ERROR(ls, "%s: %s", PD_LOG_PREFIX, "failed to construct cmd environment for lvpoll command");
+		return NULL;
+	}
+
 	pdlv->cmdargv = cmdargv;
+	pdlv->cmdenvp = cmdenvp;
 
 	return pdlv;
 }
@@ -584,16 +567,16 @@ static int spawn_detached_thread(lvmpolld_lv_t *pdlv)
 
 static response poll_init(client_handle h, lvmpolld_state_t *ls, request req, enum poll_type type)
 {
-	char *full_lvname;
+	char *id;
 	lvmpolld_lv_t *pdlv;
 	lvmpolld_store_t *pdst;
-	size_t len;
 	unsigned uinterval;
 
 	const char *interval = daemon_request_str(req, LVMPD_PARM_INTERVAL, NULL);
 	const char *lvid = daemon_request_str(req, LVMPD_PARM_LVID, NULL);
 	const char *lvname = daemon_request_str(req, LVMPD_PARM_LVNAME, NULL);
 	const char *vgname = daemon_request_str(req, LVMPD_PARM_VGNAME, NULL);
+	const char *sysdir = daemon_request_str(req, LVMPD_PARM_SYSDIR, NULL);
 	unsigned abort = daemon_request_int(req, LVMPD_PARM_ABORT, 0);
 
 	assert(type < POLL_TYPE_MAX);
@@ -613,19 +596,19 @@ static response poll_init(client_handle h, lvmpolld_state_t *ls, request req, en
 	if (!vgname)
 		return reply_fail(REASON_MISSING_VGNAME);
 
-	len = strlen(lvname) + strlen(vgname) + 2; /* vg/lv and \0 */
-	full_lvname = dm_malloc(len);
-	if (!full_lvname || dm_snprintf(full_lvname, len, "%s/%s", vgname, lvname) < 0) {
-		ERROR(ls, "%s: %s", PD_LOG_PREFIX, "Failed to clone vg/lv name");
-		dm_free(full_lvname);
+	id = construct_id(sysdir, lvid);
+	if (!id) {
+		ERROR(ls, "%s: %s", PD_LOG_PREFIX, "failed to construct id");
 		return reply_fail(REASON_INTERNAL_ERROR);
 	}
 
-	pdst = abort ? &ls->lvid_to_pdlv_abort : &ls->lvid_to_pdlv_poll;
+	DEBUGLOG(ls, "%s: %s=%s", PD_LOG_PREFIX, "ID", id);
+
+	pdst = abort ? &ls->id_to_pdlv_abort : &ls->id_to_pdlv_poll;
 
 	pdst_lock(pdst);
 
-	pdlv = pdst_locked_lookup(pdst, lvid);
+	pdlv = pdst_locked_lookup(pdst, id);
 	if (pdlv && pdlv_get_polling_finished(pdlv)) {
 		WARN(ls, "%s: %s %s", PD_LOG_PREFIX, "Force removal of uncollected info for LV",
 			 lvid);
@@ -634,7 +617,7 @@ static response poll_init(client_handle h, lvmpolld_state_t *ls, request req, en
 		 * otherwise it would have to refuse request for new polling
 		 * lv with same id.
 		 */
-		pdst_locked_remove(pdst, lvid);
+		pdst_locked_remove(pdst, id);
 		pdlv_destroy(pdlv);
 		pdlv = NULL;
 	}
@@ -642,29 +625,29 @@ static response poll_init(client_handle h, lvmpolld_state_t *ls, request req, en
 	if (pdlv) {
 		if (!pdlv_is_type(pdlv, type)) {
 			pdst_unlock(pdst);
-			dm_free(full_lvname);
+			dm_free(id);
 			return reply_fail(REASON_DIFFERENT_OPERATION_IN_PROGRESS);
 		}
 	} else {
-		pdlv = construct_pdlv(req, ls, pdst, interval, lvid, full_lvname,
-				      type, abort, uinterval);
+		pdlv = construct_pdlv(req, ls, pdst, interval, id, vgname,
+				      lvname, sysdir, type, abort, uinterval);
 		if (!pdlv) {
 			pdst_unlock(pdst);
-			dm_free(full_lvname);
+			dm_free(id);
 			return reply_fail(REASON_INTERNAL_ERROR);
 		}
-		if (!pdst_locked_insert(pdst, lvid, pdlv)) {
+		if (!pdst_locked_insert(pdst, id, pdlv)) {
 			pdlv_destroy(pdlv);
 			pdst_unlock(pdst);
-			dm_free(full_lvname);
+			dm_free(id);
 			return reply_fail(REASON_INTERNAL_ERROR);
 		}
 		if (!spawn_detached_thread(pdlv)) {
 			ERROR(ls, "%s: %s", PD_LOG_PREFIX, "failed to spawn detached thread");
-			pdst_locked_remove(pdst, lvid);
+			pdst_locked_remove(pdst, id);
 			pdlv_destroy(pdlv);
 			pdst_unlock(pdst);
-			dm_free(full_lvname);
+			dm_free(id);
 			return reply_fail(REASON_INTERNAL_ERROR);
 		}
 
@@ -675,11 +658,10 @@ static response poll_init(client_handle h, lvmpolld_state_t *ls, request req, en
 
 	pdst_unlock(pdst);
 
-	dm_free(full_lvname);
+	dm_free(id);
 
 	return daemon_reply_simple(LVMPD_RESP_OK, NULL);
 }
-
 
 static response handler(struct daemon_state s, client_handle h, request r)
 {

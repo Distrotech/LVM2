@@ -15,30 +15,77 @@
 #include "libdevmapper.h"
 #include "lvmpolld-data-utils.h"
 
-lvmpolld_lv_t *pdlv_create(lvmpolld_state_t *ls, const char *lvid,
-			   const char *lvname, enum poll_type type,
-			   const char *sinterval, unsigned pdtimeout,
-			   lvmpolld_store_t *pdst,
-			   lvmpolld_parse_output_fn_t parse_fn)
+static char *_construct_full_lvname(const char *vgname, const char *lvname)
 {
+	char *name;
+	size_t l;
+
+	l = strlen(vgname) + strlen(lvname) + 2; /* vg/lv and \0 */
+	name = (char *) dm_malloc(l * sizeof(char));
+	if (!name)
+		return NULL;
+
+	if (dm_snprintf(name, l, "%s/%s", vgname, lvname) < 0) {
+		dm_free(name);
+		name = NULL;
+	}
+
+	return name;
+}
+
+static char *_construct_lvm_system_dir_env(const char *sysdir)
+{
+	/*
+	 *  Store either "LVM_SYSTEM_DIR=/path/to..."
+	 *		    - or -
+	 *  just single char to store NULL byte
+	 */
+	size_t l = sysdir ? strlen(sysdir) + 16 : 1;
+	char *env = (char *) dm_malloc(l * sizeof(char));
+
+	if (!env)
+		return NULL;
+
+	*env = '\0';
+
+	if (sysdir && dm_snprintf(env, l, "LVM_SYSTEM_DIR=%s", sysdir) < 0) {
+		dm_free(env);
+		env = NULL;
+	}
+
+	return env;
+}
+
+static inline const char *_get_lvid(const char *lvmpolld_id, const char *sysdir)
+{
+	return lvmpolld_id ? (lvmpolld_id + (sysdir ? strlen(sysdir) : 0)) : NULL;
+}
+
+lvmpolld_lv_t *pdlv_create(lvmpolld_state_t *ls, const char *id,
+			   const char *vgname, const char *lvname,
+			   const char *sysdir, enum poll_type type,
+			   const char *sinterval, unsigned pdtimeout,
+			   lvmpolld_store_t *pdst)
+{
+	char *lvmpolld_id = dm_strdup(id), /* copy */
+	     *full_lvname = _construct_full_lvname(vgname, lvname), /* copy */
+	     *lvm_system_dir_env = _construct_lvm_system_dir_env(sysdir); /* copy */
+
 	lvmpolld_lv_t tmp = {
 		.ls = ls,
 		.type = type,
-		.lvid = dm_strdup(lvid),
-		.lvname = dm_strdup(lvname),
-		.sinterval = dm_strdup(sinterval),
+		.lvmpolld_id = lvmpolld_id,
+		.lvid = _get_lvid(lvmpolld_id, sysdir),
+		.lvname = full_lvname,
+		.lvm_system_dir_env = lvm_system_dir_env,
+		.sinterval = dm_strdup(sinterval), /* copy */
 		.pdtimeout = pdtimeout ?: PDTIMEOUT_DEF,
 		.cmd_state = { .retcode = -1, .signal = 0 },
-		.pdst = pdst,
-		.parse_output_fn = parse_fn
+		.pdst = pdst
 	}, *pdlv = (lvmpolld_lv_t *) dm_malloc(sizeof(lvmpolld_lv_t));
 
-	if (!pdlv || !tmp.lvid || !tmp.lvname || !tmp.sinterval) {
-		dm_free((void *)tmp.lvid);
-		dm_free((void *)tmp.lvname);
-		dm_free((void *)tmp.sinterval);
-		return NULL;
-	}
+	if (!pdlv || !tmp.lvid || !tmp.lvname || !tmp.lvm_system_dir_env || !tmp.sinterval)
+		goto err;
 
 	memcpy(pdlv, &tmp, sizeof(*pdlv));
 
@@ -48,9 +95,10 @@ lvmpolld_lv_t *pdlv_create(lvmpolld_state_t *ls, const char *lvid,
 	return pdlv;
 
 err:
-	dm_free((void *)pdlv->sinterval);
-	dm_free((void *)pdlv->lvid);
-	dm_free((void *)pdlv->lvname);
+	dm_free((void *)lvmpolld_id);
+	dm_free((void *)full_lvname);
+	dm_free((void *)lvm_system_dir_env);
+	dm_free((void *)tmp.sinterval);
 	dm_free((void *)pdlv);
 
 	return NULL;
@@ -58,10 +106,12 @@ err:
 
 void pdlv_destroy(lvmpolld_lv_t *pdlv)
 {
-	dm_free((void *)pdlv->lvid);
+	dm_free((void *)pdlv->lvmpolld_id);
 	dm_free((void *)pdlv->lvname);
 	dm_free((void *)pdlv->sinterval);
+	dm_free((void *)pdlv->lvm_system_dir_env);
 	dm_free((void *)pdlv->cmdargv);
+	dm_free((void *)pdlv->cmdenvp);
 
 	pthread_mutex_destroy(&pdlv->lock);
 
