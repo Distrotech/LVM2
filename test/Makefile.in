@@ -138,11 +138,19 @@ check_lvmetad: .tests-stamp
 		--flavours ndev-lvmetad --only $(T) --skip $(S)
 endif
 
+ifeq ("@BUILD_LVMPOLLD@", "yes")
+check_lvmpolld: .tests-stamp
+	VERBOSE=$(VERBOSE) ./lib/runner \
+		--testdir . --outdir results \
+		--flavours udev-lvmpolld --only $(T) --skip $(S)
+endif
+
 DATADIR = $(datadir)/lvm2-testsuite
 EXECDIR = $(libexecdir)/lvm2-testsuite
 
 LIB_FLAVOURS = lib/flavour-ndev-vanilla lib/flavour-ndev-cluster lib/flavour-ndev-lvmetad \
-               lib/flavour-udev-vanilla lib/flavour-udev-cluster lib/flavour-udev-lvmetad
+               lib/flavour-udev-vanilla lib/flavour-udev-cluster lib/flavour-udev-lvmetad \
+	       lib/flavour-udev-lvmpolld
 
 LIB_LOCAL = lib/paths lib/runner
 LIB_EXEC  = lib/not lib/invalid lib/fail lib/should
