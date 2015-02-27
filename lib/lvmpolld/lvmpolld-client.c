@@ -13,6 +13,7 @@
  */
 
 #include <assert.h>
+#include <stdlib.h>
 
 #include "lib.h"
 #include "lvmpolld-client.h"
@@ -26,7 +27,6 @@ struct progress_info {
 	unsigned finished:1;
 	int cmd_signal;
 	int cmd_retcode;
-	dm_percent_t percents;
 };
 
 static int _lvmpolld_use;
@@ -81,6 +81,7 @@ void lvmpolld_disconnect(void)
 static struct progress_info _request_progress_info(const char *uuid, unsigned abort)
 {
 	daemon_reply repl;
+	const char *e = getenv("LVM_SYSTEM_DIR");
 	struct progress_info ret = { .error = 1, .finished = 1 };
 	daemon_request req = daemon_request_make(LVMPD_REQ_PROGRESS);
 
@@ -94,6 +95,13 @@ static struct progress_info _request_progress_info(const char *uuid, unsigned ab
 		goto out_req;
 	}
 
+	if (e &&
+	    !(daemon_request_extend(req, LVMPD_PARM_SYSDIR " = %s",
+				    e, NULL))) {
+		log_error("failed to create " LVMPD_REQ_PROGRESS " request");
+		goto out_req;
+	}
+
 	repl = daemon_send(_lvmpolld, req);
 	if (repl.error) {
 		log_error("failed to process request/response to/from lvmpolld");
@@ -101,11 +109,9 @@ static struct progress_info _request_progress_info(const char *uuid, unsigned ab
 	}
 
 	if (!strcmp(daemon_reply_str(repl, "response", ""), LVMPD_RESP_IN_PROGRESS)) {
-		ret.percents = (dm_percent_t) daemon_reply_int(repl, "data", 0);
 		ret.finished = 0;
 		ret.error = 0;
 	} else if (!strcmp(daemon_reply_str(repl, "response", ""), LVMPD_RESP_FINISHED)) {
-		ret.percents = (dm_percent_t) daemon_reply_int(repl, LVMPD_PARM_DATA, 0);
 		if (!strcmp(daemon_reply_str(repl, "reason", ""), LVMPD_REAS_SIGNAL))
 			ret.cmd_signal = daemon_reply_int(repl, LVMPD_PARM_VALUE, 0);
 		else
@@ -142,6 +148,7 @@ static int _process_poll_init(const struct cmd_context *cmd, const char *poll_ty
 	char *str;
 	daemon_reply rep;
 	daemon_request req;
+	const char *e = getenv("LVM_SYSTEM_DIR");
 	int r = 0; 
 
 	str = dm_malloc(INTERV_SIZE * sizeof(char));
@@ -173,6 +180,13 @@ static int _process_poll_init(const struct cmd_context *cmd, const char *poll_ty
 	if (cmd->handles_missing_pvs &&
 	    !(daemon_request_extend(req, LVMPD_PARM_HANDLE_MISSING_PVS " = %d",
 				    cmd->handles_missing_pvs, NULL))) {
+		log_error("failed to create %s request" , poll_type);
+		goto out_req;
+	}
+
+	if (e &&
+	    !(daemon_request_extend(req, LVMPD_PARM_SYSDIR " = %s",
+				    e, NULL))) {
 		log_error("failed to create %s request" , poll_type);
 		goto out_req;
 	}
