@@ -80,6 +80,8 @@ typedef struct lvmpolld_lv {
 	unsigned internal_error:1; /* unrecoverable error occured in lvmpolld */
 } lvmpolld_lv_t;
 
+char *construct_id(const char *sysdir, const char *lvid);
+
 /* LVMPOLLD_LV_T section */
 
 /* only call with appropriate lvmpolld_store_t lock held */

@@ -421,28 +421,6 @@ err:
 	return NULL;
 }
 
-static char *construct_id(const char *sysdir, const char *uuid)
-{
-	char *id;
-	int r;
-	size_t l;
-
-	l = strlen(uuid) + (sysdir ? strlen(sysdir) : 0) + 1;
-	id = (char *) dm_malloc(l * sizeof(char));
-	if (!id)
-		return NULL;
-
-	r = sysdir ? dm_snprintf(id, l, "%s%s", sysdir, uuid) :
-		     dm_snprintf(id, l, "%s", uuid);
-
-	if (!r) {
-		dm_free(id);
-		id = NULL;
-	}
-
-	return id;
-}
-
 static response progress_info(client_handle h, lvmpolld_state_t *ls, request req)
 {
 	char *id;

@@ -61,6 +61,28 @@ static inline const char *_get_lvid(const char *lvmpolld_id, const char *sysdir)
 	return lvmpolld_id ? (lvmpolld_id + (sysdir ? strlen(sysdir) : 0)) : NULL;
 }
 
+char *construct_id(const char *sysdir, const char *uuid)
+{
+	char *id;
+	int r;
+	size_t l;
+
+	l = strlen(uuid) + (sysdir ? strlen(sysdir) : 0) + 1;
+	id = (char *) dm_malloc(l * sizeof(char));
+	if (!id)
+		return NULL;
+
+	r = sysdir ? dm_snprintf(id, l, "%s%s", sysdir, uuid) :
+		     dm_snprintf(id, l, "%s", uuid);
+
+	if (r < 0) {
+		dm_free(id);
+		id = NULL;
+	}
+
+	return id;
+}
+
 lvmpolld_lv_t *pdlv_create(lvmpolld_state_t *ls, const char *id,
 			   const char *vgname, const char *lvname,
 			   const char *sysdir, enum poll_type type,
