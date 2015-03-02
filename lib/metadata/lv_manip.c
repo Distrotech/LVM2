@@ -4442,9 +4442,7 @@ static int _lvresize_check_lv(struct cmd_context *cmd, struct logical_volume *lv
 		return 0;
 	}
 
-	/* FIXME: use a status flag instead of the name "lvmlock". */
-
-	if (!lv_is_visible(lv) && !lv_is_thin_pool_metadata(lv) && strcmp(lv->name, "lvmlock")) {
+	if (!lv_is_visible(lv) && !lv_is_thin_pool_metadata(lv) && !lv_is_lvmlock(lv)) {
 		log_error("Can't resize internal logical volume %s", lv->name);
 		return 0;
 	}

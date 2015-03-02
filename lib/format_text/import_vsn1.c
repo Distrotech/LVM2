@@ -550,6 +550,16 @@ static int _read_lvnames(struct format_instance *fid __attribute__((unused)),
 		return 0;
 	}
 
+	/*
+	 * When lockd VGs and LVs are written to disk, WRITE is replaced with
+	 * WRITE_LOCKD so old versions of lvm will not be able to write them.
+	 * When imported, WRITE_LOCKD is replaced with WRITE.
+	 */
+	if (lv->status & LVM_WRITE_LOCKD) {
+		lv->status &= ~LVM_WRITE_LOCKD;
+		lv->status |= LVM_WRITE;
+	}
+
 	if (dm_config_has_node(lvn, "creation_time")) {
 		if (!_read_uint64(lvn, "creation_time", &timestamp)) {
 			log_error("Invalid creation_time for logical volume %s.",
@@ -641,6 +651,9 @@ static int _read_lvnames(struct format_instance *fid __attribute__((unused)),
 		lv->status |= POOL_METADATA_SPARE;
 		vg->pool_metadata_spare_lv = lv;
 	}
+
+	if (!lv_is_visible(lv) && !strcmp(lv->name, "lvmlock"))
+		lv->status |= LVMLOCK;
 
 	return 1;
 }
@@ -813,6 +826,16 @@ static struct volume_group *_read_vg(struct format_instance *fid,
 		log_error("Error reading flags of volume group %s.",
 			  vg->name);
 		goto bad;
+	}
+
+	/*
+	 * When lockd VGs and LVs are written to disk, WRITE is replaced with
+	 * WRITE_LOCKD so old versions of lvm will not be able to write them.
+	 * When imported, WRITE_LOCKD is replaced with WRITE.
+	 */
+	if (vg->status & LVM_WRITE_LOCKD) {
+		vg->status &= ~LVM_WRITE_LOCKD;
+		vg->status |= LVM_WRITE;
 	}
 
 	if (!_read_int32(vgn, "extent_size", &vg->extent_size)) {

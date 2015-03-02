@@ -162,7 +162,8 @@ static const char *_lvname_has_reserved_string(const char *lvname)
 		"_rmeta",
 		"_tdata",
 		"_tmeta",
-		"_vorigin"
+		"_vorigin",
+		"lvmlock"
 	};
 	unsigned i;
 

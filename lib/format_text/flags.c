@@ -34,8 +34,8 @@ static const struct flag _vg_flags[] = {
 	{PVMOVE, "PVMOVE", STATUS_FLAG},
 	{LVM_READ, "READ", STATUS_FLAG},
 	{LVM_WRITE, "WRITE", STATUS_FLAG},
+	{LVM_WRITE_LOCKD, "WRITE_LOCKD", COMPATIBLE_FLAG},
 	{CLUSTERED, "CLUSTERED", STATUS_FLAG},
-	{LOCK_TYPE, "LOCK_TYPE", STATUS_FLAG},
 	{SHARED, "SHARED", STATUS_FLAG},
 	{PARTIAL_VG, NULL, 0},
 	{PRECOMMITTED, NULL, 0},
@@ -54,6 +54,7 @@ static const struct flag _pv_flags[] = {
 static const struct flag _lv_flags[] = {
 	{LVM_READ, "READ", STATUS_FLAG},
 	{LVM_WRITE, "WRITE", STATUS_FLAG},
+	{LVM_WRITE_LOCKD, "WRITE_LOCKD", COMPATIBLE_FLAG},
 	{FIXED_MINOR, "FIXED_MINOR", STATUS_FLAG},
 	{VISIBLE_LV, "VISIBLE", STATUS_FLAG},
 	{PVMOVE, "PVMOVE", STATUS_FLAG},
@@ -91,6 +92,7 @@ static const struct flag _lv_flags[] = {
 	{CACHE_POOL_DATA, NULL, 0},
 	{CACHE_POOL_METADATA, NULL, 0},
 	{LV_PENDING_DELETE, NULL, 0}, /* FIXME Display like COMPATIBLE_FLAG */
+	{LVMLOCK, NULL, 0},
 	{0, NULL, 0}
 };
 
