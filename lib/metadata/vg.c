@@ -641,9 +641,6 @@ int vg_set_lock_type(struct volume_group *vg, const char *lock_type)
 		return 0;
 	}
 
-	if (is_lockd_type(lock_type))
-		vg->status |= LOCK_TYPE;
-
 	return 1;
 }
 

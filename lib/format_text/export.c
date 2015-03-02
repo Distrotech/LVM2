@@ -22,6 +22,7 @@
 #include "text_export.h"
 #include "lvm-version.h"
 #include "toolcontext.h"
+#include "lvmlockd.h"
 
 #include <stdarg.h>
 #include <time.h>
@@ -404,8 +405,23 @@ static int _print_vg(struct formatter *f, struct volume_group *vg)
 	if (vg->fid && vg->fid->fmt)
 		outfc(f, "# informational", "format = \"%s\"", vg->fid->fmt->name);
 
+	/*
+	 * When lockd VGs and LVs are written to disk, WRITE is replaced with
+	 * WRITE_LOCKD so old versions of lvm will not be able to write them.
+	 * When imported, WRITE_LOCKD is replaced with WRITE.
+	 */
+	if ((vg->status & LVM_WRITE) && is_lockd_type(vg->lock_type)) {
+		vg->status &= ~LVM_WRITE;
+		vg->status |= LVM_WRITE_LOCKD;
+	}
+
 	if (!_print_flag_config(f, vg->status, VG_FLAGS))
 		return_0;
+
+	if (vg->status & LVM_WRITE_LOCKD) {
+		vg->status |= LVM_WRITE;
+		vg->status &= ~LVM_WRITE_LOCKD;
+	}
 
 	if (!_out_tags(f, &vg->tags))
 		return_0;
@@ -614,8 +630,23 @@ static int _print_lv(struct formatter *f, struct logical_volume *lv)
 
 	outf(f, "id = \"%s\"", buffer);
 
+	/*
+	 * When lockd VGs and LVs are written to disk, WRITE is replaced with
+	 * WRITE_LOCKD so old versions of lvm will not be able to write them.
+	 * When imported, WRITE_LOCKD is replaced with WRITE.
+	 */
+	if ((lv->status & LVM_WRITE) && is_lockd_type(lv->vg->lock_type)) {
+		lv->status &= ~LVM_WRITE;
+		lv->status |= LVM_WRITE_LOCKD;
+	}
+
 	if (!_print_flag_config(f, lv->status, LV_FLAGS))
 		return_0;
+
+	if (lv->status & LVM_WRITE_LOCKD) {
+		lv->status |= LVM_WRITE;
+		lv->status &= ~LVM_WRITE_LOCKD;
+	}
 
 	if (!_out_tags(f, &lv->tags))
 		return_0;
