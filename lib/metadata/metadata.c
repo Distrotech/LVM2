@@ -1047,6 +1047,7 @@ struct volume_group *vg_create(struct cmd_context *cmd, const char *vg_name)
 		goto bad;
 	}
 
+	/* vg_set_lock_type() may clear LVM_WRITE and set LVM_WRITE_LOCKD */
 	vg->status = (RESIZEABLE_VG | LVM_READ | LVM_WRITE);
 	vg->system_id = NULL;
 	if (!(vg->lvm1_system_id = dm_pool_zalloc(vg->vgmem, NAME_LEN + 1)))
@@ -4288,8 +4289,8 @@ static uint32_t _vg_bad_status_bits(const struct volume_group *vg,
 		failure |= FAILED_EXPORTED;
 	}
 
-	if ((status & LVM_WRITE) &&
-	    !(vg->status & LVM_WRITE)) {
+	if ((status & (LVM_WRITE | LVM_WRITE_LOCKD)) &&
+	    (!(vg->status & (LVM_WRITE | LVM_WRITE_LOCKD)))) {
 		log_error("Volume group %s is read-only", vg->name);
 		failure |= FAILED_READ_ONLY;
 	}
@@ -4311,6 +4312,22 @@ static uint32_t _vg_bad_status_bits(const struct volume_group *vg,
 int vg_check_status(const struct volume_group *vg, uint64_t status)
 {
 	return !_vg_bad_status_bits(vg, status);
+}
+
+/*
+ * Return 1 if writeable.
+ * Return 0 if not writeable.
+ *
+ * The VG or LV is writable if either LVM_WRITE or LVM_WRITE_LOCKD are set.
+ */
+
+int vg_status_writable(const struct volume_group *vg)
+{
+	if (vg->status & LVM_WRITE)
+		return 1;
+	if (vg->status & LVM_WRITE_LOCKD)
+		return 1;
+	return 0;
 }
 
 /*
@@ -4542,8 +4559,10 @@ static struct volume_group *_vg_lock_and_read(struct cmd_context *cmd, const cha
 		return _vg_make_handle(cmd, vg, FAILED_LOCKING);
 	}
 
-	if (is_orphan_vg(vg_name))
+	if (is_orphan_vg(vg_name)) {
 		status_flags &= ~LVM_WRITE;
+		status_flags &= ~LVM_WRITE_LOCKD;
+	}
 
 	consistent_in = consistent;
 
@@ -4644,7 +4663,7 @@ struct volume_group *vg_read(struct cmd_context *cmd, const char *vg_name,
 	uint32_t lock_flags = LCK_VG_READ;
 
 	if (flags & READ_FOR_UPDATE) {
-		status |= EXPORTED_VG | LVM_WRITE;
+		status |= EXPORTED_VG | LVM_WRITE | LVM_WRITE_LOCKD;
 		lock_flags = LCK_VG_WRITE;
 	}
 

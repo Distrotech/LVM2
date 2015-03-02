@@ -885,7 +885,7 @@ static int _lvchange_single(struct cmd_context *cmd, struct logical_volume *lv,
 	struct logical_volume *origin;
 	char snaps_msg[128];
 
-	if (!(lv->vg->status & LVM_WRITE) &&
+	if (!vg_status_writable(lv->vg) &&
 	    (arg_count(cmd, contiguous_ARG) || arg_count(cmd, permission_ARG) ||
 	     arg_count(cmd, readahead_ARG) || arg_count(cmd, persistent_ARG) ||
 	     arg_count(cmd, discards_ARG) || arg_count(cmd, zero_ARG) ||

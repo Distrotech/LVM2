@@ -371,7 +371,8 @@ static int _create_sanlock_lv(struct cmd_context *cmd, struct volume_group *vg,
 		return 0;
 	}
 
-	lv_set_hidden(lv);
+	lv_set_hidden(lv);      /* FIXME: should this be done before vg is written? */
+	lv->status |= LVMLOCK;  /* flag not written to metadata */
 	return 1;
 }
 

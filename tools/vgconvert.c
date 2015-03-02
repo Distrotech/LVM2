@@ -30,7 +30,10 @@ static int vgconvert_single(struct cmd_context *cmd, const char *vg_name,
 	struct lvinfo info;
 	int active = 0;
 
-	if (!vg_check_status(vg, LVM_WRITE | EXPORTED_VG))
+	if (!vg_status_writable(vg))
+		return_ECMD_FAILED;
+
+	if (!vg_check_status(vg, EXPORTED_VG))
 		return_ECMD_FAILED;
 
 	if (vg->fid->fmt == cmd->fmt) {

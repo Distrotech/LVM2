@@ -550,6 +550,28 @@ static int _read_lvnames(struct format_instance *fid __attribute__((unused)),
 		return 0;
 	}
 
+	/*
+	 * A lockd VG is represented both on disk and in memory with
+	 * status WRITE_LOCKD.  A non-lockd VG is represented on disk
+	 * and in memory with status WRITE.
+	 *
+	 * An LV in a lockd VG is represented on disk with status WRITE_LOCKD,
+	 * BUT in memory with status WRITE.  So, when a lockd LV is written to
+	 * disk, WRITE is changed to WRITE_LOCKD, and when a lockd LV is read
+	 * from disk, WRITE_LOCKD is changed to WRITE.
+	 *
+	 * This is done to prevent pre-lockd versions of lvm from being able
+	 * to write to lockd LVs.  Old versions of lvm will not see WRITE on
+	 * disk for the LV, and think the LV is read only, and the old version
+	 * will not look for the WRITE_LOCKD flag.  New versions of lvm will
+	 * recognize either the WRITE or WRITE_LOCKD flag.
+	 */
+
+	if (lv->status & LVM_WRITE_LOCKD) {
+		lv->status &= ~LVM_WRITE_LOCKD;
+		lv->status |= LVM_WRITE;
+	}
+
 	if (dm_config_has_node(lvn, "creation_time")) {
 		if (!_read_uint64(lvn, "creation_time", &timestamp)) {
 			log_error("Invalid creation_time for logical volume %s.",
@@ -641,6 +663,9 @@ static int _read_lvnames(struct format_instance *fid __attribute__((unused)),
 		lv->status |= POOL_METADATA_SPARE;
 		vg->pool_metadata_spare_lv = lv;
 	}
+
+	if (!lv_is_visible(lv) && !strcmp(lv->name, "lvmlock"))
+		lv->status |= LVMLOCK;
 
 	return 1;
 }

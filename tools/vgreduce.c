@@ -127,7 +127,10 @@ static int _vgreduce_single(struct cmd_context *cmd, struct volume_group *vg,
 {
 	int r;
 
-	if (!vg_check_status(vg, EXPORTED_VG | LVM_WRITE | RESIZEABLE_VG))
+	if (!vg_status_writable(vg))
+		return_ECMD_FAILED;
+
+	if (!vg_check_status(vg, EXPORTED_VG | RESIZEABLE_VG))
 		return ECMD_FAILED;
 
 	r = vgreduce_single(cmd, vg, pv, 1);

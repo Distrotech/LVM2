@@ -61,7 +61,6 @@
 
 #define CLUSTERED		UINT64_C(0x0000000000000400)	/* VG */
 //#define SHARED		UINT64_C(0x0000000000000800)	/* VG */
-#define LOCK_TYPE		UINT64_C(0x0000000000001000)	/* VG */
 
 /* FIXME Remove when metadata restructuring is completed */
 #define SNAPSHOT		UINT64_C(0x0000000000001000)	/* LV - internal use only */
@@ -123,7 +122,9 @@
 #define PV_ALLOCATION_PROHIBITED	UINT64_C(0x0010000000000000)	/* PV - internal use only - allocation prohibited
 									e.g. to prohibit allocation of a RAID image
 									on a PV already holing an image of the RAID set */
-/* Next unused flag:		UINT64_C(0x0020000000000000)    */
+#define LVMLOCK			UINT64_C(0x0020000000000000)	/* LV - Internal use only */
+#define LVM_WRITE_LOCKD		UINT64_C(0x0040000000000000)	/* LV, VG */
+/* Next unused flag:		UINT64_C(0x0080000000000000)    */
 
 /* Format features flags */
 #define FMT_SEGMENTS		0x00000001U	/* Arbitrary segment params? */
@@ -219,6 +220,7 @@
 #define lv_is_pool_data(lv)		(((lv)->status & (CACHE_POOL_DATA | THIN_POOL_DATA)) ? 1 : 0)
 #define lv_is_pool_metadata(lv)		(((lv)->status & (CACHE_POOL_METADATA | THIN_POOL_METADATA)) ? 1 : 0)
 #define lv_is_pool_metadata_spare(lv)	(((lv)->status & POOL_METADATA_SPARE) ? 1 : 0)
+#define lv_is_lvmlock(lv)	(((lv)->status & LVMLOCK) ? 1 : 0)
 
 #define lv_is_rlog(lv)		(((lv)->status & REPLICATOR_LOG) ? 1 : 0)
 
@@ -1010,6 +1012,7 @@ int vg_add_snapshot(struct logical_volume *origin, struct logical_volume *cow,
 int vg_remove_snapshot(struct logical_volume *cow);
 
 int vg_check_status(const struct volume_group *vg, uint64_t status);
+int vg_status_writable(const struct volume_group *vg);
 
 int vg_check_pv_dev_block_sizes(const struct volume_group *vg);
 

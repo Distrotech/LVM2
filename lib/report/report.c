@@ -1424,8 +1424,8 @@ static int _vgpermissions_disp(struct dm_report *rh, struct dm_pool *mem,
 			       struct dm_report_field *field,
 			       const void *data, void *private)
 {
-	const char *perms = ((const struct volume_group *) data)->status & LVM_WRITE ? GET_FIRST_RESERVED_NAME(vg_permissions_rw)
-										     : GET_FIRST_RESERVED_NAME(vg_permissions_r);
+	const char *perms = ((const struct volume_group *) data)->status & (LVM_WRITE | LVM_WRITE_LOCKD) ? GET_FIRST_RESERVED_NAME(vg_permissions_rw)
+													 : GET_FIRST_RESERVED_NAME(vg_permissions_r);
 	return _string_disp(rh, mem, field, &perms, private);
 }
 

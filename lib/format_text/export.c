@@ -614,8 +614,24 @@ static int _print_lv(struct formatter *f, struct logical_volume *lv)
 
 	outf(f, "id = \"%s\"", buffer);
 
+	/*
+	 * A writable LV in a lockd VG is written to disk with WRITE_LOCKD
+	 * replacing WRITE, so that pre-lockd lvm versions will not think the
+	 * LV is writable.  In memory, only the WRITE lv status flag is used.
+	 */
+
+	if ((lv->status & LVM_WRITE) && (lv->vg->status & LVM_WRITE_LOCKD)) {
+		lv->status &= ~LVM_WRITE;
+		lv->status |= LVM_WRITE_LOCKD;
+	}
+
 	if (!_print_flag_config(f, lv->status, LV_FLAGS))
 		return_0;
+
+	if (lv->status & LVM_WRITE_LOCKD) {
+		lv->status |= LVM_WRITE;
+		lv->status &= ~LVM_WRITE_LOCKD;
+	}
 
 	if (!_out_tags(f, &lv->tags))
 		return_0;

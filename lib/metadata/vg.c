@@ -635,8 +635,10 @@ int vg_set_lock_type(struct volume_group *vg, const char *lock_type)
 		return 0;
 	}
 
-	if (is_lockd_type(lock_type))
-		vg->status |= LOCK_TYPE;
+	if (is_lockd_type(lock_type)) {
+		vg->status |= LVM_WRITE_LOCKD;
+		vg->status &= ~LVM_WRITE;
+	}
 
 	return 1;
 }
@@ -650,7 +652,7 @@ char *vg_attr_dup(struct dm_pool *mem, const struct volume_group *vg)
 		return NULL;
 	}
 
-	repstr[0] = (vg->status & LVM_WRITE) ? 'w' : 'r';
+	repstr[0] = ((vg->status & LVM_WRITE) || (vg->status & LVM_WRITE_LOCKD)) ? 'w' : 'r';
 	repstr[1] = (vg_is_resizeable(vg)) ? 'z' : '-';
 	repstr[2] = (vg_is_exported(vg)) ? 'x' : '-';
 	repstr[3] = (vg_missing_pv_count(vg)) ? 'p' : '-';

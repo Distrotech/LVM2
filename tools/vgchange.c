@@ -538,7 +538,6 @@ static int _vgchange_locktype(struct cmd_context *cmd,
 		}
 
 		vg->status &= ~CLUSTERED;
-		vg->status &= ~LOCK_TYPE;
 		vg->lock_type = "none";
 		vg->lock_args = NULL;
 

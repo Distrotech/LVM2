@@ -2003,7 +2003,7 @@ static int _lvconvert_splitsnapshot(struct cmd_context *cmd, struct logical_volu
 		return 0;
 	}
 
-	if (!vg_check_status(vg, LVM_WRITE))
+	if (!vg_status_writable(vg))
 		return_0;
 
 	if (lv_is_pvmove(cow) || lv_is_mirror_type(cow) || lv_is_raid_type(cow) || lv_is_thin_type(cow)) {
