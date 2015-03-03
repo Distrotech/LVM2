@@ -33,10 +33,6 @@ typedef struct {
 	struct dm_list plvs;
 } lvmpolld_parms_t;
 
-static const struct timespec _mintime = {
-	.tv_nsec = 100000
-};
-
 progress_t poll_mirror_progress(struct cmd_context *cmd,
 				struct logical_volume *lv, const char *name,
 				struct daemon_parms *parms)
@@ -174,6 +170,15 @@ static void _sleep_and_rescan_devices(struct daemon_parms *parms)
 	}
 }
 
+static void _sleep_a_while(unsigned seconds)
+{
+	const struct timespec req = {
+		.tv_sec = seconds
+	};
+
+	nanosleep(seconds ? &req : &_mintime, NULL);
+}
+
 int wait_for_single_lv(struct cmd_context *cmd, struct poll_operation_id *id,
 		       struct daemon_parms *parms)
 {
@@ -184,7 +189,7 @@ int wait_for_single_lv(struct cmd_context *cmd, struct poll_operation_id *id,
 	/* Poll for completion */
 	while (!finished) {
 		if (parms->wait_before_testing)
-			sleep_and_rescan_devices(parms);
+			_sleep_and_rescan_devices(parms);
 
 		/* Locks the (possibly renamed) VG again */
 		vg = parms->poll_fns->get_copy_vg(cmd, id->vg_name, NULL, READ_FOR_UPDATE);
@@ -475,16 +480,6 @@ static void _poll_for_all_vgs(struct cmd_context *cmd,
 	}
 }
 
-/* FIXME: better name? */
-static void _sleep_a_while(unsigned seconds)
-{
-	const struct timespec req = {
-		.tv_sec = seconds
-	};
-
-	nanosleep(seconds ? &req : &_mintime, NULL);
-}
-
 static void _lvmpolld_poll_for_all_vgs(struct cmd_context *cmd,
 				       struct daemon_parms *parms,
 				       struct processing_handle *handle)
@@ -501,8 +496,7 @@ static void _lvmpolld_poll_for_all_vgs(struct cmd_context *cmd,
 
 	handle->custom_handle = &lpdp;
 
-	/* TODO perhaps I don't need update lock here */
-	process_each_vg(cmd, 0, NULL, READ_FOR_UPDATE, handle, _lvmpolld_init_poll_vg);
+	process_each_vg(cmd, 0, NULL, 0, handle, _lvmpolld_init_poll_vg);
 
 	while (!dm_list_empty(&lpdp.plvs)) {
 		dm_list_iterate_items_safe(plv, tlv, &lpdp.plvs) {
@@ -522,44 +516,6 @@ static void _lvmpolld_poll_for_all_vgs(struct cmd_context *cmd,
 
 		_sleep_a_while(lpdp.parms->interval);
 	}
-}
-
-static int _daemon_parms_init(struct cmd_context *cmd, struct daemon_parms *parms,
-			      unsigned background, struct poll_functions *poll_fns,
-			      const char *progress_title, uint64_t lv_type,
-			      unsigned multicopy)
-{
-	sign_t interval_sign;
-
-	parms->aborting = arg_is_set(cmd, abort_ARG);
-	parms->background = background;
-	interval_sign = arg_sign_value(cmd, interval_ARG, SIGN_NONE);
-	if (interval_sign == SIGN_MINUS) {
-		log_error("Argument to --interval cannot be negative");
-		return 0;
-	}
-	parms->interval = arg_uint_value(cmd, interval_ARG,
-					find_config_tree_int(cmd, activation_polling_interval_CFG, NULL));
-	parms->wait_before_testing = (interval_sign == SIGN_PLUS);
-	parms->progress_display = 1;
-	parms->progress_title = progress_title;
-	parms->lv_type = lv_type;
-	parms->poll_fns = poll_fns;
-
-	if (parms->interval && !parms->aborting)
-		log_verbose("Checking progress %s waiting every %u seconds",
-			    (parms->wait_before_testing ? "after" : "before"),
-			    parms->interval);
-
-	if (!parms->interval) {
-		parms->progress_display = 0;
-
-		/* FIXME Disabled multiple-copy wait_event */
-		if (multicopy)
-			parms->interval = find_config_tree_int(cmd, activation_polling_interval_CFG, NULL);
-	}
-
-	return 1;
 }
 
 /*
@@ -621,6 +577,41 @@ static int _poll_daemon(struct cmd_context *cmd, struct poll_operation_id *id,
 	return ret;
 }
 
+static int _lvmpoll_daemon(struct cmd_context *cmd, struct poll_operation_id *id,
+			   struct daemon_parms *parms)
+{
+	int r;
+	struct processing_handle *handle = NULL;
+	unsigned finished = 0;
+
+	if (id) {
+		r = lvmpolld_poll_init(cmd, id->vg_name, id->lv_name, id->uuid,
+				       parms->lv_type, parms->interval,
+				       parms->aborting);
+
+		while (r && !parms->background && !finished) {
+			if (!(r = lvmpolld_request_info(id->uuid, parms->aborting, &finished)))
+				break;
+			if (!finished && !(r = report_progress(cmd, id, parms)))
+				break;
+
+			_sleep_a_while(parms->interval);
+		}
+
+		return r ? ECMD_PROCESSED : ECMD_FAILED;
+	} else {
+		/* process all in-flight operations */
+		if (!(handle = init_processing_handle(cmd))) {
+			log_error("Failed to initialize processing handle.");
+			return ECMD_FAILED;
+		} else {
+			_lvmpolld_poll_for_all_vgs(cmd, parms, handle);
+			destroy_processing_handle(cmd, handle);
+			return ECMD_PROCESSED;
+		}
+	}
+}
+
 static int _daemon_parms_init(struct cmd_context *cmd, struct daemon_parms *parms,
 			      unsigned background, struct poll_functions *poll_fns,
 			      const char *progress_title, uint64_t lv_type)
@@ -660,42 +651,11 @@ int poll_daemon(struct cmd_context *cmd, unsigned background,
 	if (!_daemon_parms_init(cmd, &parms, background, poll_fns, progress_title, lv_type))
 		return_EINVALID_CMD_LINE;
 
-	/* classical polling allows only PMVOVE or 0 values */
-	parms.lv_type &= PVMOVE;
-	return _poll_daemon(cmd, id, &parms);
-}
-
-static int _lvmpoll_daemon(struct cmd_context *cmd, struct poll_operation_id *id,
-			   struct daemon_parms *parms)
-{
-	int r;
-	struct processing_handle *handle = NULL;
-	unsigned finished = 0;
-
-	if (id) {
-		r = lvmpolld_poll_init(cmd, id->vg_name, id->lv_name, id->uuid,
-				       parms->lv_type, parms->interval,
-				       parms->aborting);
-
-		while (r && !parms->background && !finished) {
-			if (!(r = lvmpolld_request_info(id->uuid, parms->aborting, &finished)))
-				break;
-			if (!finished && !(r = report_progress(cmd, id, parms)))
-				break;
-
-			_sleep_a_while(parms->interval);
-		}
-
-		return r ? ECMD_PROCESSED : ECMD_FAILED;
-	} else {
-		/* process all in-flight operations */
-		if (!(handle = init_processing_handle(cmd))) {
-			log_error("Failed to initialize processing handle.");
-			return ECMD_FAILED;
-		} else {
-			_lvmpolld_poll_for_all_vgs(cmd, parms, handle);
-			destroy_processing_handle(cmd, handle);
-			return ECMD_PROCESSED;
-		}
+	if (lvmpolld_use())
+		return _lvmpoll_daemon(cmd, id, &parms);
+	else {
+		/* classical polling allows only PMVOVE or 0 values */
+		parms.lv_type &= PVMOVE;
+		return _poll_daemon(cmd, id, &parms);
 	}
 }

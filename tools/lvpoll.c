@@ -23,7 +23,7 @@ static struct poll_functions _pvmove_fns = {
 	.get_copy_vg = poll_get_copy_vg,
 	.poll_progress = poll_mirror_progress,
 	.update_metadata = pvmove_update_metadata,
-	.finish_copy = finish_pvmove
+	.finish_copy = pvmove_finish
 };
 
 static struct poll_functions _convert_fns = {
@@ -37,14 +37,14 @@ static struct poll_functions _merge_fns = {
 	.get_copy_lv = poll_get_copy_lv,
 	.get_copy_vg = poll_get_copy_vg,
 	.poll_progress = poll_merge_progress,
-	.finish_copy = finish_lvconvert_merge
+	.finish_copy = lvconvert_merge_finish
 };
 
 static struct poll_functions _thin_merge_fns = {
 	.get_copy_lv = poll_get_copy_lv,
 	.get_copy_vg = poll_get_copy_vg,
 	.poll_progress = poll_thin_merge_progress,
-	.finish_copy = finish_lvconvert_merge
+	.finish_copy = lvconvert_merge_finish
 };
 
 static int _set_daemon_parms(struct cmd_context *cmd, struct daemon_parms *parms)
