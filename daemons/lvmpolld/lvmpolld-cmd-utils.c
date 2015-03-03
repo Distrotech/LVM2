@@ -28,6 +28,11 @@ static const char *const const polling_ops[] = { [PVMOVE] = LVMPD_REQ_PVMOVE,
 						 [MERGE] = LVMPD_REQ_MERGE,
 						 [MERGE_THIN] = LVMPD_REQ_MERGE_THIN };
 
+const char *polling_op(enum poll_type type)
+{
+	return type < POLL_TYPE_MAX ? polling_ops[type] : "<undefined>";
+}
+
 static int add_to_cmd_arr(const char ***cmdargv, const char *str, unsigned *index, unsigned renameme)
 {
 	const char **newargv = *cmdargv;
@@ -98,7 +103,7 @@ err:
 /* FIXME: in fact exclude should be va list */
 static int copy_env(const char ***cmd_envp, unsigned *i, unsigned renameme, const char *exclude)
 {
-	const char * const* tmp = environ;
+	const char * const* tmp = (const char * const*) environ;
 
 	if (!tmp)
 		return 0;

@@ -17,6 +17,8 @@
 
 #include <pthread.h>
 
+struct buffer;
+
 typedef struct lvmpolld_lv lvmpolld_lv_t;
 typedef struct lvmpolld_state lvmpolld_state_t;
 
@@ -145,6 +147,10 @@ static inline unsigned pdlv_locked_internal_error(const lvmpolld_lv_t *pdlv)
 
 void pdst_init(lvmpolld_store_t *pdst, const char *name);
 void pdst_destroy(lvmpolld_store_t *pdst);
+
+void pdst_locked_dump(const lvmpolld_store_t *pdst, struct buffer *buff);
+void pdst_locked_lock_all_pdlvs(const lvmpolld_store_t *pdst);
+void pdst_locked_unlock_all_pdlvs(const lvmpolld_store_t *pdst);
 
 static inline void pdst_lock(lvmpolld_store_t *pdst)
 {

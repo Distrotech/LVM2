@@ -12,8 +12,11 @@
  * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
+#include "config-util.h"
 #include "libdevmapper.h"
 #include "lvmpolld-data-utils.h"
+#include "lvmpolld-cmd-utils.h"
+#include "lvmpolld-protocol.h"
 
 static char *_construct_full_lvname(const char *vgname, const char *lvname)
 {
@@ -117,8 +120,8 @@ lvmpolld_lv_t *pdlv_create(lvmpolld_state_t *ls, const char *id,
 	return pdlv;
 
 err:
-	dm_free((void *)lvmpolld_id);
 	dm_free((void *)full_lvname);
+	dm_free((void *)lvmpolld_id);
 	dm_free((void *)lvm_system_dir_env);
 	dm_free((void *)tmp.sinterval);
 	dm_free((void *)pdlv);
@@ -197,4 +200,75 @@ void pdst_destroy(lvmpolld_store_t *pdst)
 {
 	dm_hash_destroy(pdst->store);
 	pthread_mutex_destroy(&pdst->lock);
+}
+
+void pdst_locked_lock_all_pdlvs(const lvmpolld_store_t *pdst)
+{
+	struct dm_hash_node *n;
+
+	dm_hash_iterate(n, pdst->store)
+		pdlv_lock(dm_hash_get_data(pdst->store, n));
+}
+
+void pdst_locked_unlock_all_pdlvs(const lvmpolld_store_t *pdst)
+{
+	struct dm_hash_node *n;
+
+	dm_hash_iterate(n, pdst->store)
+		pdlv_unlock(dm_hash_get_data(pdst->store, n));
+}
+
+static void _pdlv_locked_dump(struct buffer *buff, const lvmpolld_lv_t *pdlv)
+{
+	char tmp[1024];
+	const lvmpolld_cmd_stat_t *cmd_state = &pdlv->cmd_state;
+
+	/* pdlv-section { */
+	if (dm_snprintf(tmp, sizeof(tmp), "\t%s {\n", pdlv->lvmpolld_id) > 0)
+		buffer_append(buff, tmp);
+
+	if (dm_snprintf(tmp, sizeof(tmp), "\t\tlvid=\"%s\"\n", pdlv->lvid) > 0)
+		buffer_append(buff, tmp);
+	if (dm_snprintf(tmp, sizeof(tmp), "\t\ttype=\"%s\"\n", polling_op(pdlv->type)) > 0)
+		buffer_append(buff, tmp);
+	if (dm_snprintf(tmp, sizeof(tmp), "\t\tlvname=\"%s\"\n", pdlv->lvname) > 0)
+		buffer_append(buff, tmp);
+	if (dm_snprintf(tmp, sizeof(tmp), "\t\tlvmpolld_internal_timeout=%d\n", pdlv->pdtimeout) > 0)
+		buffer_append(buff, tmp);
+	if (dm_snprintf(tmp, sizeof(tmp), "\t\tlvm_command_interval=\"%s\"\n", pdlv->sinterval ?: "<undefined>") > 0)
+		buffer_append(buff, tmp);
+	if (dm_snprintf(tmp, sizeof(tmp), "\t\tLVM_SYSTEM_DIR=%s\n",
+			(*pdlv->lvm_system_dir_env ? (pdlv->lvm_system_dir_env + strlen("LVM_SYSTEM_DIR=")) : "<undefined>")) > 0)
+		buffer_append(buff, tmp);
+	if (dm_snprintf(tmp, sizeof(tmp), "\t\tlvm_command_pid=%d\n", pdlv->cmd_pid) > 0)
+		buffer_append(buff, tmp);
+	if (dm_snprintf(tmp, sizeof(tmp), "\t\tpolling_finished=%d\n", pdlv->polling_finished) > 0)
+		buffer_append(buff, tmp);
+	if (dm_snprintf(tmp, sizeof(tmp), "\t\tinternal_error_occured=%d\n", pdlv->internal_error) > 0)
+		buffer_append(buff, tmp);
+
+	/* lvm_commmand-section { */
+	buffer_append(buff, "\t\tlvm_command {\n");
+	if (cmd_state->retcode == -1 && !cmd_state->signal)
+		buffer_append(buff, "\t\t\tstate=\"" LVMPD_RESP_IN_PROGRESS "\"\n");
+	else {
+		buffer_append(buff, "\t\t\tstate=\"" LVMPD_RESP_FINISHED "\"\n");
+		if (dm_snprintf(tmp, sizeof(tmp), "\t\t\treason=\"%s\"\n\t\t\tvalue=%d\n",
+				(cmd_state->signal ? LVMPD_REAS_SIGNAL : LVMPD_REAS_RETCODE),
+				(cmd_state->signal ?: cmd_state->retcode)) > 0)
+			buffer_append(buff, tmp);
+	}
+	buffer_append(buff, "\t\t}\n");
+	/* } lvm_commmand-section */
+
+	buffer_append(buff, "\t}\n");
+	/* } pdlv-section */
+}
+
+void pdst_locked_dump(const lvmpolld_store_t *pdst, struct buffer *buff)
+{
+	struct dm_hash_node *n;
+
+	dm_hash_iterate(n, pdst->store)
+		_pdlv_locked_dump(buff, dm_hash_get_data(pdst->store, n));
 }

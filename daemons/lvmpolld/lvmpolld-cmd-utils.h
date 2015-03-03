@@ -22,4 +22,6 @@
 const char **cmdargv_ctr(const lvmpolld_lv_t *pdlv, const char *lvm_binary, unsigned abort, unsigned handle_missing_pvs);
 const char **cmdenvp_ctr(const lvmpolld_lv_t *pdlv);
 
+const char *polling_op(enum poll_type);
+
 #endif /* _LVM_LVMPOLLD_CMD_UTILS_H */

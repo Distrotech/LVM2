@@ -129,19 +129,29 @@ static int read_single_line(char **line, size_t *lsize, FILE *file)
 	return (r > 0);
 }
 
+static void lvmpolld_stores_lock(lvmpolld_state_t *ls)
+{
+	pdst_lock(&ls->id_to_pdlv_poll);
+	pdst_lock(&ls->id_to_pdlv_abort);
+}
+
+static void lvmpolld_stores_unlock(lvmpolld_state_t *ls)
+{
+	pdst_unlock(&ls->id_to_pdlv_abort);
+	pdst_unlock(&ls->id_to_pdlv_poll);
+}
+
 static void update_active_state(lvmpolld_state_t *ls)
 {
 	if (!ls->idle)
 		return;
 
-	pdst_lock(&ls->id_to_pdlv_poll);
-	pdst_lock(&ls->id_to_pdlv_abort);
+	lvmpolld_stores_lock(ls);
 
 	ls->idle->is_idle = !ls->id_to_pdlv_poll.active_polling_count &&
 			    !ls->id_to_pdlv_abort.active_polling_count;
 
-	pdst_unlock(&ls->id_to_pdlv_abort);
-	pdst_unlock(&ls->id_to_pdlv_poll);
+	lvmpolld_stores_unlock(ls);
 }
 
 /* make this configurable */
@@ -641,6 +651,47 @@ static response poll_init(client_handle h, lvmpolld_state_t *ls, request req, en
 	return daemon_reply_simple(LVMPD_RESP_OK, NULL);
 }
 
+
+static void lvmpolld_global_lock(lvmpolld_state_t *ls)
+{
+	lvmpolld_stores_lock(ls);
+
+	pdst_locked_lock_all_pdlvs(&ls->id_to_pdlv_poll);
+	pdst_locked_lock_all_pdlvs(&ls->id_to_pdlv_abort);
+}
+
+static void lvmpolld_global_unlock(lvmpolld_state_t *ls)
+{
+	pdst_locked_unlock_all_pdlvs(&ls->id_to_pdlv_abort);
+	pdst_locked_unlock_all_pdlvs(&ls->id_to_pdlv_poll);
+
+	lvmpolld_stores_unlock(ls);
+}
+
+static response dump_state(client_handle h, lvmpolld_state_t *ls, request r)
+{
+	response res = { 0 };
+	struct buffer *b = &res.buffer;
+
+	buffer_init(b);
+
+	lvmpolld_global_lock(ls);
+
+	buffer_append(b, "# Registered polling operations\n\n");
+	buffer_append(b, "poll {\n");
+	pdst_locked_dump(&ls->id_to_pdlv_poll, b);
+	buffer_append(b, "}\n\n");
+
+	buffer_append(b, "# Registered abort operations\n\n");
+	buffer_append(b, "abort {\n");
+	pdst_locked_dump(&ls->id_to_pdlv_abort, b);
+	buffer_append(b, "}\n\n");
+
+	lvmpolld_global_unlock(ls);
+
+	return res;
+}
+
 static response handler(struct daemon_state s, client_handle h, request r)
 {
 	lvmpolld_state_t *ls = s.private;
@@ -656,6 +707,8 @@ static response handler(struct daemon_state s, client_handle h, request r)
 		return poll_init(h, ls, r, MERGE_THIN);
 	else if (!strcmp(rq, LVMPD_REQ_PROGRESS))
 		return progress_info(h, ls, r);
+	else if (!strcmp(rq, LVMPD_REQ_DUMP))
+		return dump_state(h, ls, r);
 	else
 		return reply_fail(REASON_REQ_NOT_IMPLEMENTED);
 }
