@@ -2368,7 +2368,10 @@ static int _raid_emit_segment_line(struct dm_task *dmt, uint32_t major,
 
 	for (i = 0; i < area_count; i++)
 		if (seg->rebuilds & (1ULL << i))
+{
 			EMIT_PARAMS(pos, " rebuild %u", i);
+printf("%s %u rebuild %d\n", __func__, __LINE__, i);
+}
 
 	for (i = 0; i < area_count; i++)
 		if (seg->writemostly & (1ULL << i))
