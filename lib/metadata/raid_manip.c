@@ -2394,11 +2394,11 @@ static int _raid_takeover(struct logical_volume *lv,
 	_check_and_init_region_size(lv);
 
 	/*
-	 * In case of raid1 -> raid5, takeover will run a degraded 2 disk raid5 set
+	 * In case of raid1 -> raid5, takeover will run a degraded 2 disk raid5 set of the same content
 	 * which will get an additional disk allocated afterwards and reloaded starting
 	 * resynchronization to reach full redundance.
 	 *
-	 * FIXME: fully redundant raid5_ls set does not double-fold capacity after takeover from raid1 yet!!!
+	 * FIXME: 2 step process to a) take over a 2 legged raid1 mapping to raid5 and b) reshape it to add at least one disk
 	 */
 	if ((seg_is_raid1(seg) && up) ||
             (seg_is_any_raid5(seg) && segtype_is_raid1(segtype))) {
