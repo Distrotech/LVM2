@@ -31,6 +31,7 @@
 #include "locking.h"
 #include "archiver.h"
 #include "defaults.h"
+#include "lvmlockd.h"
 
 #include <math.h>
 #include <sys/param.h>
@@ -4416,12 +4417,9 @@ static int _access_vg_lock_type(struct cmd_context *cmd, struct volume_group *vg
 	if (!is_real_vg(vg->name))
 		return 1;
 
-	/*
-	 * Until lock_type support is added, reject any VG that has a lock_type.
-	 */
-	if (vg->lock_type && vg->lock_type[0] && strcmp(vg->lock_type, "none")) {
-		log_error("Cannot access VG %s with unsupported lock_type %s.",
-			  vg->name, vg->lock_type);
+	if (is_lockd_type(vg->lock_type) && !find_config_tree_bool(cmd, global_use_lvmlockd_CFG, NULL)) {
+		log_warn("Cannot access VG %s which requires lvmlockd (lock_type %s).",
+			 vg->name, vg->lock_type);
 		return 0;
 	}
 
