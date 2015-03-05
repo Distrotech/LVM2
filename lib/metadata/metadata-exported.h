@@ -847,6 +847,9 @@ struct lvcreate_params {
 	const char *origin_name; /* snap */
 	const char *pool_name;   /* thin */
 
+	const char *lock_type;
+	const char *lock_args;
+
 	/* Keep args given by the user on command line */
 	/* FIXME: create some more universal solution here */
 #define PASS_ARG_CHUNK_SIZE		0x01
@@ -1189,6 +1192,8 @@ struct vgcreate_params {
 	int clustered; /* FIXME: put this into a 'status' variable instead? */
 	uint32_t vgmetadatacopies;
 	const char *system_id;
+	const char *lock_type;
+	const char *lock_args;
 };
 
 int validate_major_minor(const struct cmd_context *cmd,
