@@ -68,6 +68,9 @@ static int vgremove_single(struct cmd_context *cmd, const char *vg_name,
 		}
 	}
 
+	if (!lockd_free_vg_before(cmd, vg))
+		return_ECMD_FAILED;
+
 	if (!force && !vg_remove_check(vg))
 		return_ECMD_FAILED;
 
@@ -75,6 +78,8 @@ static int vgremove_single(struct cmd_context *cmd, const char *vg_name,
 
 	if (!vg_remove(vg))
 		return_ECMD_FAILED;
+
+	lockd_free_vg_final(cmd, vg);
 
 	return ECMD_PROCESSED;
 }
@@ -88,6 +93,13 @@ int vgremove(struct cmd_context *cmd, int argc, char **argv)
 			  "or use --select for selection.");
 		return EINVALID_CMD_LINE;
 	}
+
+	/*
+	 * Needed to change the global VG namespace,
+	 * and to change the set of orphan PVs.
+	 */
+	if (!lockd_gl(cmd, "ex", LDGL_UPDATE_NAMES))
+		return ECMD_FAILED;
 
 	cmd->handles_missing_pvs = 1;
 	ret = process_each_vg(cmd, argc, argv,
