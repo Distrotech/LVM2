@@ -1167,7 +1167,7 @@ int lm_rem_resource_sanlock(struct lockspace *ls, struct resource *r)
 }
 
 int lm_lock_sanlock(struct lockspace *ls, struct resource *r, int ld_mode,
-		    uint32_t *r_version, uint32_t *n_version, int *retry, int adopt)
+		    uint32_t *r_version, int *retry, int adopt)
 {
 	struct lm_sanlock *lms = (struct lm_sanlock *)ls->lm_data;
 	struct rd_sanlock *rds = (struct rd_sanlock *)r->lm_data;
@@ -1244,7 +1244,6 @@ int lm_lock_sanlock(struct lockspace *ls, struct resource *r, int ld_mode,
 
 	if (daemon_test) {
 		*r_version = 0;
-		*n_version = 0;
 		return 0;
 	}
 
@@ -1355,7 +1354,6 @@ int lm_lock_sanlock(struct lockspace *ls, struct resource *r, int ld_mode,
 		if (rv < 0) {
 			log_error("S %s R %s lock_san get_lvb error %d", ls->name, r->name, rv);
 			*r_version = 0;
-			*n_version = 0;
 			goto out;
 		}
 
@@ -1371,11 +1369,10 @@ int lm_lock_sanlock(struct lockspace *ls, struct resource *r, int ld_mode,
 		}
 
 		*r_version = le32_to_cpu(vb.r_version);
-		*n_version = le32_to_cpu(vb.n_version);
 		memcpy(rds->vb, &vb, sizeof(vb)); /* rds->vb saved as le */
 
-		log_debug("S %s R %s lock_san get r_version %u n_version %u",
-			  ls->name, r->name, *r_version, *n_version);
+		log_debug("S %s R %s lock_san get r_version %u",
+			  ls->name, r->name, *r_version);
 	}
 out:
 	return rv;
@@ -1484,17 +1481,10 @@ static int release_rename(struct lockspace *ls, struct resource *r)
  * each time the global lock is released from ex.
  *
  * for VG locks it is the seqno from the vg metadata.
- *
- * n_version is r->names_version
- *
- * n_version is only used in gl locks.
- * lvmlockd increments this value each time
- * the global lock is released from ex by a
- * command that changes the list of vgs.
  */
 
 int lm_unlock_sanlock(struct lockspace *ls, struct resource *r,
-		      uint32_t r_version, uint32_t n_version, uint32_t lmu_flags)
+		      uint32_t r_version, uint32_t lmu_flags)
 {
 	struct lm_sanlock *lms = (struct lm_sanlock *)ls->lm_data;
 	struct rd_sanlock *rds = (struct rd_sanlock *)r->lm_data;
@@ -1515,12 +1505,10 @@ int lm_unlock_sanlock(struct lockspace *ls, struct resource *r,
 		}
 		if (r_version)
 			rds->vb->r_version = cpu_to_le32(r_version);
-		if (n_version)
-			rds->vb->n_version = cpu_to_le32(n_version);
 		memcpy(&vb, rds->vb, sizeof(vb));
 
-		log_debug("S %s R %s unlock_san set r_version %u n_version %u",
-			  ls->name, r->name, r_version, n_version);
+		log_debug("S %s R %s unlock_san set r_version %u",
+			  ls->name, r->name, r_version);
 
 		rv = sanlock_set_lvb(0, rs, (char *)&vb, sizeof(vb));
 		if (rv < 0) {

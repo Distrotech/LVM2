@@ -43,9 +43,6 @@ enum {
 	LD_OP_CLOSE,
 	LD_OP_ENABLE,
 	LD_OP_DISABLE,
-	LD_OP_ADD_LOCAL,
-	LD_OP_REM_LOCAL,
-	LD_OP_UPDATE_LOCAL,
 	LD_OP_START_WAIT,
 	LD_OP_STOP_ALL,
 	LD_OP_DUMP_INFO,
@@ -97,8 +94,6 @@ struct client {
 #define LD_AF_ENABLE               0x00000080
 #define LD_AF_DISABLE              0x00000100
 #define LD_AF_SEARCH_LS            0x00000200
-#define LD_AF_LOCAL_LS             0x00000400
-#define LD_AF_UPDATE_NAMES_VERSION 0x00000800
 #define LD_AF_WAIT_STARTING        0x00001000
 #define LD_AF_DUP_GL_LS            0x00002000
 #define LD_AF_INACTIVE_LS          0x00004000
@@ -169,7 +164,6 @@ struct lockspace {
 	int8_t lm_type;			/* lock manager: LM_DLM, LM_SANLOCK */
 	void *lm_data;
 	uint64_t host_id;
-	uint32_t names_version;		/* read/write from/to gl val_blk n_version */
 
 	uint32_t start_client_id;	/* client_id that started the lockspace */
 	pthread_t thread;		/* makes synchronous lock requests */
@@ -180,8 +174,6 @@ struct lockspace {
 	unsigned int thread_work : 1;
 	unsigned int thread_stop : 1;
 	unsigned int thread_done : 1;
-	unsigned int update_local_vgs : 1;
-	unsigned int update_names_version: 1;
 	unsigned int sanlock_gl_enabled: 1;
 	unsigned int sanlock_gl_dup: 1;
 
@@ -196,7 +188,6 @@ struct val_blk {
 	uint16_t version;
 	uint16_t flags;
 	uint32_t r_version;
-	uint32_t n_version;
 };
 
 /* lm_unlock flags */
@@ -211,11 +202,11 @@ int lm_init_vg_dlm(char *ls_name, char *vg_name, uint32_t flags, char *vg_args);
 int lm_add_lockspace_dlm(struct lockspace *ls, int adopt);
 int lm_rem_lockspace_dlm(struct lockspace *ls, int free_vg);
 int lm_lock_dlm(struct lockspace *ls, struct resource *r, int ld_mode,
-		uint32_t *r_version, uint32_t *n_version, int adopt);
+		uint32_t *r_version, int adopt);
 int lm_convert_dlm(struct lockspace *ls, struct resource *r,
 		   int ld_mode, uint32_t r_version);
 int lm_unlock_dlm(struct lockspace *ls, struct resource *r,
-		  uint32_t r_version, uint32_t n_version, uint32_t lmu_flags);
+		  uint32_t r_version, uint32_t lmu_flags);
 int lm_rem_resource_dlm(struct lockspace *ls, struct resource *r);
 int lm_get_lockspaces_dlm(struct list_head *ls_rejoin);
 int lm_data_size_dlm(void);
@@ -227,11 +218,11 @@ int lm_rename_vg_sanlock(char *ls_name, char *vg_name, uint32_t flags, char *vg_
 int lm_add_lockspace_sanlock(struct lockspace *ls, int adopt);
 int lm_rem_lockspace_sanlock(struct lockspace *ls, int free_vg);
 int lm_lock_sanlock(struct lockspace *ls, struct resource *r, int ld_mode,
-		    uint32_t *r_version, uint32_t *n_version, int *retry, int adopt);
+		    uint32_t *r_version, int *retry, int adopt);
 int lm_convert_sanlock(struct lockspace *ls, struct resource *r,
 		       int ld_mode, uint32_t r_version);
 int lm_unlock_sanlock(struct lockspace *ls, struct resource *r,
-		      uint32_t r_version, uint32_t n_version, uint32_t lmu_flags);
+		      uint32_t r_version, uint32_t lmu_flags);
 int lm_able_gl_sanlock(struct lockspace *ls, int enable);
 int lm_ex_disable_gl_sanlock(struct lockspace *ls);
 int lm_hosts_sanlock(struct lockspace *ls, int notify);

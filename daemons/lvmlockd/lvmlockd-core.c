@@ -76,9 +76,6 @@
  * . If the action is a lock request, pass the act to the thread
  *   that is managing that lockspace: add_lock_action(act).
  *
- * . If the action is to add/remove a local VG to the list of
- *   local VGs, do that directly: add_local_vg()/rem_local_vg().
- *
  * . Other misc actions are are passed to the worker_thread:
  *   add_work_action(act).
  *
@@ -147,7 +144,6 @@
 static const char *lvmlockd_protocol = "lvmlockd";
 static const int lvmlockd_protocol_version = 1;
 static int daemon_quit;
-static char *our_system_id;
 static int adopt_opt;
 
 static daemon_handle lvmetad_handle;
@@ -214,70 +210,6 @@ static struct list_head lockspaces_inactive;
  * this can be set back to zero when the duplicates are disabled.
  */
 static int sanlock_gl_dup;
-
-/*
- * VG's that do not have a lockd type are on the local_vgs list.
- * Every vg on the system should be in either the lockspaces
- * list or the local_vgs list.
- *
- * lvm commands send lock requests to lvmlockd for local vgs
- * because at the point locks are acquired in the command,
- * the vg has not been read, so the command does not know if
- * the vg's lock_type is local and the locks can be skipped.
- * So lvmlockd keeps track of which vg's are local so it can
- * quickly check if a vg lock request can be skipped.  (Rather
- * than having to look up the lock_type in lvmetad for every
- * operation on a local vg.)
- *
- * When local_thread_also is set, lvmlockd's local_thread is
- * used to manage locks for local pids on vgs from local_vgs.
- * (In addition to standard locking for lockd type vgs.)
- *
- * When local_thread_only is set, lvmlockd is only used to
- * manage locks for local pids on vgs from local_vgs, and
- * not to manage lockd type vgs.
- *
- * local locking:
- *
- * lock_gl: only do local_thread locking for gl when local_thread_only
- * is set.  local_thread_only means that no standard lockd lockspaces
- * are being used, and lvmlockd is used only for inter-pid locking.
- * When local_thread_only is not set (meaning both local and shared vgs
- * are expected), then the standard gl lockspace works for both local
- * (between local pids) and remote (between pids on different nodes).
- *
- * lock_vg: only do local_thread locking for local, non-lockd, vgs in
- * the local_vgs list.  When the vg is a lockd-type, then the standard
- * lockspace thread works for locking between pids also.
- *
- * local_thread_only=1 local_thread_also=1
- * Use lvmlockd for locking only between local pids, both gl and vg locks.
- * No shared disks or lockd type vgs should exist.
- *
- * local_thread_only=0 local_thread_also=1
- * Use lvmlockd for locking between local pids for local vgs,
- * and use lvmlockd for distributed locking for lockd-type vgs.
- * Use global lock from a lockd-type vgs.  A local-only gl does
- * not make sense here.
- *
- * local_thread_only=0 local_thread_also=0
- * Do not use lvmlockd for locking between local pids.
- * No shared disks or lockd type vgs should exist.
- * (lvmlockd should probably not be run at all in this case.)
- *
- * local_thread_only=1 local_thread_also=0
- * Not allowed.
- */
-static pthread_t local_thread;
-static pthread_mutex_t local_thread_mutex;
-static pthread_cond_t local_thread_cond;
-static struct list_head local_thread_actions;
-static struct list_head local_vgs;
-static struct lockspace *local_thread_gls;
-static int local_thread_also;
-static int local_thread_only;
-static int local_thread_stop;
-static int local_thread_work;
 
 /*
  * Client thread reads client requests and writes client results.
@@ -743,12 +675,6 @@ static const char *op_str(int x)
 		return "enable";
 	case LD_OP_DISABLE:
 		return "disable";
-	case LD_OP_ADD_LOCAL:
-		return "add_local";
-	case LD_OP_REM_LOCAL:
-		return "rem_local";
-	case LD_OP_UPDATE_LOCAL:
-		return "update_local";
 	case LD_OP_START_WAIT:
 		return "start_wait";
 	case LD_OP_STOP_ALL:
@@ -877,14 +803,14 @@ static int lm_rem_lockspace(struct lockspace *ls, struct action *act, int free_v
 }
 
 static int lm_lock(struct lockspace *ls, struct resource *r, int mode, struct action *act,
-		   uint32_t *r_version, uint32_t *n_version, int *retry, int adopt)
+		   uint32_t *r_version, int *retry, int adopt)
 {
 	int rv;
 
 	if (ls->lm_type == LD_LM_DLM)
-		rv = lm_lock_dlm(ls, r, mode, r_version, n_version, adopt);
+		rv = lm_lock_dlm(ls, r, mode, r_version, adopt);
 	else if (ls->lm_type == LD_LM_SANLOCK)
-		rv = lm_lock_sanlock(ls, r, mode, r_version, n_version, retry, adopt);
+		rv = lm_lock_sanlock(ls, r, mode, r_version, retry, adopt);
 	else
 		return -1;
 
@@ -911,14 +837,14 @@ static int lm_convert(struct lockspace *ls, struct resource *r,
 }
 
 static int lm_unlock(struct lockspace *ls, struct resource *r, struct action *act,
-		     uint32_t r_version, uint32_t n_version, uint32_t lmu_flags)
+		     uint32_t r_version, uint32_t lmu_flags)
 {
 	int rv;
 
 	if (ls->lm_type == LD_LM_DLM)
-		return lm_unlock_dlm(ls, r, r_version, n_version, lmu_flags);
+		return lm_unlock_dlm(ls, r, r_version, lmu_flags);
 	else if (ls->lm_type == LD_LM_SANLOCK)
-		return lm_unlock_sanlock(ls, r, r_version, n_version, lmu_flags);
+		return lm_unlock_sanlock(ls, r, r_version, lmu_flags);
 	else
 		return -1;
 
@@ -1007,21 +933,10 @@ static void add_work_action(struct action *act)
 	pthread_mutex_unlock(&worker_mutex);
 }
 
-static void create_work_action(int op)
-{
-	struct action *act;
-
-	if (!(act = alloc_action()))
-		return;
-	act->op = op;
-	add_work_action(act);
-}
-
 static int res_lock(struct lockspace *ls, struct resource *r, struct action *act, int *retry)
 {
 	struct lock *lk;
 	uint32_t r_version = 0;
-	uint32_t n_version = 0;
 	int rv;
 
 	log_debug("S %s R %s res_lock mode %s", ls->name, r->name, mode_str(act->mode));
@@ -1032,7 +947,7 @@ static int res_lock(struct lockspace *ls, struct resource *r, struct action *act
 	if (r->type == LD_RT_LV && act->lv_args[0])
 		memcpy(r->lv_args, act->lv_args, MAX_ARGS);
 
-	rv = lm_lock(ls, r, act->mode, act, &r_version, &n_version, retry, act->flags & LD_AF_ADOPT);
+	rv = lm_lock(ls, r, act->mode, act, &r_version, retry, act->flags & LD_AF_ADOPT);
 	if (rv == -EAGAIN)
 		return rv;
 	if (rv < 0) {
@@ -1040,10 +955,10 @@ static int res_lock(struct lockspace *ls, struct resource *r, struct action *act
 		return rv;
 	}
 
-	log_debug("S %s R %s res_lock lm done r_version %u n_version %u",
-		  ls->name, r->name, r_version, n_version);
+	log_debug("S %s R %s res_lock lm done r_version %u",
+		  ls->name, r->name, r_version);
 
-	/* lm_lock() reads new r_version and n_version */
+	/* lm_lock() reads new r_version */
 
 	if (r_version > r->version) {
 		/*
@@ -1112,30 +1027,6 @@ static int res_lock(struct lockspace *ls, struct resource *r, struct action *act
 				log_error("set_global_info in lvmetad failed %d", reply.error);
 			daemon_reply_destroy(reply);
 		}
-	}
-
-	if ((r->type == LD_RT_GL) && (n_version > ls->names_version)) {
-		/*
-		 * Set a flag that will cause update_local_vgs to be run
-		 * when the gl is unlocked (by queueing an UPDATE_LOCK action).
-		 * It needs to happen on unlock because lvmetad needs to be updated
-		 * by the command before there is an updated vg list to be read.
-		 */
-		log_debug("S %s gl res_lock set update_local_vgs", ls->name);
-		ls->update_local_vgs = 1;
-		ls->names_version = n_version;
-	}
-
-	if ((r->type == LD_RT_GL) && (act->flags & LD_AF_UPDATE_NAMES_VERSION)) {
-		/*
-		 * Set a flag that will cause the ls->names_version to be
-		 * incremented and written to the gl lvb n_version when
-		 * the gl is unlocked.
-		 * Other hosts will eventually take the gl lock, see the new
-		 * n_version and run update_local_vgs.
-		 */
-		log_debug("S %s gl res_lock set update_names_version", ls->name);
-		ls->update_names_version = 1;
 	}
 
 	r->mode = act->mode;
@@ -1263,22 +1154,8 @@ do_cancel:
  * The r_version of the global resource is automatically
  * incremented when it is unlocked from ex mode.
  *
- * For the global resource, n_version is used in addition
- * to r_version:
- *
  * r_version is incremented every time a command releases
  * the global lock from ex.
- *
- * n_version is incremented every time a command that
- * changes the list of vg names releases the global lock from ex.
- *
- * Changes to n_version are used by hosts to detect that other
- * hosts have added/removed/renamed local (non-lockd) vgs which
- * can be seen by multiple hosts, so the local_vgs list probably
- * needs to be updated.  lvmlockd knows about changes to lockd-type
- * vgs through their locks, but local vgs do not have locks,
- * so the n_version change is the only way to know that the
- * local_vgs list should be updated.
  */
 
 /*
@@ -1293,7 +1170,6 @@ static int res_unlock(struct lockspace *ls, struct resource *r,
 {
 	struct lock *lk;
 	uint32_t r_version;
-	uint32_t n_version = 0;
 	int rv;
 
 	if (act->flags & LD_AF_PERSISTENT) {
@@ -1328,13 +1204,6 @@ do_unlock:
 
 		log_debug("S %s R %s res_unlock r_version inc %u", ls->name, r->name, r_version);
 
-		if (ls->update_names_version) {
-			ls->names_version++;
-			n_version = ls->names_version;
-			log_debug("S %s gl res_unlock got update_names_version %u",
-				  ls->name, n_version);
-		}
-
 	} else if ((r->type == LD_RT_VG) && (r->mode == LD_LK_EX) && (lk->version > r->version)) {
 		r->version = lk->version;
 		r_version = r->version;
@@ -1345,7 +1214,7 @@ do_unlock:
 		r_version = 0;
 	}
 
-	rv = lm_unlock(ls, r, act, r_version, n_version, 0);
+	rv = lm_unlock(ls, r, act, r_version, 0);
 	if (rv < 0) {
 		/* should never happen, retry? */
 		log_error("S %s R %s res_unlock lm error %d", ls->name, r->name, rv);
@@ -1353,14 +1222,6 @@ do_unlock:
 	}
 
 	log_debug("S %s R %s res_unlock lm done", ls->name, r->name);
-
-	if ((r->type == LD_RT_GL) && (ls->update_local_vgs || ls->update_names_version)) {
-		log_debug("S %s gl res_unlock got update_local_vgs %d update_names_version %d",
-			  ls->name, ls->update_local_vgs, ls->update_names_version);
-		ls->update_local_vgs = 0;
-		ls->update_names_version = 0;
-		create_work_action(LD_OP_UPDATE_LOCAL);
-	}
 
 rem_lk:
 	list_del(&lk->list);
@@ -1917,7 +1778,7 @@ static int clear_locks(struct lockspace *ls, int free_vg)
 			r_version = 0;
 		}
 
-		rv = lm_unlock(ls, r, NULL, r_version, 0, free_vg ? LMUF_FREE_VG : 0);
+		rv = lm_unlock(ls, r, NULL, r_version, free_vg ? LMUF_FREE_VG : 0);
 		if (rv < 0) {
 			/* should never happen */
 			log_error("S %s R %s clear_locks free %d lm unlock error %d",
@@ -2289,160 +2150,6 @@ out_act:
 	return NULL;
 }
 
-static void process_local_ls(struct lockspace *ls)
-{
-	struct resource *r = list_first_entry(&ls->resources, struct resource, list);
-	struct action *act, *act_safe;
-	struct lock *lk;
-	int prev_mode;
-	int result;
-
-	list_for_each_entry_safe(act, act_safe, &ls->actions, list) {
-		if (act->op != LD_OP_LOCK)
-			continue;
-		if (act->mode != LD_LK_UN)
-			continue;
-
-		result = -ENOENT;
-
-		list_for_each_entry(lk, &r->locks, list) {
-			if (lk->client_id != act->client_id)
-				continue;
-			list_del(&lk->list);
-			free_lock(lk);
-			result = 0;
-			break;
-		}
-
-		act->result = result;
-		list_del(&act->list);
-		add_client_result(act);
-	}
-
-	prev_mode = LD_LK_UN;
-
-	if (!list_empty(&r->locks)) {
-		lk = list_first_entry(&r->locks, struct lock, list);
-		if (lk->mode == LD_LK_EX)
-			return;
-
-		/* sanity check */
-		if (lk->mode != LD_LK_SH) {
-			log_error("process_local_ls bad lk mode %d", lk->mode);
-			return;
-		}
-
-		prev_mode = LD_LK_SH;
-	}
-
-	/* grant lock requests until we reach one that's one not compat with prev_mode */
-
-	list_for_each_entry_safe(act, act_safe, &ls->actions, list) {
-
-		if (act->mode == LD_LK_EX && prev_mode == LD_LK_UN) {
-			/* grant it and return because no more can be granted */
-
-			if (!(lk = alloc_lock()))
-				return;
-
-			lk->client_id = act->client_id;
-			lk->mode = LD_LK_EX;
-			list_add(&lk->list, &r->locks);
-
-			act->result = 0;
-			list_del(&act->list);
-			add_client_result(act);
-			return;
-
-		} else if (act->mode == LD_LK_EX && prev_mode == LD_LK_SH) {
-
-			/* we'll process this act and try to grant it the
-			   next we come through here. */
-
-			return;
-
-		} else if (act->mode == LD_LK_SH) {
-			prev_mode = LD_LK_SH;
-
-			/* grant it and continue */
-
-			if (!(lk = alloc_lock()))
-				return;
-
-			lk->client_id = act->client_id;
-			lk->mode = LD_LK_SH;
-			list_add_tail(&lk->list, &r->locks);
-
-			act->result = 0;
-			list_del(&act->list);
-			add_client_result(act);
-		}
-	}
-}
-
-static void purge_local_client(uint32_t client_id)
-{
-	struct lockspace *ls;
-	struct resource *r;
-	struct lock *lk, *lk_safe;
-	struct action *act, *act_safe;
-
-	list_for_each_entry(ls, &local_vgs, list) {
-		r = list_first_entry(&ls->resources, struct resource, list);
-
-		list_for_each_entry_safe(lk, lk_safe, &r->locks, list) {
-			if (lk->client_id != client_id)
-				continue;
-			list_del(&lk->list);
-			free_lock(lk);
-		}
-
-		list_for_each_entry_safe(act, act_safe, &ls->actions, list) {
-			if (act->client_id != client_id)
-				continue;
-			list_del(&act->list);
-			free_action(act);
-		}
-	}
-}
-
-static void *local_thread_main(void *arg_in)
-{
-	struct lockspace *ls;
-	struct action *act, *act_safe;
-
-	while (1) {
-		pthread_mutex_lock(&local_thread_mutex);
-		while (!local_thread_work) {
-			if (local_thread_stop) {
-				pthread_mutex_unlock(&local_thread_mutex);
-				goto out;
-			}
-			pthread_cond_wait(&local_thread_cond, &local_thread_mutex);
-		}
-
-		/* close actions: clear all locks and actions in all lockspaces for client */
-		list_for_each_entry_safe(act, act_safe, &local_thread_actions, list) {
-			if (act->op != LD_OP_CLOSE)
-				continue;
-			purge_local_client(act->client_id);
-			list_del(&act->list);
-			free_action(act);
-		}
-
-		list_for_each_entry(ls, &local_vgs, list) {
-			if (list_empty(&ls->actions))
-				continue;
-			process_local_ls(ls);
-		}
-
-		local_thread_work = 0;
-		pthread_mutex_unlock(&local_thread_mutex);
-	}
-out:
-	return NULL;
-}
-
 int lockspaces_empty(void)
 {
 	int rv;
@@ -2484,323 +2191,6 @@ static struct lockspace *find_lockspace_name(char *ls_name)
 		sanlock_gl_dup = 0;
 
 	return ls_found;
-}
-
-/* local_thread_mutex is locked */
-static struct lockspace *find_local_vg(const char *name, const char *uuid)
-{
-	struct lockspace *ls;
-
-	list_for_each_entry(ls, &local_vgs, list) {
-		if (name && name[0] && !strcmp(ls->vg_name, name))
-			return ls;
-		if (uuid && uuid[0] && !strcmp(ls->vg_uuid, uuid))
-			return ls;
-	}
-	return NULL;
-}
-
-/*
- * vgcreate/vgremove of local vgs do add_local/rem_local which
- * updates local_vgs on the local host.  Other hosts' local_vgs
- * are updated with these changes asynchronously when they see
- * the n_version change in the global lock lvb, and do
- * update_local_vgs.
- *
- * So, the global lock n_version and update_local_vgs is about
- * asyncronous propagation of add_local/rem_local to other hosts.
- * Because these are local vgs, they are not used concurrently
- * by multiple hosts, but will be used only by the host in the
- * vg's system_id, which is doing the add_local/rem_local.
- *
- * A local vg created on host1 does not need to be immediately
- * usable on host2, and is not locked between hosts anyway.
- * So, returning a not found error on host2 for a while will
- * be ok.  Once node2 asynchronously updates local_vgs, it
- * would know about a new local vg created on host1.  Then
- * lockd_vg on this vg would change from "not found" ENOLS
- * (as above) to -EOTHERVG (or ELOCALVG if no sysid is set,
- * but hosts shouldn't be actively sharing a vg with no
- * lock_type, so an async delay in this case is not a problem.)
- */
-
-/* local_thread_mutex is locked */
-static void add_local_vg(const char *vg_name, const char *vg_uuid, const char *vg_sysid)
-{
-	struct lockspace *ls;
-	struct resource *r;
-
-	/* not really a lockspace, we're just reusing the struct */
-
-	if (!vg_name || !vg_uuid || !vg_name[0] || !vg_uuid[0]) {
-		log_error("add_local_vg incomplete %s %s",
-			  vg_name ? vg_name : "no-name",
-			  vg_uuid ? vg_uuid : "no-uuid");
-			  
-		return;
-	}
-
-	if ((ls = find_local_vg(vg_name, vg_uuid))) {
-		if (vg_sysid && ls->vg_sysid[0] && !strcmp(vg_sysid, "none")) {
-			log_debug("add_local_vg %s %s clear sysid", vg_name, vg_uuid);
-			memset(&ls->vg_sysid, 0, MAX_NAME);
-		} else if (vg_sysid && strcmp(ls->vg_sysid, vg_sysid)) {
-			log_debug("add_local_vg %s %s update %s", vg_name, vg_uuid, vg_sysid);
-			strncpy(ls->vg_sysid, vg_sysid, MAX_NAME);
-		}
-		return;
-	}
-
-	if (!(ls = alloc_lockspace()))
-		return;
-
-	if (!(r = alloc_resource())) {
-		free(ls);
-		return;
-	}
-
-	strncpy(ls->vg_name, vg_name, MAX_NAME);
-	strncpy(ls->vg_uuid, vg_uuid, 64);
-	strncpy(ls->vg_sysid, vg_sysid, MAX_NAME);
-
-	r->type = LD_RT_VG;
-	r->mode = LD_LK_UN;
-	strncpy(r->name, R_NAME_VG, MAX_NAME);
-	list_add_tail(&r->list, &ls->resources);
-
-	list_add(&ls->list, &local_vgs);
-
-	log_debug("add_local_vg %s %s %s", vg_name, vg_uuid, vg_sysid ?: "");
-}
-
-/* local_thread_mutex is locked */
-static void rem_local_vg(const char *vg_name, const char *vg_uuid)
-{
-	struct lockspace *ls;
-	struct resource *r;
-	struct lock *lk, *lk_safe;
-	struct action *act, *act_safe;
-
-	log_debug("rem_local_vg %s %s", vg_name, vg_uuid);
-
-	if (!(ls = find_local_vg(vg_name, vg_uuid)))
-		return;
-
-	r = list_first_entry(&ls->resources, struct resource, list);
-
-	list_for_each_entry_safe(lk, lk_safe, &r->locks, list) {
-		list_del(&lk->list);
-		free_lock(lk);
-	}
-
-	list_del(&r->list);
-	free_resource(r);
-
-	list_for_each_entry_safe(act, act_safe, &ls->actions, list) {
-		list_del(&act->list);
-		free_action(act);
-	}
-
-	list_del(&ls->list);
-	free(ls);
-}
-
-static struct lockspace *find_update_vg(struct list_head *head, const char *name, const char *uuid)
-{
-	struct lockspace *ls;
-
-	list_for_each_entry(ls, head, list) {
-		if (!strcmp(ls->vg_name, name) && !strcmp(ls->vg_uuid, uuid))
-			return ls;
-	}
-	return NULL;
-}
-
-/*
- * called by worker_thread. the work action is queued when we see that another
- * host has changed the global lock n_version, which means they have changed the
- * global vg name list, so our local_vgs list may need updating.
- *
- * Handle the issue where a lot of devices all appear together,
- * pvscan is run for each of them to populate lvmetad, each pvscan
- * triggers an update_local, and we end up calling this function many
- * times in a row.  We only really need/want one update_local when all
- * the pvscans are done, and this is a rough approximation of that.
- * If we're asked to do update_local within one second of the previous run,
- * then push it off to the delayed work list, so it will be called in a
- * couple seconds.  Ignore more update_local actions while a delayed
- * update_local action exists.  IOW, if we see two quick back to back
- * update_local actions, delay the second one for a couple seconds in
- * an attempt to buffer more of them which can be eliminated.
- */
-
-static uint64_t last_update_local;
-
-static int work_update_local_vgs(void)
-{
-	struct list_head update_vgs;
-	daemon_reply reply;
-	struct dm_config_node *cn;
-	struct dm_config_node *metadata;
-	struct lockspace *lls, *uls, *safe;
-	const char *vg_name;
-	const char *vg_uuid;
-	const char *lock_type;
-	const char *system_id;
-	int mutex_unlocked = 0;
-	int rv;
-
-	INIT_LIST_HEAD(&update_vgs);
-
-	if (monotime() - last_update_local <= 1)
-		return -EAGAIN;
-
-	last_update_local = monotime();
-
-	/* get a list of all vg uuids from lvmetad */
-
-	pthread_mutex_lock(&lvmetad_mutex);
-	reply = daemon_send_simple(lvmetad_handle, "vg_list",
-				   "token = %s", "skip",
-				   NULL);
-	if (reply.error) {
-		log_error("vg_list from lvmetad error %d", reply.error);
-		rv = -EINVAL;
-		goto destroy;
-	}
-
-	if (!(cn = dm_config_find_node(reply.cft->root, "volume_groups"))) {
-		log_error("work_update_local no vgs");
-		rv = -EINVAL;
-		goto destroy;
-	}
-
-	/* create an update_vgs list of all vg uuids */
-
-	for (cn = cn->child; cn; cn = cn->sib) {
-		vg_uuid = cn->key;
-
-		if (!(uls = alloc_lockspace())) {
-			rv = -ENOMEM;
-			goto destroy;
-		}
-
-		strncpy(uls->vg_uuid, vg_uuid, 64);
-		list_add_tail(&uls->list, &update_vgs);
-		log_debug("work_update_local %s", vg_uuid);
-	}
- destroy:
-	daemon_reply_destroy(reply);
-
-	if (rv < 0)
-		goto out;
-
-	/* get vg_name and system_id for each vg uuid entry in update_vgs */
-
-	list_for_each_entry(uls, &update_vgs, list) {
-		reply = daemon_send_simple(lvmetad_handle, "vg_lookup",
-					   "token = %s", "skip",
-					   "uuid = %s", uls->vg_uuid,
-					   NULL);
-		if (reply.error) {
-			log_error("vg_lookup from lvmetad error %d", reply.error);
-			rv = -EINVAL;
-			goto next;
-		}
-
-		vg_name = daemon_reply_str(reply, "name", NULL);
-		if (!vg_name) {
-			log_error("work_update_local %s no name", uls->vg_uuid);
-			rv = -EINVAL;
-			goto next;
-		}
-
-		strncpy(uls->vg_name, vg_name, MAX_NAME);
-
-		metadata = dm_config_find_node(reply.cft->root, "metadata");
-		if (!metadata) {
-			log_error("work_update_local %s name %s no metadata",
-				  uls->vg_uuid, uls->vg_name);
-			rv = -EINVAL;
-			goto next;
-		}
-
-		lock_type = dm_config_find_str(metadata, "metadata/lock_type", NULL);
-		uls->lm_type = str_to_lm(lock_type);
-
-		system_id = dm_config_find_str(metadata, "metadata/system_id", NULL);
-		if (system_id)
-			strncpy(uls->vg_sysid, system_id, MAX_NAME);
- next:
-		daemon_reply_destroy(reply);
-
-		log_debug("work_update_local %s lock_type %s %d sysid %s %s",
-			  uls->vg_name, lock_type ?: "NULL", uls->lm_type, uls->vg_sysid, uls->vg_uuid);
-
-		if (rv < 0 || !vg_name || !metadata)
-			goto out;
-	}
-	pthread_mutex_unlock(&lvmetad_mutex);
-	mutex_unlocked = 1;
-
-	/* remove local_vgs entries that no longer exist in update_vgs */
-
-	pthread_mutex_lock(&local_thread_mutex);
-
-	list_for_each_entry_safe(lls, safe, &local_vgs, list) {
-		uls = find_update_vg(&update_vgs, lls->vg_name, lls->vg_uuid);
-		if (!uls) {
-			log_debug("work_update_local remove local_vg %s %s",
-				  lls->vg_name, lls->vg_uuid);
-			list_del(&lls->list);
-			free(lls);
-
-		} else if (uls->lm_type != LD_LM_NONE) {
-			log_debug("work_update_local remove local_vg %s %s new lm_type %d",
-				  lls->vg_name, lls->vg_uuid, uls->lm_type);
-			list_del(&lls->list);
-			free(lls);
-		}
-	}
-
-	/* add local_vgs entries for any new non-lockd entries in update_vgs */
-
-	list_for_each_entry_safe(uls, safe, &update_vgs, list) {
-		if (uls->lm_type != LD_LM_NONE)
-			continue;
-		/* add_local_vg doesn't add any that already exist, it may update sysid */
-		add_local_vg(uls->vg_name, uls->vg_uuid, uls->vg_sysid);
-	}
-	pthread_mutex_unlock(&local_thread_mutex);
-out:
-	list_for_each_entry_safe(uls, safe, &update_vgs, list) {
-		list_del(&uls->list);
-		free(uls);
-	}
-
-	if (!mutex_unlocked)
-		pthread_mutex_unlock(&lvmetad_mutex);
-
-	return 0;
-}
-
-/*
- * We don't use the reply here, so it would be more
- * efficient to send without waiting for a reply.
- */
-
-static void invalidate_lvmetad_vg(struct lockspace *ls)
-{
-	daemon_reply reply;
-
-	pthread_mutex_lock(&lvmetad_mutex);
-	reply = daemon_send_simple(lvmetad_handle, "set_vg_info",
-				   "token = %s", "skip",
-				   "uuid = %s", ls->vg_uuid,
-				   "version = %d", 0,
-				   NULL);
-	pthread_mutex_unlock(&lvmetad_mutex);
-	daemon_reply_destroy(reply);
 }
 
 /*
@@ -3042,28 +2432,8 @@ out:
 
 static int add_lockspace(struct action *act)
 {
-	struct lockspace *ls;
 	char ls_name[MAX_NAME+1];
 	int rv;
-
-	if (local_thread_only) {
-		log_error("add_lockspace not allowed local_thread_only");
-		return -EINVAL;
-	}
-
-	/*
-	 * This should not generally happen, but does happen when a vg
-	 * lock_type is changed from none to sanlock.
-	 */
-	pthread_mutex_lock(&local_thread_mutex);
-	ls = find_local_vg(act->vg_name, NULL);
-	if (ls) {
-		log_error("add_lockspace vg %s remove matching local_vg", act->vg_name);
-		list_del(&ls->list);
-		free_ls_resources(ls);
-		free(ls);
-	}
-	pthread_mutex_unlock(&local_thread_mutex);
 
 	memset(ls_name, 0, sizeof(ls_name));
 
@@ -3520,7 +2890,6 @@ static void *worker_thread_main(void *arg_in)
 	struct timespec ts;
 	struct action *act, *safe;
 	uint64_t last_delayed_time = 0;
-	int delayed_update_local = 0;
 	int delay_sec = LONG_DELAY_PERIOD;
 	int rv;
 
@@ -3586,23 +2955,6 @@ static void *worker_thread_main(void *arg_in)
 			act->result = work_rename_vg(act);
 			add_client_result(act);
 
-		} else if (act->op == LD_OP_UPDATE_LOCAL) {
-			if (delayed_update_local) {
-				log_debug("work update_local ignore repeat");
-				act->result = 0;
-				add_client_result(act);
-			} else {
-				log_debug("work update_local");
-				rv = work_update_local_vgs();
-				if (rv == -EAGAIN) {
-					delayed_update_local = 1;
-					list_add(&act->list, &delayed_list);
-				} else {
-					act->result = 0;
-					add_client_result(act);
-				}
-			}
-
 		} else if (act->op == LD_OP_START_WAIT) {
 			act->result = count_lockspace_starting(act->client_id);
 			if (!act->result)
@@ -3643,16 +2995,6 @@ static void *worker_thread_main(void *arg_in)
 					list_del(&act->list);
 					add_client_result(act);
 				}
-
-			} else if (act->op == LD_OP_UPDATE_LOCAL) {
-				log_debug("work delayed update_local");
-				rv = work_update_local_vgs();
-				if (rv == -EAGAIN)
-					continue;
-				act->result = 0;
-				list_del(&act->list);
-				add_client_result(act);
-				delayed_update_local = 0;
 
 			} else if (act->op == LD_OP_STOP_ALL) {
 				log_debug("work delayed stop_all");
@@ -3838,9 +3180,6 @@ static void client_send_result(struct client *cl, struct action *act)
 			strcat(result_flags, "NO_GL_LS,");
 	}
 
-	if (act->flags & LD_AF_LOCAL_LS)
-		strcat(result_flags, "LOCAL_LS,");
-
 	if (act->flags & LD_AF_DUP_GL_LS)
 		strcat(result_flags, "DUP_GL_LS,");
 
@@ -3927,20 +3266,6 @@ static void client_purge(struct client *cl)
 		pthread_mutex_unlock(&ls->mutex);
 	}
 	pthread_mutex_unlock(&lockspaces_mutex);
-
-	if (local_thread_also) {
-		if (!(act = alloc_action()))
-			return;
-
-		act->op = LD_OP_CLOSE;
-		act->client_id = cl->id;
-
-		pthread_mutex_lock(&local_thread_mutex);
-		list_add_tail(&act->list, &local_thread_actions);
-		local_thread_work = 1;
-		pthread_cond_signal(&local_thread_cond);
-		pthread_mutex_unlock(&local_thread_mutex);
-	}
 }
 
 static int add_lock_action(struct action *act)
@@ -4055,20 +3380,6 @@ static int add_lock_action(struct action *act)
 	return 0;
 }
 
-static int add_local_lock_action(struct lockspace *ls, struct action *act)
-{
-	act->flags |= LD_AF_LOCAL_LS;
-	pthread_mutex_lock(&local_thread_mutex);
-	if (!ls && local_thread_only)
-		list_add_tail(&act->list, &local_thread_gls->actions);
-	else if (ls)
-		list_add_tail(&act->list, &ls->actions);
-	local_thread_work = 1;
-	pthread_cond_signal(&local_thread_cond);
-	pthread_mutex_unlock(&local_thread_mutex);
-	return 0;
-}
-
 static int str_to_op_rt(const char *req_name, int *op, int *rt)
 {
 	if (!req_name)
@@ -4164,18 +3475,6 @@ static int str_to_op_rt(const char *req_name, int *op, int *rt)
 		*rt = LD_RT_GL;
 		return 0;
 	}
-	if (!strcmp(req_name, "add_local")) {
-		*op = LD_OP_ADD_LOCAL;
-		return 0;
-	}
-	if (!strcmp(req_name, "rem_local")) {
-		*op = LD_OP_REM_LOCAL;
-		return 0;
-	}
-	if (!strcmp(req_name, "update_local")) {
-		*op = LD_OP_UPDATE_LOCAL;
-		return 0;
-	}
 	if (!strcmp(req_name, "rename_vg_before")) {
 		*op = LD_OP_RENAME_BEFORE;
 		*rt = LD_RT_VG;
@@ -4239,26 +3538,13 @@ static uint32_t str_to_opts(const char *str)
 		flags |= LD_AF_ENABLE;
 	if (strstr(str, "disable"))
 		flags |= LD_AF_DISABLE;
-	if (strstr(str, "update_names"))
-		flags |= LD_AF_UPDATE_NAMES_VERSION;
 out:
 	return flags;
 }
 
-static int is_other_sysid(struct lockspace *lls)
-{
-	if (!our_system_id || !lls->vg_sysid[0])
-		return 0;
-	if (!strcmp(lls->vg_sysid, our_system_id))
-		return 0;
-	return 1;
-}
-
-
 /*
  * dump info
  * client_list: each client struct
- * local_vgs: each lockspace struct (representing a local vg)
  * lockspaces: each lockspace struct
  * lockspace actions: each action struct
  * lockspace resources: each resource struct
@@ -4318,19 +3604,6 @@ static int print_client(struct client *cl, const char *prefix, int pos, int len)
 			cl->name[0] ? cl->name : ".");
 }
 
-static int print_local_vg(struct lockspace *ls, const char *prefix, int pos, int len)
-{
-	return snprintf(dump_buf + pos, len - pos,
-			"info=%s "
-			"vg_name=%s "
-			"vg_uuid=%s "
-			"vg_sysid=%s\n",
-			prefix,
-			ls->vg_name,
-			ls->vg_uuid,
-			ls->vg_sysid[0] ? ls->vg_sysid : ".");
-}
-
 static int print_lockspace(struct lockspace *ls, const char *prefix, int pos, int len)
 {
 	return snprintf(dump_buf + pos, len - pos,
@@ -4342,14 +3615,11 @@ static int print_lockspace(struct lockspace *ls, const char *prefix, int pos, in
 			"vg_args=%s "
 			"lm_type=%s "
 			"host_id=%llu "
-			"names_version=%u "
 			"create_fail=%d "
 			"create_done=%d "
 			"thread_work=%d "
 			"thread_stop=%d "
 			"thread_done=%d "
-			"update_local_vgs=%d "
-			"update_names_version=%d "
 			"sanlock_gl_enabled=%d "
 			"sanlock_gl_dup=%d\n",
 			prefix,
@@ -4360,14 +3630,11 @@ static int print_lockspace(struct lockspace *ls, const char *prefix, int pos, in
 			ls->vg_args,
 			lm_str(ls->lm_type),
 			(unsigned long long)ls->host_id,
-			ls->names_version,
 			ls->create_fail ? 1 : 0,
 			ls->create_done ? 1 : 0,
 			ls->thread_work ? 1 : 0,
 			ls->thread_stop ? 1 : 0,
 			ls->thread_done ? 1 : 0,
-			ls->update_local_vgs ? 1 : 0,
-			ls->update_names_version ? 1 : 0,
 			ls->sanlock_gl_enabled ? 1 : 0,
 			ls->sanlock_gl_dup ? 1 : 0);
 }
@@ -4462,24 +3729,6 @@ static int dump_info(int *dump_len)
 		return rv;
 
 	/*
-	 * local vgs
-	 */
-
-	pthread_mutex_lock(&lockspaces_mutex);
-	list_for_each_entry(ls, &local_vgs, list) {
-		ret = print_local_vg(ls, "local_vg", pos, len);
-		if (ret >= len - pos) {
-			 rv = -ENOSPC;
-			 break;
-		}
-		pos += ret;
-	}
-	pthread_mutex_unlock(&lockspaces_mutex);
-
-	if (rv < 0)
-		return rv;
-
-	/*
 	 * lockspaces with their action/resource/lock info
 	 */
 
@@ -4542,7 +3791,6 @@ static void client_recv_action(struct client *cl)
 {
 	request req;
 	response res;
-	struct lockspace *lls = NULL;
 	struct action *act;
 	const char *cl_name;
 	const char *vg_name;
@@ -4670,56 +3918,6 @@ static void client_recv_action(struct client *cl)
 	if (!cl->name[0] && cl_name)
 		strncpy(cl->name, cl_name, MAX_NAME-1);
 
-	if (!our_system_id) {
-		str = daemon_request_str(req, "our_system_id", NULL);
-		if (str && strcmp(str, "none"))
-			our_system_id = strdup(str);
-	}
-
-	/*
-	 * Detect the common case of a lock op on a local vg and queue
-	 * a reply immediately without going through a thread.
-	 */
-
-	if (rt == LD_RT_VG && op == LD_OP_LOCK) {
-		pthread_mutex_lock(&local_thread_mutex);
-		lls = find_local_vg(vg_name, vg_uuid);
-		pthread_mutex_unlock(&local_thread_mutex);
-		if (lls)
-			result = is_other_sysid(lls) ? -EOTHERVG : -ELOCALVG;
-	}
-
-	/*
-	 * A local vg with no sysid, accessible from multiple hosts, can be
-	 * modified without coordination if a user is not careful.  The best we
-	 * can do is disable the lvmetad cache for these vgs so any problems are
-	 * detected earlier, and not masked by lvmetad caching.
-	 */
-
-	if (lls && (result == -ELOCALVG) && !lls->vg_sysid[0])
-		invalidate_lvmetad_vg(lls);
-
-	if ((result == -EOTHERVG) || (result == -ELOCALVG && !local_thread_also)) {
-		const char *sysid = lls->vg_sysid[0] ? lls->vg_sysid : "none";
-
-		log_debug("local vg %s result %d %s sysid %s", vg_name, result,
-			  (result == -EOTHERVG) ? "other" : "local", sysid);
-
-		buffer_init(&res.buffer);
-		res = daemon_reply_simple("OK",
-					  "op_result = %d", result,
-					  "vg_sysid = %s", sysid,
-					  "lock_type = %s", "none",
-					  "result_flags = %s", "LOCAL_LS",
-					  NULL);
-		buffer_write(cl->fd, &res.buffer);
-		buffer_destroy(&res.buffer);
-		dm_config_destroy(req.cft);
-		buffer_destroy(&req.buffer);
-		client_resume(cl);
-		return;
-	}
-
 	if (!gl_use_dlm && !gl_use_sanlock && (lm > 0)) {
 		if (lm == LD_LM_DLM)
 			gl_use_dlm = 1;
@@ -4783,16 +3981,6 @@ static void client_recv_action(struct client *cl)
 		  cl->name[0] ? cl->name : "client", cl->pid, cl->id,
 		  op_str(act->op), rt_str(act->rt), act->vg_name, mode_str(act->mode), opts);
 
-	/*
-	 * local lock on local vg (lls) is done when local locking is enabled.
-	 * local lock on gl is done when local locking is enabled and lockd is not.
-	 */
-	if ((local_thread_also && lls) ||
-	    (local_thread_only && rt == LD_RT_GL && op == LD_OP_LOCK)) {
-		add_local_lock_action(lls, act);
-		return;
-	}
-
 	switch (act->op) {
 	case LD_OP_START:
 		rv = add_lockspace(act);
@@ -4801,7 +3989,6 @@ static void client_recv_action(struct client *cl)
 		rv = rem_lockspace(act);
 		break;
 	case LD_OP_INIT:
-	case LD_OP_UPDATE_LOCAL:
 	case LD_OP_START_WAIT:
 	case LD_OP_STOP_ALL:
 	case LD_OP_RENAME_FINAL:
@@ -4815,22 +4002,6 @@ static void client_recv_action(struct client *cl)
 	case LD_OP_FREE:
 	case LD_OP_RENAME_BEFORE:
 		rv = add_lock_action(act);
-		break;
-	case LD_OP_ADD_LOCAL:
-		pthread_mutex_lock(&local_thread_mutex);
-		add_local_vg(act->vg_name, act->vg_uuid, act->vg_sysid);
-		pthread_mutex_unlock(&local_thread_mutex);
-		act->result = 0;
-		add_client_result(act);
-		rv = 0;
-		break;
-	case LD_OP_REM_LOCAL:
-		pthread_mutex_lock(&local_thread_mutex);
-		rem_local_vg(act->vg_name, act->vg_uuid);
-		pthread_mutex_unlock(&local_thread_mutex);
-		act->result = 0;
-		add_client_result(act);
-		rv = 0;
 		break;
 	default:
 		rv = -EINVAL;
@@ -4974,54 +4145,6 @@ static void close_client_thread(void)
 	pthread_cond_signal(&client_cond);
 	pthread_mutex_unlock(&client_mutex);
 	pthread_join(client_thread, NULL);
-}
-
-static int setup_local_thread(void)
-{
-	struct lockspace *ls;
-	struct resource *r;
-	int rv;
-
-	if (!local_thread_also)
-		return 0;
-
-	if (local_thread_only) {
-		if (!(ls = alloc_lockspace()))
-			return -ENOMEM;
-
-		if (!(r = alloc_resource())) {
-			free(ls);
-			return -ENOMEM;
-		}
-
-		strcpy(ls->name, "local_thread_gls");
-
-		r->type = LD_RT_GL;
-		r->mode = LD_LK_UN;
-		strncpy(r->name, R_NAME_GL, MAX_NAME);
-		list_add_tail(&r->list, &ls->resources);
-
-		list_add(&ls->list, &local_vgs);
-		local_thread_gls = ls;
-	}
-
-	rv = pthread_create(&local_thread, NULL, local_thread_main, NULL);
-	if (rv)
-		return -1;
-
-	return 0;
-}
-
-static void close_local_thread(void)
-{
-	if (!local_thread_also)
-		return;
-
-	pthread_mutex_lock(&local_thread_mutex);
-	local_thread_stop = 1;
-	pthread_cond_signal(&local_thread_cond);
-	pthread_mutex_unlock(&local_thread_mutex);
-	pthread_join(local_thread, NULL);
 }
 
 #if 0
@@ -5935,10 +5058,6 @@ static int main_loop(daemon_state *ds_arg)
 
 	strcpy(gl_lsname_dlm, S_NAME_GL_DLM);
 
-	INIT_LIST_HEAD(&local_vgs);
-	INIT_LIST_HEAD(&local_thread_actions);
-	pthread_mutex_init(&local_thread_mutex, NULL);
-	pthread_cond_init(&local_thread_cond, NULL);
 	INIT_LIST_HEAD(&lockspaces);
 	INIT_LIST_HEAD(&lockspaces_inactive);
 	pthread_mutex_init(&lockspaces_mutex, NULL);
@@ -5953,7 +5072,6 @@ static int main_loop(daemon_state *ds_arg)
 
 	setup_client_thread();
 	setup_worker_thread();
-	setup_local_thread();
 	setup_restart();
 
 	pthread_mutex_init(&lvmetad_mutex, NULL);
@@ -5962,9 +5080,6 @@ static int main_loop(daemon_state *ds_arg)
 		log_error("lvmetad_open error %d", lvmetad_handle.error);
 	else
 		lvmetad_connected = 1;
-
-	/* add entries to local_vgs */
-	create_work_action(LD_OP_UPDATE_LOCAL);
 
 	/*
 	 * Attempt to rejoin lockspaces and adopt locks from a previous
@@ -6085,7 +5200,6 @@ static int main_loop(daemon_state *ds_arg)
 	free_lockspaces_inactive();
 	close_worker_thread();
 	close_client_thread();
-	close_local_thread();
 	closelog();
 	daemon_close(lvmetad_handle);
 	return 0;
@@ -6163,7 +5277,7 @@ int main(int argc, char *argv[])
 		int lm;
 		int option_index = 0;
 
-		c = getopt_long(argc, argv, "hVTfDp:s:l:aog:S:I:A:",
+		c = getopt_long(argc, argv, "hVTfDp:s:l:g:S:I:A:",
 				long_options, &option_index);
 		if (c == -1)
 			break;
@@ -6193,13 +5307,6 @@ int main(int argc, char *argv[])
 		case 's':
 			ds.socket_path = strdup(optarg);
 			break;
-		case 'a':
-			local_thread_also = 1;
-			break;
-		case 'o':
-			local_thread_also = 1;
-			local_thread_only = 1;
-			break;
 		case 'g':
 			lm = str_to_lm(optarg);
 			if (lm == LD_LM_DLM)
@@ -6210,9 +5317,6 @@ int main(int argc, char *argv[])
 				fprintf(stderr, "invalid gl-type option");
 				exit(EXIT_FAILURE);
 			}
-			break;
-		case 'y':
-			our_system_id = strdup(optarg);
 			break;
 		case 'i':
 			daemon_host_id = atoi(optarg);

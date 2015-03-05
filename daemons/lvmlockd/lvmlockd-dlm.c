@@ -333,7 +333,7 @@ static int to_dlm_mode(int ld_mode)
 }
 
 static int lm_adopt_dlm(struct lockspace *ls, struct resource *r, int ld_mode,
-			uint32_t *r_version, uint32_t *n_version)
+			uint32_t *r_version)
 {
 	struct lm_dlm *lmd = (struct lm_dlm *)ls->lm_data;
 	struct rd_dlm *rdd = (struct rd_dlm *)r->lm_data;
@@ -343,7 +343,6 @@ static int lm_adopt_dlm(struct lockspace *ls, struct resource *r, int ld_mode,
 	int rv;
 
 	*r_version = 0;
-	*n_version = 0;
 
 	if (!r->lm_init) {
 		rv = lm_add_resource_dlm(ls, r, 0);
@@ -411,7 +410,7 @@ static int lm_adopt_dlm(struct lockspace *ls, struct resource *r, int ld_mode,
  */
 
 int lm_lock_dlm(struct lockspace *ls, struct resource *r, int ld_mode,
-		uint32_t *r_version, uint32_t *n_version, int adopt)
+		uint32_t *r_version, int adopt)
 {
 	struct lm_dlm *lmd = (struct lm_dlm *)ls->lm_data;
 	struct rd_dlm *rdd = (struct rd_dlm *)r->lm_data;
@@ -426,7 +425,7 @@ int lm_lock_dlm(struct lockspace *ls, struct resource *r, int ld_mode,
 		/* When adopting, we don't follow the normal method
 		   of acquiring a NL lock then converting it to the
 		   desired mode. */
-		return lm_adopt_dlm(ls, r, ld_mode, r_version, n_version);
+		return lm_adopt_dlm(ls, r, ld_mode, r_version);
 	}
 
 	if (!r->lm_init) {
@@ -455,7 +454,6 @@ int lm_lock_dlm(struct lockspace *ls, struct resource *r, int ld_mode,
 
 	if (daemon_test) {
 		*r_version = 0;
-		*n_version = 0;
 		return 0;
 	}
 
@@ -477,7 +475,6 @@ int lm_lock_dlm(struct lockspace *ls, struct resource *r, int ld_mode,
 			log_debug("S %s R %s lock_dlm VALNOTVALID", ls->name, r->name);
 			memset(rdd->vb, 0, sizeof(struct val_blk));
 			*r_version = 0;
-			*n_version = 0;
 			goto out;
 		}
 
@@ -488,7 +485,6 @@ int lm_lock_dlm(struct lockspace *ls, struct resource *r, int ld_mode,
 			log_error("S %s R %s lock_dlm ignore vb_version %x",
 				  ls->name, r->name, vb_version);
 			*r_version = 0;
-			*n_version = 0;
 			free(rdd->vb);
 			rdd->vb = NULL;
 			lksb->sb_lvbptr = NULL;
@@ -496,11 +492,10 @@ int lm_lock_dlm(struct lockspace *ls, struct resource *r, int ld_mode,
 		}
 
 		*r_version = le32_to_cpu(vb.r_version);
-		*n_version = le32_to_cpu(vb.n_version);
 		memcpy(rdd->vb, &vb, sizeof(vb)); /* rdd->vb saved as le */
 
-		log_debug("S %s R %s lock_dlm get r_version %u n_version %u",
-			  ls->name, r->name, *r_version, *n_version);
+		log_debug("S %s R %s lock_dlm get r_version %u",
+			  ls->name, r->name, *r_version);
 	}
 out:
 	return 0;
@@ -556,7 +551,7 @@ int lm_convert_dlm(struct lockspace *ls, struct resource *r,
 }
 
 int lm_unlock_dlm(struct lockspace *ls, struct resource *r,
-		  uint32_t r_version, uint32_t n_version, uint32_t lmuf_flags)
+		  uint32_t r_version, uint32_t lmuf_flags)
 {
 	struct lm_dlm *lmd = (struct lm_dlm *)ls->lm_data;
 	struct rd_dlm *rdd = (struct rd_dlm *)r->lm_data;
@@ -581,12 +576,10 @@ int lm_unlock_dlm(struct lockspace *ls, struct resource *r,
 		}
 		if (r_version)
 			rdd->vb->r_version = cpu_to_le32(r_version);
-		if (n_version)
-			rdd->vb->n_version = cpu_to_le32(n_version);
 		memcpy(lksb->sb_lvbptr, rdd->vb, sizeof(struct val_blk));
 
-		log_debug("S %s R %s unlock_dlm set r_version %u n_version %u",
-			  ls->name, r->name, r_version, n_version);
+		log_debug("S %s R %s unlock_dlm set r_version %u",
+			  ls->name, r->name, r_version);
 
 		flags |= LKF_VALBLK;
 	}
