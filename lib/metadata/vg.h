@@ -71,6 +71,7 @@ struct volume_group {
 	const char *system_id;
 	char *lvm1_system_id;
 	const char *lock_type;
+	const char *lock_args;
 
 	uint32_t extent_size;
 	uint32_t extent_count;
