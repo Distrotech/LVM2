@@ -22,17 +22,6 @@
 
 #define WAIT_AT_LEAST_NANOSECS 100000
 
-struct poll_lv_list {
-	struct dm_list list;
-	char *uuid;
-	char *name;
-};
-
-typedef struct {
-	struct daemon_parms *parms;
-	struct dm_list plvs;
-} lvmpolld_parms_t;
-
 progress_t poll_mirror_progress(struct cmd_context *cmd,
 				struct logical_volume *lv, const char *name,
 				struct daemon_parms *parms)
@@ -170,15 +159,6 @@ static void _sleep_and_rescan_devices(struct daemon_parms *parms)
 	}
 }
 
-static void _sleep_a_while(unsigned seconds)
-{
-	const struct timespec req = {
-		.tv_sec = seconds
-	};
-
-	nanosleep(seconds ? &req : &_mintime, NULL);
-}
-
 int wait_for_single_lv(struct cmd_context *cmd, struct poll_operation_id *id,
 		       struct daemon_parms *parms)
 {
@@ -302,50 +282,6 @@ static struct poll_id_list* poll_id_list_create(struct dm_pool *mem,
 	return idl;
 }
 
-int report_progress(struct cmd_context *cmd, struct poll_operation_id *id,
-		    struct daemon_parms *parms)
-{
-	struct volume_group *vg;
-	struct logical_volume *lv;
-
-	vg = parms->poll_fns->get_copy_vg(cmd, id->vg_name, NULL, 1);
-	if (vg_read_error(vg)) {
-		release_vg(vg);
-		log_error("Can't reread VG for %s", id->display_name);
-		return 0;
-	}
-
-	lv = parms->poll_fns->get_copy_lv(cmd, vg, id->lv_name, id->uuid, parms->lv_type);
-	if (!lv && parms->lv_type == PVMOVE) {
-		log_print_unless_silent("%s: no pvmove in progress - already finished or aborted.",
-					id->display_name);
-		unlock_and_release_vg(cmd, vg, vg->name);
-		return 1;
-	}
-
-	if (!lv) {
-		log_warn("Can't find LV in %s for %s. Already finished or removed.",
-			  vg->name, id->display_name);
-		unlock_and_release_vg(cmd, vg, vg->name);
-		return 1;
-	}
-
-	if (!lv_is_active_locally(lv)) {
-		log_print_unless_silent("%s: Interrupted: No longer active.", id->display_name);
-		unlock_and_release_vg(cmd, vg, vg->name);
-		return 1;
-	}
-
-	if (parms->poll_fns->poll_progress(cmd, lv, id->display_name, parms) == PROGRESS_CHECK_FAILED) {
-		unlock_and_release_vg(cmd, vg, vg->name);
-		return_0;
-	}
-
-	unlock_and_release_vg(cmd, vg, vg->name);
-
-	return 1;
-}
-
 static int _poll_vg(struct cmd_context *cmd, const char *vgname,
 		    struct volume_group *vg, struct processing_handle *handle)
 {
@@ -416,6 +352,76 @@ err:
 	return ECMD_PROCESSED;
 }
 
+static void _poll_for_all_vgs(struct cmd_context *cmd,
+			      struct processing_handle *handle)
+{
+	struct daemon_parms *parms = (struct daemon_parms *) handle->custom_handle;
+
+	while (1) {
+		parms->outstanding_count = 0;
+		process_each_vg(cmd, 0, NULL, READ_FOR_UPDATE, handle, _poll_vg);
+		if (!parms->outstanding_count)
+			break;
+		_nanosleep(parms->interval, 1);
+	}
+}
+
+#ifdef LVMPOLLD_SUPPORT
+struct poll_lv_list {
+	struct dm_list list;
+	char *uuid;
+	char *name;
+};
+
+typedef struct {
+	struct daemon_parms *parms;
+	struct dm_list plvs;
+} lvmpolld_parms_t;
+
+static int report_progress(struct cmd_context *cmd, struct poll_operation_id *id,
+			   struct daemon_parms *parms)
+{
+	struct volume_group *vg;
+	struct logical_volume *lv;
+
+	vg = parms->poll_fns->get_copy_vg(cmd, id->vg_name, NULL, 1);
+	if (vg_read_error(vg)) {
+		release_vg(vg);
+		log_error("Can't reread VG for %s", id->display_name);
+		return 0;
+	}
+
+	lv = parms->poll_fns->get_copy_lv(cmd, vg, id->lv_name, id->uuid, parms->lv_type);
+	if (!lv && parms->lv_type == PVMOVE) {
+		log_print_unless_silent("%s: no pvmove in progress - already finished or aborted.",
+					id->display_name);
+		unlock_and_release_vg(cmd, vg, vg->name);
+		return 1;
+	}
+
+	if (!lv) {
+		log_warn("Can't find LV in %s for %s. Already finished or removed.",
+			  vg->name, id->display_name);
+		unlock_and_release_vg(cmd, vg, vg->name);
+		return 1;
+	}
+
+	if (!lv_is_active_locally(lv)) {
+		log_print_unless_silent("%s: Interrupted: No longer active.", id->display_name);
+		unlock_and_release_vg(cmd, vg, vg->name);
+		return 1;
+	}
+
+	if (parms->poll_fns->poll_progress(cmd, lv, id->display_name, parms) == PROGRESS_CHECK_FAILED) {
+		unlock_and_release_vg(cmd, vg, vg->name);
+		return_0;
+	}
+
+	unlock_and_release_vg(cmd, vg, vg->name);
+
+	return 1;
+}
+
 /* FIXME: this requires audit after code modifications due to bug in pvmove handling */
 /* FIXME: this requires audit after code modifications due to bug in pvmove handling */
 /* FIXME: this requires audit after code modifications due to bug in pvmove handling */
@@ -466,20 +472,6 @@ static int _lvmpolld_init_poll_vg(struct cmd_context *cmd, const char *vgname,
 	return ECMD_PROCESSED;
 }
 
-static void _poll_for_all_vgs(struct cmd_context *cmd,
-			      struct processing_handle *handle)
-{
-	struct daemon_parms *parms = (struct daemon_parms *) handle->custom_handle;
-
-	while (1) {
-		parms->outstanding_count = 0;
-		process_each_vg(cmd, 0, NULL, READ_FOR_UPDATE, handle, _poll_vg);
-		if (!parms->outstanding_count)
-			break;
-		_nanosleep(parms->interval, 1);
-	}
-}
-
 static void _lvmpolld_poll_for_all_vgs(struct cmd_context *cmd,
 				       struct daemon_parms *parms,
 				       struct processing_handle *handle)
@@ -514,9 +506,47 @@ static void _lvmpolld_poll_for_all_vgs(struct cmd_context *cmd,
 				report_progress(cmd, &id, lpdp.parms);
 		}
 
-		_sleep_a_while(lpdp.parms->interval);
+		_nanosleep(lpdp.parms->interval, 0);
 	}
 }
+
+static int _lvmpoll_daemon(struct cmd_context *cmd, struct poll_operation_id *id,
+			   struct daemon_parms *parms)
+{
+	int r;
+	struct processing_handle *handle = NULL;
+	unsigned finished = 0;
+
+	if (id) {
+		r = lvmpolld_poll_init(cmd, id->vg_name, id->lv_name, id->uuid,
+				       parms->lv_type, parms->interval,
+				       parms->aborting);
+
+		while (r && !parms->background && !finished) {
+			if (!(r = lvmpolld_request_info(id->uuid, parms->aborting, &finished)))
+				break;
+			if (!finished && !(r = report_progress(cmd, id, parms)))
+				break;
+
+			_nanosleep(parms->interval, 0);
+		}
+
+		return r ? ECMD_PROCESSED : ECMD_FAILED;
+	} else {
+		/* process all in-flight operations */
+		if (!(handle = init_processing_handle(cmd))) {
+			log_error("Failed to initialize processing handle.");
+			return ECMD_FAILED;
+		} else {
+			_lvmpolld_poll_for_all_vgs(cmd, parms, handle);
+			destroy_processing_handle(cmd, handle);
+			return ECMD_PROCESSED;
+		}
+	}
+}
+#else
+#	define _lvmpoll_daemon(cmd, id, parms) (ECMD_FAILED)
+#endif /* LVMPOLLD_SUPPORT */
 
 /*
  * Only allow *one* return from poll_daemon() (the parent).
@@ -575,41 +605,6 @@ static int _poll_daemon(struct cmd_context *cmd, struct poll_operation_id *id,
 
 	destroy_processing_handle(cmd, handle);
 	return ret;
-}
-
-static int _lvmpoll_daemon(struct cmd_context *cmd, struct poll_operation_id *id,
-			   struct daemon_parms *parms)
-{
-	int r;
-	struct processing_handle *handle = NULL;
-	unsigned finished = 0;
-
-	if (id) {
-		r = lvmpolld_poll_init(cmd, id->vg_name, id->lv_name, id->uuid,
-				       parms->lv_type, parms->interval,
-				       parms->aborting);
-
-		while (r && !parms->background && !finished) {
-			if (!(r = lvmpolld_request_info(id->uuid, parms->aborting, &finished)))
-				break;
-			if (!finished && !(r = report_progress(cmd, id, parms)))
-				break;
-
-			_sleep_a_while(parms->interval);
-		}
-
-		return r ? ECMD_PROCESSED : ECMD_FAILED;
-	} else {
-		/* process all in-flight operations */
-		if (!(handle = init_processing_handle(cmd))) {
-			log_error("Failed to initialize processing handle.");
-			return ECMD_FAILED;
-		} else {
-			_lvmpolld_poll_for_all_vgs(cmd, parms, handle);
-			destroy_processing_handle(cmd, handle);
-			return ECMD_PROCESSED;
-		}
-	}
 }
 
 static int _daemon_parms_init(struct cmd_context *cmd, struct daemon_parms *parms,
