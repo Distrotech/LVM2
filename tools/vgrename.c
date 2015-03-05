@@ -17,13 +17,14 @@
 
 static struct volume_group *_get_old_vg_for_rename(struct cmd_context *cmd,
 						   const char *vg_name_old,
-						   const char *vgid)
+						   const char *vgid,
+						   uint32_t lockd_state)
 {
 	struct volume_group *vg;
 
 	/* FIXME we used to print an error about EXPORTED, but proceeded
 	   nevertheless. */
-	vg = vg_read_for_update(cmd, vg_name_old, vgid, READ_ALLOW_EXPORTED);
+	vg = vg_read_for_update(cmd, vg_name_old, vgid, READ_ALLOW_EXPORTED, lockd_state);
 	if (vg_read_error(vg)) {
 		release_vg(vg);
 		return_NULL;
@@ -67,6 +68,7 @@ static int vg_rename_path(struct cmd_context *cmd, const char *old_vg_path,
 	const char *vgid = NULL, *vg_name, *vg_name_old;
 	char old_path[NAME_LEN], new_path[NAME_LEN];
 	struct volume_group *vg = NULL;
+	uint32_t lockd_state;
 	int lock_vg_old_first = 1;
 
 	vg_name_old = skip_dev_dir(cmd, old_vg_path, NULL);
@@ -114,14 +116,14 @@ static int vg_rename_path(struct cmd_context *cmd, const char *old_vg_path,
 	} else
 		vgid = NULL;
 
-	if (!lockd_vg(cmd, vg_name_old, "ex", 0))
+	if (!lockd_vg(cmd, vg_name_old, "ex", 0, &lockd_state))
 		return_0;
 
 	if (strcmp(vg_name_new, vg_name_old) < 0)
 		lock_vg_old_first = 0;
 
 	if (lock_vg_old_first) {
-		vg = _get_old_vg_for_rename(cmd, vg_name_old, vgid);
+		vg = _get_old_vg_for_rename(cmd, vg_name_old, vgid, lockd_state);
 		if (!vg)
 			return_0;
 
@@ -133,7 +135,7 @@ static int vg_rename_path(struct cmd_context *cmd, const char *old_vg_path,
 		if (!_lock_new_vg_for_rename(cmd, vg_name_new))
 			return_0;
 
-		vg = _get_old_vg_for_rename(cmd, vg_name_old, vgid);
+		vg = _get_old_vg_for_rename(cmd, vg_name_old, vgid, lockd_state);
 		if (!vg) {
 			unlock_vg(cmd, vg_name_new);
 			return_0;

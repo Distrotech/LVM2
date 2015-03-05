@@ -4416,7 +4416,8 @@ static int _access_vg_clustered(struct cmd_context *cmd, struct volume_group *vg
 	return 1;
 }
 
-static int _access_vg_lock_type(struct cmd_context *cmd, struct volume_group *vg)
+static int _access_vg_lock_type(struct cmd_context *cmd, struct volume_group *vg,
+				uint32_t lockd_state)
 {
 	if (!is_real_vg(vg->name))
 		return 1;
@@ -4424,10 +4425,38 @@ static int _access_vg_lock_type(struct cmd_context *cmd, struct volume_group *vg
 	if (cmd->lockd_vg_disable)
 		return 1;
 
-	if (is_lockd_type(vg->lock_type) && !find_config_tree_bool(cmd, global_use_lvmlockd_CFG, NULL)) {
-		log_warn("Cannot access VG %s which requires lvmlockd (lock_type %s).",
-			 vg->name, vg->lock_type);
-		return 0;
+	/*
+	 * Local VG requires no lock from lvmlockd.
+	 */
+	if (!is_lockd_type(vg->lock_type))
+		return 1;
+
+	/*
+	 * When lvmlockd is not running, only allow read access to the VG.
+	 */
+	if (!lvmlockd_active()) {
+		if (lockd_state & LDST_EX) {
+			log_error("Cannot access VG %s which requires lvmlockd for lock_type %s.",
+				  vg->name, vg->lock_type);
+			return 0;
+		} else {
+			log_warn("Reading VG %s without a lock.", vg->name);
+			return 1;
+		}
+	}
+
+	/*
+	 * The lock failed.  If the lock was ex, we cannot continue.
+	 * If the lock was sh, we can allow reading.
+	 */
+	if (lockd_state & LDST_FAIL) {
+		if (lockd_state & LDST_EX) {
+			log_error("Cannot access VG %s due to failed lock.", vg->name);
+			return 0;
+		} else {
+			log_warn("Reading VG %s without a lock.", vg->name);
+			return 1;
+		}
 	}
 
 	return 1;
@@ -4508,7 +4537,8 @@ static int _access_vg_systemid(struct cmd_context *cmd, struct volume_group *vg)
 /*
  * FIXME: move _vg_bad_status_bits() checks in here.
  */
-static int _vg_access_permitted(struct cmd_context *cmd, struct volume_group *vg, uint32_t *failure)
+static int _vg_access_permitted(struct cmd_context *cmd, struct volume_group *vg,
+				uint32_t lockd_state, uint32_t *failure)
 {
 	if (!is_real_vg(vg->name)) {
 		/* Disallow use of LVM1 orphans when a host system ID is set. */
@@ -4524,7 +4554,7 @@ static int _vg_access_permitted(struct cmd_context *cmd, struct volume_group *vg
 		return 0;
 	}
 
-	if (!_access_vg_lock_type(cmd, vg)) {
+	if (!_access_vg_lock_type(cmd, vg, lockd_state)) {
 		*failure |= FAILED_LOCK_TYPE;
 		return 0;
 	}
@@ -4550,7 +4580,8 @@ static int _vg_access_permitted(struct cmd_context *cmd, struct volume_group *vg
  */
 static struct volume_group *_vg_lock_and_read(struct cmd_context *cmd, const char *vg_name,
 			       const char *vgid, uint32_t lock_flags,
-			       uint64_t status_flags, uint32_t misc_flags)
+			       uint64_t status_flags, uint32_t misc_flags,
+			       uint32_t lockd_state)
 {
 	struct volume_group *vg = NULL;
 	int consistent = 1;
@@ -4596,7 +4627,7 @@ static struct volume_group *_vg_lock_and_read(struct cmd_context *cmd, const cha
 		goto bad;
 	}
 
-	if (!_vg_access_permitted(cmd, vg, &failure))
+	if (!_vg_access_permitted(cmd, vg, lockd_state, &failure))
 		goto bad;
 
 	/* consistent == 0 when VG is not found, but failed == FAILED_NOTFOUND */
@@ -4672,7 +4703,7 @@ bad_no_unlock:
  * *consistent = 1.
  */
 struct volume_group *vg_read(struct cmd_context *cmd, const char *vg_name,
-			     const char *vgid, uint32_t flags)
+			     const char *vgid, uint32_t flags, uint32_t lockd_state)
 {
 	uint64_t status = UINT64_C(0);
 	uint32_t lock_flags = LCK_VG_READ;
@@ -4685,7 +4716,7 @@ struct volume_group *vg_read(struct cmd_context *cmd, const char *vg_name,
 	if (flags & READ_ALLOW_EXPORTED)
 		status &= ~EXPORTED_VG;
 
-	return _vg_lock_and_read(cmd, vg_name, vgid, lock_flags, status, flags);
+	return _vg_lock_and_read(cmd, vg_name, vgid, lock_flags, status, flags, lockd_state);
 }
 
 /*
@@ -4694,9 +4725,9 @@ struct volume_group *vg_read(struct cmd_context *cmd, const char *vg_name,
  * request the new metadata to be written and committed).
  */
 struct volume_group *vg_read_for_update(struct cmd_context *cmd, const char *vg_name,
-			 const char *vgid, uint32_t flags)
+			 const char *vgid, uint32_t flags, uint32_t lockd_state)
 {
-	return vg_read(cmd, vg_name, vgid, flags | READ_FOR_UPDATE);
+	return vg_read(cmd, vg_name, vgid, flags | READ_FOR_UPDATE, lockd_state);
 }
 
 /*

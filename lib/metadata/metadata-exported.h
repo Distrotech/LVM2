@@ -626,9 +626,9 @@ int lv_resize(struct cmd_context *cmd, struct logical_volume *lv,
  * Return a handle to VG metadata.
  */
 struct volume_group *vg_read(struct cmd_context *cmd, const char *vg_name,
-			     const char *vgid, uint32_t flags);
+			     const char *vgid, uint32_t flags, uint32_t lockd_state);
 struct volume_group *vg_read_for_update(struct cmd_context *cmd, const char *vg_name,
-			 const char *vgid, uint32_t flags);
+			 const char *vgid, uint32_t flags, uint32_t lockd_state);
 
 /* 
  * Test validity of a VG handle.

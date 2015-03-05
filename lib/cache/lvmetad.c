@@ -1197,6 +1197,9 @@ void lvmetad_validate_global_cache(struct cmd_context *cmd, int force)
 	daemon_reply reply;
 	int global_invalid;
 
+	if (!lvmetad_used())
+		return;
+
 	if (force)
 		goto do_scan;
 

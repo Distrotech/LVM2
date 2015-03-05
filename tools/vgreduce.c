@@ -141,6 +141,7 @@ int vgreduce(struct cmd_context *cmd, int argc, char **argv)
 {
 	struct volume_group *vg;
 	const char *vg_name;
+	uint32_t lockd_state;
 	int ret = ECMD_FAILED;
 	int fixed = 1;
 	int repairing = arg_count(cmd, removemissing_ARG);
@@ -195,10 +196,13 @@ int vgreduce(struct cmd_context *cmd, int argc, char **argv)
 	init_ignore_suspended_devices(1);
 	cmd->handles_missing_pvs = 1;
 
-	if (!lockd_gl_vg(cmd, vg_name, "ex", "ex", 0))
+	if (!lockd_gl(cmd, "ex", 0))
 		return_ECMD_FAILED;
 
-	vg = vg_read_for_update(cmd, vg_name, NULL, READ_ALLOW_EXPORTED);
+	if (!lockd_vg(cmd, vg_name, "ex", 0, &lockd_state))
+		return_ECMD_FAILED;
+
+	vg = vg_read_for_update(cmd, vg_name, NULL, READ_ALLOW_EXPORTED, lockd_state);
 	if (vg_read_error(vg) == FAILED_ALLOCATION ||
 	    vg_read_error(vg) == FAILED_NOTFOUND)
 		goto_out;
@@ -221,7 +225,7 @@ int vgreduce(struct cmd_context *cmd, int argc, char **argv)
 	log_verbose("Trying to open VG %s for recovery...", vg_name);
 
 	vg = vg_read_for_update(cmd, vg_name, NULL,
-				READ_ALLOW_INCONSISTENT | READ_ALLOW_EXPORTED);
+				READ_ALLOW_INCONSISTENT | READ_ALLOW_EXPORTED, lockd_state);
 
 	locked |= !vg_read_error(vg);
 

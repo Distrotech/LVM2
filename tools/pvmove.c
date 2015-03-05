@@ -92,7 +92,7 @@ static struct volume_group *_get_vg(struct cmd_context *cmd, const char *vgname)
 {
 	dev_close_all();
 
-	return vg_read_for_update(cmd, vgname, NULL, 0);
+	return vg_read_for_update(cmd, vgname, NULL, 0, 0);
 }
 
 /* Create list of PVs for allocation of replacement extents */

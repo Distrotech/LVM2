@@ -714,7 +714,7 @@ int vgcreate_params_set_from_args(struct cmd_context *cmd,
 				  struct vgcreate_params *vp_def)
 {
 	const char *system_id_arg_str;
-	const char *lock_type;
+	const char *lock_type = NULL;
 	int locking_type;
 	int use_lvmlockd;
 	int use_clvmd;
@@ -1943,6 +1943,7 @@ static int _process_vgnameid_list(struct cmd_context *cmd, uint32_t flags,
 	struct vgnameid_list *vgnl;
 	const char *vg_name;
 	const char *vg_uuid;
+	uint32_t lockd_state;
 	int selected;
 	int whole_selected = 0;
 	int ret_max = ECMD_PROCESSED;
@@ -1967,10 +1968,10 @@ static int _process_vgnameid_list(struct cmd_context *cmd, uint32_t flags,
 		vg_uuid = vgnl->vgid;
 		skip = 0;
 
-		if (!lockd_vg(cmd, vg_name, NULL, 0))
+		if (!lockd_vg(cmd, vg_name, NULL, 0, &lockd_state))
 			continue;
 
-		vg = vg_read(cmd, vg_name, vg_uuid, flags);
+		vg = vg_read(cmd, vg_name, vg_uuid, flags, lockd_state);
 		if (_ignore_vg(vg, vg_name, arg_vgnames, flags & READ_ALLOW_INCONSISTENT, &skip)) {
 			stack;
 			ret_max = ECMD_FAILED;
@@ -1996,7 +1997,7 @@ static int _process_vgnameid_list(struct cmd_context *cmd, uint32_t flags,
 			unlock_vg(cmd, vg_name);
 endvg:
 		release_vg(vg);
-		lockd_vg(cmd, vg_name, "un", 0);
+		lockd_vg(cmd, vg_name, "un", 0, &lockd_state);
 	}
 
 	/* the VG is selected if at least one LV is selected */
@@ -2364,6 +2365,7 @@ static int _process_lv_vgnameid_list(struct cmd_context *cmd, uint32_t flags,
 	struct dm_str_list *sl;
 	struct dm_list *tags_arg;
 	struct dm_list lvnames;
+	uint32_t lockd_state;
 	const char *vg_name;
 	const char *vg_uuid;
 	const char *vgn;
@@ -2410,10 +2412,10 @@ static int _process_lv_vgnameid_list(struct cmd_context *cmd, uint32_t flags,
 			}
 		}
 
-		if (!lockd_vg(cmd, vg_name, NULL, 0))
+		if (!lockd_vg(cmd, vg_name, NULL, 0, &lockd_state))
 			continue;
 
-		vg = vg_read(cmd, vg_name, vg_uuid, flags);
+		vg = vg_read(cmd, vg_name, vg_uuid, flags, lockd_state);
 		if (_ignore_vg(vg, vg_name, arg_vgnames, flags & READ_ALLOW_INCONSISTENT, &skip)) {
 			stack;
 			ret_max = ECMD_FAILED;
@@ -2433,7 +2435,7 @@ static int _process_lv_vgnameid_list(struct cmd_context *cmd, uint32_t flags,
 		unlock_vg(cmd, vg_name);
 endvg:
 		release_vg(vg);
-		lockd_vg(cmd, vg_name, "un", 0);
+		lockd_vg(cmd, vg_name, "un", 0, &lockd_state);
 	}
 
 	return ret_max;
@@ -2877,6 +2879,7 @@ static int _process_pvs_in_vgs(struct cmd_context *cmd, uint32_t flags,
 	struct vgnameid_list *vgnl;
 	const char *vg_name;
 	const char *vg_uuid;
+	uint32_t lockd_state;
 	int ret_max = ECMD_PROCESSED;
 	int ret;
 	int skip;
@@ -2889,10 +2892,10 @@ static int _process_pvs_in_vgs(struct cmd_context *cmd, uint32_t flags,
 		vg_uuid = vgnl->vgid;
 		skip = 0;
 
-		if (!lockd_vg(cmd, vg_name, NULL, 0))
+		if (!lockd_vg(cmd, vg_name, NULL, 0, &lockd_state))
 			continue;
 
-		vg = vg_read(cmd, vg_name, vg_uuid, flags | READ_WARN_INCONSISTENT);
+		vg = vg_read(cmd, vg_name, vg_uuid, flags | READ_WARN_INCONSISTENT, lockd_state);
 		if (_ignore_vg(vg, vg_name, NULL, flags & READ_ALLOW_INCONSISTENT, &skip)) {
 			stack;
 			ret_max = ECMD_FAILED;
@@ -2916,7 +2919,7 @@ static int _process_pvs_in_vgs(struct cmd_context *cmd, uint32_t flags,
 			unlock_vg(cmd, vg->name);
 endvg:
 		release_vg(vg);
-		lockd_vg(cmd, vg_name, "un", 0);
+		lockd_vg(cmd, vg_name, "un", 0, &lockd_state);
 
 		/* Quit early when possible. */
 		if (!process_all_pvs && dm_list_empty(arg_tags) && dm_list_empty(arg_devices))

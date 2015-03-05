@@ -40,6 +40,15 @@
 #define LD_RF_INACTIVE_LS       0x00000010
 #define LD_RF_ADD_LS_ERROR      0x00000020
 
+/* lockd_state flags */
+#define LDST_EX			0x00000001
+#define LDST_SH			0x00000002
+#define LDST_FAIL_REQUEST	0x00000004
+#define LDST_FAIL_NOLS		0x00000008
+#define LDST_FAIL_STARTING	0x00000010
+#define LDST_FAIL_OTHER		0x00000020
+#define LDST_FAIL		(LDST_FAIL_REQUEST | LDST_FAIL_NOLS | LDST_FAIL_STARTING | LDST_FAIL_OTHER)
+
 /*
  * lock_type    lock_type_num
  * "none"    -> LOCK_TYPE_NONE
@@ -92,6 +101,7 @@ void lvmlockd_set_socket(const char *);
 void lvmlockd_disconnect(void);
 void lvmlockd_connect_or_warn(void);
 int lvmlockd_connected(void);
+int lvmlockd_active(void);
 
 /* vgcreate/vgremove use init/free */
 
@@ -109,15 +119,13 @@ int lockd_rename_vg_final(struct cmd_context *cmd, struct volume_group *vg, int 
 int lockd_start_vg(struct cmd_context *cmd, struct volume_group *vg);
 int lockd_stop_vg(struct cmd_context *cmd, struct volume_group *vg);
 int lockd_start_wait(struct cmd_context *cmd);
-int lockd_update_local(struct cmd_context *cmd);
 
 /* locking */
 
 int lockd_gl_create(struct cmd_context *cmd, const char *def_mode, const char *vg_lock_type);
 int lockd_gl(struct cmd_context *cmd, const char *def_mode, uint32_t flags);
-int lockd_vg(struct cmd_context *cmd, const char *vg_name, const char *def_mode, uint32_t flags);
-int lockd_gl_vg(struct cmd_context *cmd, const char *vg_name,
-		const char *def_gl_mode, const char *def_vg_mode, uint32_t flags);
+int lockd_vg(struct cmd_context *cmd, const char *vg_name, const char *def_mode,
+	     uint32_t flags, uint32_t *lockd_state);
 int lockd_vg_update(struct volume_group *vg);
 
 int lockd_lv_name(struct cmd_context *cmd, struct volume_group *vg,
@@ -155,12 +163,10 @@ int lockd_init_lv_args(struct cmd_context *cmd, struct volume_group *vg,
 #define lockd_start_vg(cmd, vg) (1)
 #define lockd_stop_vg(cmd, vg)  (1)
 #define lockd_start_wait(cmd) (1)
-#define lockd_update_local(cmd) (1)
 
 #define lockd_gl_create(cmd, def_mode, vg_lock_type) (1)
 #define lockd_gl(cmd, def_mode, flags) (1)
-#define lockd_vg(cmd, vg_name, def_mode, flags) (1)
-#define lockd_gl_vg(cmd, vg_name, def_gl_mode, def_vg_mode, flags) (1)
+#define lockd_vg(cmd, vg_name, def_mode, flags, lockd_state) (1)
 #define lockd_vg_update(vg) (1)
 
 #define lockd_lv_name(cmd, vg, lv_name, lock_args, def_mode, flags) (1)

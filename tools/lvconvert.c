@@ -76,6 +76,9 @@ struct lvconvert_params {
 	thin_discards_t discards;
 };
 
+/* FIXME: temporarily put here until merged with poll daemon changes. */
+static uint32_t lockd_state;
+
 static int _lvconvert_validate_names(struct lvconvert_params *lp)
 {
 	int i, j;
@@ -705,11 +708,11 @@ static struct volume_group *_get_lvconvert_vg(struct cmd_context *cmd,
 	dev_close_all();
 
 	if (name && !strchr(name, '/'))
-		return vg_read_for_update(cmd, name, NULL, 0);
+		return vg_read_for_update(cmd, name, NULL, 0, lockd_state);
 
 	/* 'name' is the full LV name; must extract_vgname() */
 	return vg_read_for_update(cmd, extract_vgname(cmd, name),
-				  NULL, 0);
+				  NULL, 0, lockd_state);
 }
 
 static struct logical_volume *_get_lvconvert_lv(struct cmd_context *cmd __attribute__((unused)),
@@ -3507,7 +3510,7 @@ static int lvconvert_single(struct cmd_context *cmd, struct lvconvert_params *lp
 		cmd->handles_missing_pvs = 1;
 	}
 
-	if (!lockd_vg(cmd, lp->vg_name, "ex", 0))
+	if (!lockd_vg(cmd, lp->vg_name, "ex", 0, &lockd_state))
 		goto_out;
 
 	if (!(lv = get_vg_lock_and_logical_volume(cmd, lp->vg_name, lp->lv_name)))

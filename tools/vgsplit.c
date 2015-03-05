@@ -422,7 +422,7 @@ static struct volume_group *_vgsplit_to(struct cmd_context *cmd,
 	if (vg_read_error(vg_to) == FAILED_EXIST) {
 		*existing_vg = 1;
 		release_vg(vg_to);
-		vg_to = vg_read_for_update(cmd, vg_name_to, NULL, 0);
+		vg_to = vg_read_for_update(cmd, vg_name_to, NULL, 0, 0);
 
 		if (vg_read_error(vg_to)) {
 			release_vg(vg_to);
@@ -448,7 +448,7 @@ static struct volume_group *_vgsplit_from(struct cmd_context *cmd,
 
 	log_verbose("Checking for volume group \"%s\"", vg_name_from);
 
-	vg_from = vg_read_for_update(cmd, vg_name_from, NULL, 0);
+	vg_from = vg_read_for_update(cmd, vg_name_from, NULL, 0, 0);
 	if (vg_read_error(vg_from)) {
 		release_vg(vg_from);
 		return NULL;
@@ -672,7 +672,7 @@ int vgsplit(struct cmd_context *cmd, int argc, char **argv)
 	if (!test_mode()) {
 		release_vg(vg_to);
 		vg_to = vg_read_for_update(cmd, vg_name_to, NULL,
-					   READ_ALLOW_EXPORTED);
+					   READ_ALLOW_EXPORTED, 0);
 		if (vg_read_error(vg_to)) {
 			log_error("Volume group \"%s\" became inconsistent: "
 				  "please fix manually", vg_name_to);
