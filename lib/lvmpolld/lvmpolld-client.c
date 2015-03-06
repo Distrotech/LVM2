@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2014 Red Hat, Inc.
+ * Copyright (C) 2015 Red Hat, Inc.
  *
  * This file is part of LVM2.
  *
@@ -12,7 +12,6 @@
  * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
-#include <assert.h>
 #include <stdlib.h>
 
 #include "lib.h"
@@ -90,7 +89,8 @@ static struct progress_info _request_progress_info(const char *uuid, unsigned ab
 		goto out_req;
 	}
 
-	if (abort && !daemon_request_extend(req, LVMPD_PARM_ABORT " = %d", abort, NULL)) {
+	if (abort &&
+	    !daemon_request_extend(req, LVMPD_PARM_ABORT " = %d", abort, NULL)) {
 		log_error("failed to create " LVMPD_REQ_PROGRESS " request");
 		goto out_req;
 	}
