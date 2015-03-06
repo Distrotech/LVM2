@@ -1056,6 +1056,15 @@ cfg(activation_error_when_full_CFG, "error_when_full", activation_CFG_SECTION, 0
 	"New thin pools are assigned the behavior defined here.\n"
 	"The '--errorwhenfull y|n' option overrides this setting.\n")
 
+cfg(global_use_lvmpolld_CFG, "use_lvmpolld", global_CFG_SECTION, 0, CFG_TYPE_BOOL, 0, vsn(2, 2, 119),
+	"Indicates whether use lvmpolld instead of classical polldaemon (a process\n"
+	"forked off an initiating lvm command) or not. When set to 1 and native systemd\n"
+	"service is installed in the system lvm starts using lvmpolld. lvmpolld gets\n"
+	"auto-activated by systemd when a message lands on the respective lvmpolld socket.\n"
+	"All commands that would require polling of in-progress operation are therefor\n"
+	"spawned in lvmpolld's service cgroup.\n"
+	"When set to 0 lvm falls back to classical polling.\n")
+
 cfg(activation_readahead_CFG, "readahead", activation_CFG_SECTION, 0, CFG_TYPE_STRING, DEFAULT_READ_AHEAD, vsn(1, 0, 23), NULL, 0, NULL,
 	"Setting to use when there is no readahead setting in metadata.\n"
 	"Possible options are: none, auto.\n"
