@@ -384,7 +384,7 @@ static int report_progress(struct cmd_context *cmd, struct poll_operation_id *id
 	struct volume_group *vg;
 	struct logical_volume *lv;
 
-	vg = parms->poll_fns->get_copy_vg(cmd, id->vg_name, NULL, 1);
+	vg = parms->poll_fns->get_copy_vg(cmd, id->vg_name, NULL, 0);
 	if (vg_read_error(vg)) {
 		release_vg(vg);
 		log_error("Can't reread VG for %s", id->display_name);
@@ -522,13 +522,14 @@ static int _lvmpoll_daemon(struct cmd_context *cmd, struct poll_operation_id *id
 				       parms->lv_type, parms->interval,
 				       parms->aborting);
 
-		while (r && !parms->background && !finished) {
-			if (!(r = lvmpolld_request_info(id->uuid, parms->aborting, &finished)))
-				break;
-			if (!finished && !(r = report_progress(cmd, id, parms)))
-				break;
+		if (!parms->background) {
+			while (1) {
+				if (!(r = lvmpolld_request_info(id->uuid, parms->aborting, &finished)) ||
+				    finished || !(r = report_progress(cmd, id, parms)))
+					break;
 
-			_nanosleep(parms->interval, 0);
+				_nanosleep(parms->interval, 0);
+			}
 		}
 
 		return r ? ECMD_PROCESSED : ECMD_FAILED;
