@@ -750,11 +750,7 @@ PFL();
 		if (new_meta_lvs || new_data_lvs) {
 			uint32_t stripes, mirrors, log_count = count;
 
-#if 0
 			/* Amount of extents for the rimage device(s) */
-			extents = (segtype_is_raid0(segtype) || segtype->parity_devs) ?
-				  lv->le_count / _data_rimages_count(seg, seg->area_count) : lv->le_count;
-#endif
 			if (segtype_is_striped_raid(seg->segtype)) {
 				stripes = count;
 				mirrors = 1;
@@ -971,13 +967,14 @@ static int _raid_add_images(struct logical_volume *lv,
 			    const struct segment_type *segtype,
 			    uint32_t new_count, struct dm_list *pvs)
 {
-	int linear, raid0;
+	int add_all_rmeta = 0, linear;
 	uint32_t old_count = lv_raid_image_count(lv);
 	uint32_t count = new_count - old_count;
 	uint64_t lv_flags = LV_REBUILD;
 	struct lv_segment *seg = first_seg(lv);
 	struct dm_list data_lvs, meta_lvs;
 
+PFLA("seg->meta_areas=%p", seg->meta_areas);
 	segtype = segtype ?: (struct segment_type *) seg->segtype;
 PFLA("segtype->name=%s seg->area_count=%u count=%u", segtype->name, seg->area_count, count);
 
@@ -998,9 +995,7 @@ PFL();
 	dm_list_init(&data_lvs); /* For data image additions */
 	dm_list_init(&meta_lvs); /* For metadata image additions */
 
-	raid0 = seg_is_raid0(seg);
-
-PFL();
+PFLA("seg->meta_areas=%p", seg->meta_areas);
 	/*
 	 * If the segtype is linear, then we must allocate a metadata
 	 * LV to accompany it.
@@ -1019,36 +1014,41 @@ PFL();
 		if (!_alloc_rmeta_for_linear(lv, &meta_lvs))
 			return 0;
 
+		add_all_rmeta = 1;
+
 	/*
 	 * In case this is a conversion from raid0 to raid4/5/6,
-	 * add the metadata image LVs for the raid0 rimage LVs.
+	 * add the metadata image LVs for the raid0 rimage LVs
+	 * in case they don't exists.
 	 */
-	} else if (raid0) {
+	} else if (!seg->meta_areas) {
 		uint32_t s;
 		struct lv_list *lvl_array;
 
+PFLA("seg->meta_areas=%p", seg->meta_areas);
 		/*
 		 * A complete resync will be done because of
 		 * the new raid4/5/6 set, no need to mark each sub-lv
 		 *
 		 * -> reset rebuild flag
 		 */
-		lv_flags = 0;
+		// lv_flags = 0;
 
 		if (!(lvl_array = dm_pool_alloc(lv->vg->vgmem, sizeof(*lvl_array) * old_count)))
 			return_0;
 
-		for (s = 0; s < seg->area_count; s++) {
-			struct logical_volume *slv = seg_lv(seg, s);
-
-			log_debug_metadata("Allocating new metadata LV for %s", slv->name);
-			if (!_alloc_rmeta_for_lv(slv, &lvl_array[s].lv)) {
-				log_error("Failed to allocate metadata LV for %s in %s", slv->name, lv->name);
-				return 0;
-			}
-
-			dm_list_add(&meta_lvs, &lvl_array[s].list);
+		for (s = 0; s < old_count; s++) {
+			lvl_array[s].lv = seg_lv(seg, s);
+			dm_list_add(&data_lvs, &lvl_array[s].list);
 		}
+
+		if (!_alloc_rmeta_devs_for_rimage_devs(lv, seg->area_count, &data_lvs, &meta_lvs)) {
+			log_error("Failed to allocate metadata LVs for %s", lv->name);
+			return 0;
+		}
+
+		dm_list_init(&data_lvs);
+		add_all_rmeta = 1;
 	}
 
 PFLA("seg->segtype->flags=%X lv_flags=%lX", seg->segtype->flags, lv_flags);
@@ -1094,7 +1094,7 @@ PFL();
 	 * Set segment areas for metadata sub_lvs adding
 	 * an extra meta area when converting from linear
 	 */
-	if (!_add_sublvs_to_lv(lv, 0, 0, &meta_lvs, (linear || raid0) ? 0 : old_count))
+	if (!_add_sublvs_to_lv(lv, 0, 0, &meta_lvs, add_all_rmeta ? 0 : old_count))
 		goto fail;
 
 	/* Set segment areas for data sub_lvs */
@@ -2004,6 +2004,7 @@ static int _striped_to_raid0_move_segs_to_raid0_components(struct logical_volume
 	struct dm_list *l;
 	struct segment_type *segtype = get_segtype_from_string(lv->vg->cmd, "striped");
 
+PFLA("uuid=\"%s\"", lv->lvid.id);
 	dm_list_iterate(l, new_data_lvs) {
 		new_data_lv = (dm_list_item(l, struct lv_list))->lv;
 
@@ -2037,10 +2038,11 @@ PFLA("seg_new->area_len=%u\n", seg_new->area_len);
 PFLA("le_count=%u size=%llu", le, (unsigned long long) new_data_lv->size);
 	}
 
-	/* Remove the empty segments of the striped LV */
+	/* Remove the empty segments from the striped LV */
 	dm_list_iterate_items_safe(seg_from, tmp, &lv->segments)
 		dm_list_del(&seg_from->list);
 
+PFLA("uuid=\"%s\"", lv->lvid.id);
 	return 1;
 }
 
@@ -2069,6 +2071,8 @@ static int _striped_to_raid0_alloc_raid0_segment(struct logical_volume *lv,
 		return_0;
 
 	seg_new->status |= RAID;
+
+	/* Add new segment to LV */
 	dm_list_add(&lv->segments, &seg_new->list);
 
 	return 1;
@@ -2082,7 +2086,8 @@ static int _check_stripes(struct logical_volume *lv)
 
 	dm_list_iterate_items(seg, &lv->segments) {
 		if (seg->area_count != area_count) {
-			log_error("Cannot convert striped LV %s with varying stripe numbers to raid0", lv->name);
+			log_error("Cannot yet convert striped LV %s/%s with varying stripe numbers to raid0",
+				  lv->vg->name, lv->name);
 			return 0;
 		}
 	}
@@ -2107,64 +2112,59 @@ static int _convert_striped_to_raid0(struct logical_volume *lv,
 				     int alloc_metadata_devs,
 				     int update_and_reload)
 {
-	struct lv_segment *seg = first_seg(lv);
+	struct lv_segment *data_lv_seg, *seg = first_seg(lv);
 	struct dm_list new_meta_lvs;
 	struct dm_list new_data_lvs;
+	struct dm_list *l;
 	unsigned area_count = seg->area_count, s;
 
-	if (seg_is_linear(seg)) {
-		log_error("Cannot convert linear LV /%s/%s to raid0",
-			  lv->vg->name, lv->name);
+	if (!seg_is_striped(seg)) {
+		log_error("Cannot convert non-striped LV %s/%s to raid0", lv->vg->name, lv->name);
 		return 0;
 	}
-
-	dm_list_init(&new_meta_lvs);
-	dm_list_init(&new_data_lvs);
 
 	/* Check for non-supported varying area_count on multi-segment striped LVs */
 	if (!_check_stripes(lv))
 		return 0;
-#if 0
-	if (update_and_reload)
-		seg->segtype = new_segtype;
-#endif
+
+	dm_list_init(&new_meta_lvs);
+	dm_list_init(&new_data_lvs);
 
 	/* FIXME: insert_layer_for_lv() not suitable */
 	/* Allocate rimage components in order to be able to support multi-segment "striped" LVs */
 	if (!_alloc_image_components(lv, 0, NULL, area_count, NULL, &new_data_lvs)) {
-		log_error("Failed to allocate image components for raid0 LV %s.", lv->name);
+		log_error("Failed to allocate image components for raid0 LV %s/%s.", lv->vg->name, lv->name);
 		return_0;
 	}
 
 	/* Image components are being allocated with LV_REBUILD preset and we don't need it for raid0 */
-	for (s = 0; s < area_count; s++)
-		seg_lv(seg, s)->status &= ~LV_REBUILD;
+	dm_list_iterate(l, &new_data_lvs)
+		(dm_list_item(l, struct lv_list))->lv->status &= ~LV_REBUILD;
 
 	/* Move the AREA_PV areas across to the new rimage components */
 	if (!_striped_to_raid0_move_segs_to_raid0_components(lv, &new_data_lvs)) {
-		log_error("Failed to insert linear LVs underneath, %s.", lv->name);
+		log_error("Failed to insert linear LVs underneath %s/%s.", lv->vg->name, lv->name);
 		return_0;
 	}
 
 	/* Allocate new top-level LV segment */
-	seg = first_seg(dm_list_item(dm_list_first(&new_data_lvs), struct lv_list)->lv);
-	if (!_striped_to_raid0_alloc_raid0_segment(lv, area_count, seg)) {
-		log_error("Failed to allocate new raid0 segement for LV %s.", lv->name);
+	data_lv_seg = first_seg(dm_list_item(dm_list_first(&new_data_lvs), struct lv_list)->lv);
+	if (!_striped_to_raid0_alloc_raid0_segment(lv, area_count, data_lv_seg)) {
+		log_error("Failed to allocate new raid0 segement for LV %s/%s.", lv->vg->name, lv->name);
 		return_0;
 	}
-
-	seg = first_seg(lv); 
-	seg->segtype = new_segtype;
-
+PFL();
 	/* Optionally allocate a new metadata device for each of the raid0 stripe LVs */
 	if (alloc_metadata_devs &&
 	    !_alloc_rmeta_devs_for_rimage_devs(lv, area_count, &new_data_lvs, &new_meta_lvs))
 		return 0;
+PFL();
 
 	/* Add data lvs to the top-level lv before working on optional rmeta devs */
 	if (!_add_sublvs_to_lv(lv, 1, 0, &new_data_lvs, 0))
 		return 0;
 
+PFL();
 	if (alloc_metadata_devs) {
 		/* Metadata LVs must be cleared before being added to the array */
 		log_debug_metadata("Clearing newly allocated metadata LVs");
@@ -2173,7 +2173,7 @@ static int _convert_striped_to_raid0(struct logical_volume *lv,
 			return 0;
 		}
 
-		/* Allocate meta_areas for new raid0 lv */
+		/* Allocate meta_areas array for new raid0 lv */
 		if (!_realloc_seg_areas(lv, seg, area_count, &seg->meta_areas))
 			return 0;
 
@@ -2184,6 +2184,7 @@ static int _convert_striped_to_raid0(struct logical_volume *lv,
 			return_0;
 	}
 
+PFL();
 	lv->status |= RAID;
 	seg->status |= RAID;
 	lv_set_visible(lv);
@@ -2192,6 +2193,7 @@ static int _convert_striped_to_raid0(struct logical_volume *lv,
 	    !lv_update_and_reload(lv))
 		return_0;
 
+PFLA("seg->segtype=%s", seg->segtype->name);
 	return 1;
 }
 /* END: striped -> raid0 conversion */
@@ -2238,6 +2240,7 @@ static int _raid0_to_striped_retrieve_segments_and_lvs(struct logical_volume *lv
 
 	/* Loop the areas listing the image LVs and move all areas across from them to @new_segments */
 	for (s = 0; s < seg->area_count; s++) {
+		/* If any metadata lvs -> remove them */
 		if (seg->meta_areas &&
 		    (mlv = lvl_array[seg->area_count + s].lv = seg_metalv(seg, s))) {
 			dm_list_add(removal_lvs, &lvl_array[seg->area_count + s].list);
@@ -2295,11 +2298,7 @@ static int _convert_raid0_to_striped(struct logical_volume *lv,
 	if (!seg_is_raid0(seg) ||
 	    !segtype_is_striped(new_segtype))
 		return 0;
-#if 0
-	/* HM FIXME: has been called in lvconvert already */
-	if (!archive(lv->vg))
-		return_0;
-#endif
+
 	/* Move the AREA_PV areas across to new top-level segments */
 	if (!_raid0_to_striped_retrieve_segments_and_lvs(lv, &removal_lvs)) {
 		log_error("Failed to retrieve raid0 segments from %s.", lv->name);
@@ -2729,14 +2728,14 @@ PFL();
 PFLA("seg->segtype=%s segtype->name=%s", seg->segtype->name, new_segtype->name);
 	/* Striped -> RAID0 conversion */
 	if (seg_is_striped(seg) && segtype_is_striped_raid(new_segtype)) {
-		int update_and_reload = segtype_is_raid0(new_segtype);
+		int update_and_reload = (segtype_is_raid0(new_segtype) || segtype_is_raid0_meta(new_segtype));
 
+		raid0_segtype = get_segtype_from_string(lv->vg->cmd, update_and_reload ? new_segtype->name : "raid0");
 		r = _convert_striped_to_raid0(lv, raid0_segtype,
-					      0 /* -> alloc_metadata_devs */,
+					      segtype_is_raid0_meta(new_segtype) /* -> alloc_metadata_devs */,
 					      update_and_reload);
-
 		/* Final type was raid0 -> already finished with remapping in _covert_striped_to_raid9(). */
-		if (update_and_reload)
+		if (!r || update_and_reload)
 			return r;
 
 	/* RAID0 <-> striped conversion */

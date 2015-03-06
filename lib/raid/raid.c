@@ -34,8 +34,9 @@ static void _raid_display(const struct lv_segment *seg)
 		display_stripe(seg, s, "    ");
 	}
 
-	for (s = 0; seg->meta_areas && s < seg->area_count; ++s)
-		log_print("  Raid Metadata LV%2d\t%s", s, seg_metalv(seg, s)->name);
+	if (seg->meta_areas)
+		for (s = 0; seg->meta_areas && s < seg->area_count; ++s)
+			log_print("  Raid Metadata LV%2d\t%s", s, seg_metalv(seg, s)->name);
 
 	log_print(" ");
 }
@@ -462,6 +463,7 @@ static const struct raid_type {
 	int extra_flags;
 } _raid_types[] = {
 	{ SEG_TYPE_NAME_RAID0,      0 },
+	{ SEG_TYPE_NAME_RAID0_META, 0 },
 	{ SEG_TYPE_NAME_RAID1,      0, SEG_AREAS_MIRRORED },
 	{ SEG_TYPE_NAME_RAID10,     0, SEG_AREAS_MIRRORED },
 	{ SEG_TYPE_NAME_RAID4,      1 },
