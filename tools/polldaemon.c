@@ -369,8 +369,7 @@ static void _poll_for_all_vgs(struct cmd_context *cmd,
 #ifdef LVMPOLLD_SUPPORT
 struct poll_lv_list {
 	struct dm_list list;
-	char *uuid;
-	char *name;
+	struct poll_operation_id *id;
 };
 
 typedef struct {
@@ -422,11 +421,6 @@ static int report_progress(struct cmd_context *cmd, struct poll_operation_id *id
 	return 1;
 }
 
-/* FIXME: this requires audit after code modifications due to bug in pvmove handling */
-/* FIXME: this requires audit after code modifications due to bug in pvmove handling */
-/* FIXME: this requires audit after code modifications due to bug in pvmove handling */
-/* FIXME: this requires audit after code modifications due to bug in pvmove handling */
-/* FIXME: this requires audit after code modifications due to bug in pvmove handling */
 static int _lvmpolld_init_poll_vg(struct cmd_context *cmd, const char *vgname,
 			          struct volume_group *vg, struct processing_handle *handle)
 {
@@ -434,37 +428,40 @@ static int _lvmpolld_init_poll_vg(struct cmd_context *cmd, const char *vgname,
 	struct lv_list *lvl;
 	struct logical_volume *lv;
 	struct poll_lv_list *plv;
-	union lvid lvid;
+	struct poll_operation_id id;
 	lvmpolld_parms_t *lpdp = (lvmpolld_parms_t *) handle->custom_handle;
-	struct poll_operation_id id = { 0 };
 
 	dm_list_iterate_items(lvl, &vg->lvs) {
 		lv = lvl->lv;
 		if (!(lv->status & lpdp->parms->lv_type))
 			continue;
+
 		id.display_name = lpdp->parms->poll_fns->get_copy_name_from_lv(lv);
 		if (!id.display_name && !lpdp->parms->aborting)
 			continue;
 
-		memset(&lvid, 0, sizeof(union lvid));
-		memcpy(&lvid, &lv->lvid, sizeof(*(lvid.id)));
-
-		if (!lvid.s) {
-			/* TODO: rephrase this log message */
-			log_print_unless_silent("Failed to extract vgid from VG including PV: %s", id.display_name);
+		if (!lv->lvid.s) {
+			log_print_unless_silent("Missing LV uuid within: %s/%s", id.vg_name, id.lv_name);
 			continue;
 		}
 
 		id.vg_name = lv->vg->name;
 		id.lv_name = lv->name;
+		id.uuid = lv->lvid.s;
 
-		r = lvmpolld_poll_init(cmd,lv->vg->name, lv->name, lvid.s, lpdp->parms->lv_type,
-				       lpdp->parms->interval, lpdp->parms->aborting);
+		r = lvmpolld_poll_init(cmd, &id, lpdp->parms);
 
 		if (r && !lpdp->parms->background) {
 			plv = (struct poll_lv_list *) dm_malloc(sizeof(struct poll_lv_list));
-			plv->uuid = dm_strdup(lvid.s);
-			plv->name = dm_strdup(id.display_name);
+			if (!plv)
+				return ECMD_FAILED;
+
+			plv->id = copy_poll_operation_id(&id);
+			if (!plv->id) {
+				dm_free(plv);
+				return ECMD_FAILED;
+			}
+
 			dm_list_add(&lpdp->plvs, &plv->list);
 		}
 	}
@@ -482,7 +479,6 @@ static void _lvmpolld_poll_for_all_vgs(struct cmd_context *cmd,
 	lvmpolld_parms_t lpdp = {
 		.parms = parms
 	};
-	struct poll_operation_id id = { 0 };
 
 	dm_list_init(&lpdp.plvs);
 
@@ -492,18 +488,15 @@ static void _lvmpolld_poll_for_all_vgs(struct cmd_context *cmd,
 
 	while (!dm_list_empty(&lpdp.plvs)) {
 		dm_list_iterate_items_safe(plv, tlv, &lpdp.plvs) {
-			id.display_name = plv->name;
-			id.uuid = plv->uuid;
-			r = lvmpolld_request_info(id.uuid, lpdp.parms->aborting,
+			r = lvmpolld_request_info(plv->id, lpdp.parms,
 						  &finished);
 			if (!r || finished) {
 				dm_list_del(&plv->list);
-				dm_free(plv->uuid);
-				dm_free(plv->name);
+				destroy_poll_operation_id(plv->id);
 				dm_free(plv);
 			}
 			else
-				report_progress(cmd, &id, lpdp.parms);
+				report_progress(cmd, plv->id, lpdp.parms);
 		}
 
 		_nanosleep(lpdp.parms->interval, 0);
@@ -518,13 +511,10 @@ static int _lvmpoll_daemon(struct cmd_context *cmd, struct poll_operation_id *id
 	unsigned finished = 0;
 
 	if (id) {
-		r = lvmpolld_poll_init(cmd, id->vg_name, id->lv_name, id->uuid,
-				       parms->lv_type, parms->interval,
-				       parms->aborting);
-
-		if (!parms->background) {
+		r = lvmpolld_poll_init(cmd, id, parms);
+		if (r && !parms->background) {
 			while (1) {
-				if (!(r = lvmpolld_request_info(id->uuid, parms->aborting, &finished)) ||
+				if (!(r = lvmpolld_request_info(id, parms, &finished)) ||
 				    finished || !(r = report_progress(cmd, id, parms)))
 					break;
 

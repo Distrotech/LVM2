@@ -14,11 +14,12 @@
 
 #include <stdlib.h>
 
+#include "daemon-io.h"
 #include "lib.h"
 #include "lvmpolld-client.h"
-#include "daemon-io.h"
-#include "metadata-exported.h"
 #include "lvmpolld-protocol.h"
+#include "metadata-exported.h"
+#include "polldaemon.h"
 #include "toolcontext.h"
 
 struct progress_info {
@@ -142,8 +143,7 @@ out_req:
 #define INTERV_SIZE 10
 
 static int _process_poll_init(const struct cmd_context *cmd, const char *poll_type,
-			      const char *vgname, const char *lvname, const char *uuid,
-			      unsigned interval, unsigned abort)
+			      const struct poll_operation_id *id, const struct daemon_parms *parms)
 {
 	char *str;
 	daemon_reply rep;
@@ -155,15 +155,15 @@ static int _process_poll_init(const struct cmd_context *cmd, const char *poll_ty
 	if (!str)
 		return r;
 
-	if (snprintf(str, INTERV_SIZE, "%u", interval) >= INTERV_SIZE) {
+	if (snprintf(str, INTERV_SIZE, "%u", parms->interval) >= INTERV_SIZE) {
 		log_warn("interval string conversion got truncated");
 		str[INTERV_SIZE - 1] = '\0';
 	}
 
 	req = daemon_request_make(poll_type);
-	if (!daemon_request_extend(req, LVMPD_PARM_LVID " = %s", uuid,
-					LVMPD_PARM_VGNAME " = %s", vgname,
-					LVMPD_PARM_LVNAME " = %s", lvname,
+	if (!daemon_request_extend(req, LVMPD_PARM_LVID " = %s", id->uuid,
+					LVMPD_PARM_VGNAME " = %s", id->vg_name,
+					LVMPD_PARM_LVNAME " = %s", id->lv_name,
 					LVMPD_PARM_INTERVAL " = %s", str,
 					"cmdline = %s", cmd->cmd_line, /* FIXME: debug param only */
 					NULL)) {
@@ -171,8 +171,8 @@ static int _process_poll_init(const struct cmd_context *cmd, const char *poll_ty
 		goto out_req;
 	}
 
-	if (abort &&
-	    !(daemon_request_extend(req, LVMPD_PARM_ABORT " = %d", abort, NULL))) {
+	if (parms->aborting &&
+	    !(daemon_request_extend(req, LVMPD_PARM_ABORT " = %d", parms->aborting, NULL))) {
 		log_error("failed to create %s request" , poll_type);
 		goto out_req;
 	}
@@ -212,41 +212,40 @@ out_req:
 	return r;
 }
 
-int lvmpolld_poll_init(const struct cmd_context *cmd, const char *vgname,
-		       const char *lvname, const char *uuid, uint64_t lv_type,
-		       unsigned interval, unsigned abort)
+int lvmpolld_poll_init(const struct cmd_context *cmd, const struct poll_operation_id *id,
+		       const struct daemon_parms *parms)
 {
 	int r = 0;
 
-	if (!uuid) {
+	if (!id->uuid) {
 		log_error(INTERNAL_ERROR "use of lvmpolld requires uuid set");
 		return 0;
 	}
 
-	if (!vgname) {
+	if (!id->vg_name) {
 		log_error(INTERNAL_ERROR "use of lvmpolld requires vgname set");
 		return 0;
 	}
 
-	if (!lvname) {
+	if (!id->lv_name) {
 		log_error(INTERNAL_ERROR "use of lvmpolld requires lvname set");
 		return 0;
 	}
 
-	if (lv_type & PVMOVE) {
-		log_verbose("lvmpolld: pvmove%s", abort ? "--abort" : "");
-		r =  _process_poll_init(cmd, LVMPD_REQ_PVMOVE, vgname, lvname, uuid, interval, abort);
-	} else if (lv_type & CONVERTING) {
+	if (parms->lv_type & PVMOVE) {
+		log_verbose("lvmpolld: pvmove%s", parms->aborting ? "--abort" : "");
+		r =  _process_poll_init(cmd, LVMPD_REQ_PVMOVE, id, parms);
+	} else if (parms->lv_type & CONVERTING) {
 		log_verbose("lvmpolld: convert mirror");
-		r =  _process_poll_init(cmd, LVMPD_REQ_CONVERT, vgname, lvname, uuid, interval, 0);
-	} else if (lv_type & MERGING) {
-		if (lv_type & SNAPSHOT) {
-		log_verbose("lvmpolld: Merge snapshot");
-			r =  _process_poll_init(cmd, LVMPD_REQ_MERGE, vgname, lvname, uuid, interval, 0);
+		r =  _process_poll_init(cmd, LVMPD_REQ_CONVERT, id, parms);
+	} else if (parms->lv_type & MERGING) {
+		if (parms->lv_type & SNAPSHOT) {
+			log_verbose("lvmpolld: Merge snapshot");
+			r =  _process_poll_init(cmd, LVMPD_REQ_MERGE, id, parms);
 		}
-		else if (lv_type & THIN_VOLUME) {
+		else if (parms->lv_type & THIN_VOLUME) {
 			log_verbose("lvmpolld: Merge thin snapshot");
-			r = _process_poll_init(cmd, LVMPD_REQ_MERGE_THIN, vgname, lvname, uuid, interval, 0);
+			r = _process_poll_init(cmd, LVMPD_REQ_MERGE_THIN, id, parms);
 		}
 		else {
 			log_error(INTERNAL_ERROR "Unsupported poll operation");
@@ -257,19 +256,19 @@ int lvmpolld_poll_init(const struct cmd_context *cmd, const char *vgname,
 	return r;
 }
 
-int lvmpolld_request_info(const char *uuid, unsigned abort, unsigned *finished)
+int lvmpolld_request_info(const struct poll_operation_id *id, const struct daemon_parms *parms, unsigned *finished)
 {
 	struct progress_info info;
 	int ret = 0;
 
 	*finished = 1;
 
-	if (!uuid) {
+	if (!id->uuid) {
 		log_error(INTERNAL_ERROR "use of lvmpolld requires uuid being set");
 		return 0;
 	}
 
-	info = _request_progress_info(uuid, abort);
+	info = _request_progress_info(id->uuid, parms->aborting);
 	*finished = info.finished;
 
 	if (info.error)

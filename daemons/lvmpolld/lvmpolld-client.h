@@ -21,14 +21,16 @@
 #	define LVMPOLLD_SOCKET DEFAULT_RUN_DIR "/lvmpolld.socket"
 
 struct cmd_context;
+struct poll_operation_id;
+struct daemon_parms;
 
 void lvmpolld_disconnect(void);
 
-int lvmpolld_poll_init(const struct cmd_context *cmd, const char *vgname,
-		       const char *lvname, const char *uuid, uint64_t lv_type,
-		       unsigned interval, unsigned abort);
+int lvmpolld_poll_init(const struct cmd_context *cmd, const struct poll_operation_id *id,
+		       const struct daemon_parms *parms);
 
-int lvmpolld_request_info(const char *uuid, unsigned abort, unsigned *finished);
+int lvmpolld_request_info(const struct poll_operation_id *id, const struct daemon_parms *parms,
+			  unsigned *finished);
 
 int lvmpolld_use(void);
 
@@ -39,8 +41,8 @@ void lvmpolld_set_socket(const char *socket);
 #  else
 
 #	define lvmpolld_disconnect() do {} while (0)
-#	define lvmpolld_poll_init(cmd, vgname, lvname, uuid, lv_type, interval, abort) (0)
-#	define lvmpolld_request_info(uuid, abort, finished) (0)
+#	define lvmpolld_poll_init(cmd, id, parms) (0)
+#	define lvmpolld_request_info(id, parms, finished) (0)
 #	define lvmpolld_use() (0)
 #	define lvmpolld_set_active(active) do {} while (0)
 #	define lvmpolld_set_socket(socket) do {} while (0)
