@@ -108,6 +108,15 @@ static int fini(struct daemon_state *s)
 {
 	lvmpolld_state_t *ls = s->private;
 
+	DEBUGLOG(s, "fini");
+
+	/*
+	 * FIXME: need to add proper cleanup
+	 *
+	 * there may be background jobs accessing
+	 * some lvmpolld_lv_t and/or stores during
+	 * shutdown i.e. on SIGTERM
+	 */
 	pdst_destroy(&ls->id_to_pdlv_poll);
 	pdst_destroy(&ls->id_to_pdlv_abort);
 
