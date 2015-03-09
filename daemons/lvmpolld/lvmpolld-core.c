@@ -164,10 +164,12 @@ static void update_active_state(lvmpolld_state_t *ls)
 			    !ls->id_to_pdlv_abort.active_polling_count;
 
 	lvmpolld_stores_unlock(ls);
+
+	DEBUGLOG(ls, "%s: %s %s%s", PD_LOG_PREFIX, "daemon is", ls->idle->is_idle ? "" : "not ", "idle");
 }
 
 /* make this configurable */
-#define MAX_TIMEOUT 0
+#define MAX_TIMEOUT 2
 
 static int poll_for_output(lvmpolld_lv_t *pdlv, int outfd, int errfd)
 {
