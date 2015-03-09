@@ -101,6 +101,9 @@ static int init(struct daemon_state *s)
 		return 0;
 	}
 
+	if (ls->idle)
+		ls->idle->is_idle = 1;
+
 	return 1;
 }
 
@@ -787,10 +790,8 @@ int main(int argc, char *argv[])
 				exit(1);
 			}
 			/* 0 equals to wait indefinitely */
-			if (di.max_timeouts) {
-				ls.idle = &di;
-				s.idle = &di;
-			}
+			if (di.max_timeouts)
+				s.idle = ls.idle = &di;
 			break;
 		}
 	}
