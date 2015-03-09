@@ -9,9 +9,8 @@ Conflicts=shutdown.target
 [Service]
 Type=simple
 NonBlocking=true
-ExecStart=@sbindir@/lvmpolld -f -l all
+ExecStart=@sbindir@/lvmpolld -t 60 -f
 Environment=SD_ACTIVATION=1
-# Restart=on-abort
 PIDFile=@LVMPOLLD_PIDFILE@
 
 [Install]
