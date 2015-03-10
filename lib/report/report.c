@@ -1108,6 +1108,22 @@ static int _pvmdasize_disp(struct dm_report *rh, struct dm_pool *mem,
 	return _size64_disp(rh, mem, field, &min_mda_size, private);
 }
 
+static int _pvinuse_disp(struct dm_report *rh, struct dm_pool *mem,
+			 struct dm_report_field *field,
+			 const void *data, void *private)
+{
+	const struct label *label = (const struct label *) data;
+	struct lvmcache_info *info = label->info;
+	uint32_t ext_flags;
+
+	if (info) {
+		ext_flags = lvmcache_ext_flags(info);
+		return _binary_disp(rh, mem, field, ext_flags & PV_EXT_USED, GET_FIRST_RESERVED_NAME(pv_in_use_y), private);
+	}
+
+	return _binary_undef_disp(rh, mem, field, private);
+}
+
 static int _vgmdasize_disp(struct dm_report *rh, struct dm_pool *mem,
 			   struct dm_report_field *field,
 			   const void *data, void *private)
