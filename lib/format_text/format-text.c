@@ -1318,6 +1318,18 @@ static int _write_single_mda(struct metadata_area *mda, void *baton)
 	return 1;
 }
 
+static void _set_ext_flags(struct physical_volume *pv, struct lvmcache_info *info)
+{
+	uint32_t ext_flags = lvmcache_ext_flags(info);
+
+	if (is_orphan_vg(pv->vg_name))
+		ext_flags &= ~PV_EXT_USED;
+	else
+		ext_flags |= PV_EXT_USED;
+
+	lvmcache_set_ext_flags(info, ext_flags);
+}
+
 /* Only for orphans */
 static int _text_pv_write(const struct format_type *fmt, struct physical_volume *pv)
 {
@@ -1398,6 +1410,8 @@ static int _text_pv_write(const struct format_type *fmt, struct physical_volume 
 
 	if (!lvmcache_foreach_mda(info, _write_single_mda, &baton))
 		return_0;
+
+	_set_ext_flags(pv, info);
 
 	if (!label_write(pv->dev, label)) {
 		stack;
