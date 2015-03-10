@@ -1221,9 +1221,11 @@ static int _extract_image_component(struct lv_segment *seg,
 	switch (type) {
 	case RAID_META:
 		seg_metatype(seg, idx) = AREA_UNASSIGNED;
+		seg_metalv(seg, idx) = NULL;
 		break;
 	case RAID_IMAGE:
 		seg_type(seg, idx) = AREA_UNASSIGNED;
+		seg_lv(seg, idx) = NULL;
 	}
 
 	if (!(lv->name = _generate_raid_name(lv, "extracted", -1)))
@@ -1424,8 +1426,10 @@ static int _raid_remove_images(struct logical_volume *lv,
 	unsigned s;
 #endif
 
-PFLA("new_count=%u", new_count);
+PFLA("segtype=%s new_count=%u", segtype->name, new_count);
 	dm_list_init(&removal_list);
+
+	/* Extract all image and any metadata lvs past new_count */
 	if (!_raid_extract_images(lv, new_count, pvs, 0,
 				  &removal_list, &removal_list)) {
 		log_error("Failed to extract images from %s/%s",
@@ -1437,21 +1441,25 @@ PFLA("new_count=%u", new_count);
 	 * In case this is a conversion to raid0,
 	 * remove the metadata image LVs.
 	 */
-	if (raid0) {
-		uint32_t s;
-		struct lv_list *lvl_array;
+	if (raid0 || segtype_is_raid0_meta(segtype)) {
+		if (raid0) {
+			uint32_t s;
+			struct lv_list *lvl_array;
 
-		if (!(lvl_array = dm_pool_alloc(lv->vg->vgmem, sizeof(*lvl_array) * new_count)))
-			return_0;
+			if (!(lvl_array = dm_pool_alloc(lv->vg->vgmem, sizeof(*lvl_array) * new_count)))
+				return_0;
 
-		for (s = 0; s < new_count; s++) {
-			if (!_extract_image_component(seg, RAID_META, s, &lvl_array[s].lv))
-				return 0;
+			for (s = 0; s < new_count; s++) {
+				if (!_extract_image_component(seg, RAID_META, s, &lvl_array[s].lv))
+					return 0;
 
-			dm_list_add(&removal_list, &lvl_array[s].list);
+				dm_list_add(&removal_list, &lvl_array[s].list);
+			}
+
+			seg->meta_areas = NULL;
 		}
 
-		seg->meta_areas = NULL;
+		seg->region_size = 0;
 	}
 
 	/* Shrink areas arrays for metadata and data devs  */
@@ -1534,7 +1542,7 @@ static int _raid0_add_or_remove_metadata_lvs(struct logical_volume *lv, int upda
 
 	if (seg->meta_areas) {
 		struct lv_list *lvl_array;
-PFL();
+
 		if (!(lvl_array = dm_pool_alloc(lv->vg->vgmem, seg->area_count * sizeof(*lvl_array))))
 			return_0;
 
@@ -1555,13 +1563,13 @@ PFL();
 		struct dm_list meta_lvs;
 
 		dm_list_init(&meta_lvs);
-PFL();
+
 		if (!(seg->meta_areas = dm_pool_zalloc(lv->vg->vgmem, seg->area_count * sizeof(*seg->meta_areas))))
 			return_0;
-PFL();
+
 		if (!_alloc_rmeta_devs_for_lv(lv, &meta_lvs))
 			return 0;
-PFL();
+
 		/* Metadata LVs must be cleared before being added to the array */
 		log_debug_metadata("Clearing newly allocated metadata LVs");
 		if (!_clear_lvs(&meta_lvs)) {
@@ -1569,11 +1577,10 @@ PFL();
 			return 0;
 		}
 
-PFL();
 		/* Set segment areas for metadata sub_lvs */
 		if (!_add_sublvs_to_lv(lv, 1, 0, &meta_lvs, 0))
 			return 0;
-PFL();
+
 		seg->segtype = get_segtype_from_string(lv->vg->cmd, "raid0_meta");
 	}
 
@@ -1609,7 +1616,11 @@ static int _lv_raid_change_image_count(struct logical_volume *lv, const struct s
 			 lv->vg->name, lv->name, new_count);
 		return 1;
 	}
-PFL();
+
+	if (!segtype)
+		segtype = first_seg(lv)->segtype;
+
+PFLA("segtype=%s", segtype->name);
 
 	/* Check for maximum supported raid devices */
 	if (!_check_maximum_devices(new_count))
@@ -2187,7 +2198,6 @@ static int _check_stripes(struct logical_volume *lv)
  * Returns: 1 on success, 0 on failure
  */
 static int _convert_striped_to_raid0(struct logical_volume *lv,
-				     const struct segment_type *new_segtype,
 				     int alloc_metadata_devs,
 				     int update_and_reload)
 {
@@ -2206,7 +2216,6 @@ static int _convert_striped_to_raid0(struct logical_volume *lv,
 	if (!_check_stripes(lv))
 		return 0;
 
-PFLA("new_segtype=%s alloc_metadata_devs=%u", new_segtype->name, alloc_metadata_devs);
 	dm_list_init(&new_meta_lvs);
 	dm_list_init(&new_data_lvs);
 
@@ -2233,27 +2242,26 @@ PFLA("new_segtype=%s alloc_metadata_devs=%u", new_segtype->name, alloc_metadata_
 		log_error("Failed to allocate new raid0 segement for LV %s/%s.", lv->vg->name, lv->name);
 		return_0;
 	}
-PFL();
+
 	/* Add data lvs to the top-level lvs segment */
 	if (!_add_sublvs_to_lv(lv, 1, 0, &new_data_lvs, 0))
 		return 0;
 
-PFL();
+
 	/* Get reference to new allocated raid0 segment */
 	seg = first_seg(lv);
-	seg->segtype = new_segtype;
+	seg->segtype = get_segtype_from_string(lv->vg->cmd, "raid0");
 	lv->status |= RAID;
 
 	/* Allocate metadata lvs if requested */
 	if (alloc_metadata_devs) {
-PFL();
 		if (!_raid0_add_or_remove_metadata_lvs(lv, update_and_reload))
 			return 0;
 
 	} else if (update_and_reload &&
 		   !lv_update_and_reload(lv))
+			return 0;
 
-PFLA("seg->segtype=%s", seg->segtype->name);
 	return 1;
 }
 /* END: striped -> raid0 conversion */
@@ -2453,6 +2461,22 @@ static int _raid_takeover(struct logical_volume *lv,
 	/* Make sure to set default region size on takeover from raid0 */
 	_check_and_init_region_size(lv);
 
+	/* Takeover raid4* <-> raid5* */
+	if (new_count == seg->area_count) {
+PFL();
+		if ((segtype_is_raid5_n(seg->segtype) && segtype_is_raid4(segtype)) ||
+		    (segtype_is_raid4(seg->segtype)   && segtype_is_raid5_n(segtype))) {
+			seg->segtype = segtype;
+
+			if (!lv_update_and_reload(lv))
+				return_0;
+
+			return 1;
+		}
+
+		return 0;
+	}
+
 	/*
 	 * In case of raid1 -> raid5, takeover will run a degraded 2 disk raid5 set of the same content
 	 * which will get an additional disk allocated afterwards and reloaded starting
@@ -2477,7 +2501,7 @@ PFLA("seg->segtype=%s segtyoe->name=%s", seg->segtype->name, segtype->name);
 	if (!_lv_raid_change_image_count(lv, segtype, new_count, allocate_pvs))
 		return_0;
 
-	return 1; // lv_update_and_reload(lv);
+	return 1;
 }
 
 static int _raid_level_up(struct logical_volume *lv,
@@ -2533,7 +2557,7 @@ static int _raid_level_down(struct logical_volume *lv,
 #define	ARRAY_SIZE(a) (sizeof(a) / sizeof(*a))
 struct possible_type {
 	const char *current_type;
-	const char *possible_types[12];
+	const char *possible_types[13];
 };
 static const struct segment_type *_adjust_final_segtype(struct logical_volume *lv,
 							const struct segment_type *segtype,
@@ -2543,17 +2567,24 @@ static const struct segment_type *_adjust_final_segtype(struct logical_volume *l
 	struct possible_type pt[] = {
 		{ .current_type = SEG_TYPE_NAME_STRIPED,
 		  .possible_types = { SEG_TYPE_NAME_RAID0, SEG_TYPE_NAME_RAID0_META,
+				      SEG_TYPE_NAME_RAID4,
 				      SEG_TYPE_NAME_RAID5_N, SEG_TYPE_NAME_RAID6_N_6, NULL } },
 		{ .current_type = SEG_TYPE_NAME_RAID0,
-		  .possible_types = { SEG_TYPE_NAME_STRIPED, SEG_TYPE_NAME_RAID5_N, SEG_TYPE_NAME_RAID6_N_6, NULL } },
+		  .possible_types = { SEG_TYPE_NAME_STRIPED,
+				      SEG_TYPE_NAME_RAID4,
+				      SEG_TYPE_NAME_RAID5_N, SEG_TYPE_NAME_RAID6_N_6, NULL } },
 		{ .current_type = SEG_TYPE_NAME_RAID0_META,
-		  .possible_types = { SEG_TYPE_NAME_STRIPED, SEG_TYPE_NAME_RAID5_N, SEG_TYPE_NAME_RAID6_N_6, NULL } },
+		  .possible_types = { SEG_TYPE_NAME_STRIPED,
+				      SEG_TYPE_NAME_RAID4,
+				      SEG_TYPE_NAME_RAID5_N, SEG_TYPE_NAME_RAID6_N_6, NULL } },
 		{ .current_type = SEG_TYPE_NAME_RAID1,
 		  .possible_types = { SEG_TYPE_NAME_RAID5_N, NULL } },
 		{ .current_type = SEG_TYPE_NAME_RAID4,
-		  .possible_types = { SEG_TYPE_NAME_RAID4_N, SEG_TYPE_NAME_RAID5_0, NULL } },
-		{ .current_type = SEG_TYPE_NAME_RAID4_N,
-		  .possible_types = { SEG_TYPE_NAME_RAID1, SEG_TYPE_NAME_RAID5_N, NULL } },
+		  .possible_types = { SEG_TYPE_NAME_STRIPED,
+				      SEG_TYPE_NAME_RAID0, SEG_TYPE_NAME_RAID0_META,
+				      SEG_TYPE_NAME_RAID1,
+				      SEG_TYPE_NAME_RAID5_N,
+				      SEG_TYPE_NAME_RAID6_N_6,  NULL } },
 		{ .current_type = SEG_TYPE_NAME_RAID5,
 		  .possible_types = { SEG_TYPE_NAME_RAID5_0,  SEG_TYPE_NAME_RAID5_N,
 				      SEG_TYPE_NAME_RAID5_LS, SEG_TYPE_NAME_RAID5_RS,
@@ -2580,17 +2611,20 @@ static const struct segment_type *_adjust_final_segtype(struct logical_volume *l
 				      SEG_TYPE_NAME_RAID5_LA,
 		                      SEG_TYPE_NAME_RAID6_RA_6, NULL } },
 		{ .current_type = SEG_TYPE_NAME_RAID5_0,
-		  .possible_types = { SEG_TYPE_NAME_RAID5,     SEG_TYPE_NAME_RAID5_N,
+		  .possible_types = { SEG_TYPE_NAME_RAID4,
+				      SEG_TYPE_NAME_RAID5,     SEG_TYPE_NAME_RAID5_N,
 				      SEG_TYPE_NAME_RAID5_LS,  SEG_TYPE_NAME_RAID5_RS,
 				      SEG_TYPE_NAME_RAID5_LA,  SEG_TYPE_NAME_RAID5_RA,
 				      SEG_TYPE_NAME_RAID6_0_6, NULL } },
 		{ .current_type = SEG_TYPE_NAME_RAID5_N,
-		  .possible_types = { SEG_TYPE_NAME_RAID5,    SEG_TYPE_NAME_RAID5_0,
-				      SEG_TYPE_NAME_RAID5_LS, SEG_TYPE_NAME_RAID5_RS,
-				      SEG_TYPE_NAME_RAID5_LA, SEG_TYPE_NAME_RAID5_RA,
-				      SEG_TYPE_NAME_RAID0,    SEG_TYPE_NAME_RAID0_META,
+		  .possible_types = { SEG_TYPE_NAME_STRIPED,
+				      SEG_TYPE_NAME_RAID0,     SEG_TYPE_NAME_RAID0_META,
 				      SEG_TYPE_NAME_RAID1,
-				      SEG_TYPE_NAME_STRIPED,  SEG_TYPE_NAME_RAID6_N_6, NULL } },
+				      SEG_TYPE_NAME_RAID4,
+				      SEG_TYPE_NAME_RAID5,     SEG_TYPE_NAME_RAID5_0,
+				      SEG_TYPE_NAME_RAID5_LS,  SEG_TYPE_NAME_RAID5_RS,
+				      SEG_TYPE_NAME_RAID5_LA,  SEG_TYPE_NAME_RAID5_RA,
+				      SEG_TYPE_NAME_RAID6_N_6, NULL } },
 		{ .current_type = SEG_TYPE_NAME_RAID6_ZR,
 		  .possible_types = { SEG_TYPE_NAME_RAID6_NC, SEG_TYPE_NAME_RAID6_NR,
 				      SEG_TYPE_NAME_RAID6_N_6, NULL } },
@@ -2603,7 +2637,8 @@ static const struct segment_type *_adjust_final_segtype(struct logical_volume *l
 		{ .current_type = SEG_TYPE_NAME_RAID6_N_6,
 		  .possible_types = { SEG_TYPE_NAME_RAID6_ZR, SEG_TYPE_NAME_RAID6_NR,
 				      SEG_TYPE_NAME_RAID6_NC, SEG_TYPE_NAME_RAID5_N,
-				      SEG_TYPE_NAME_RAID0, SEG_TYPE_NAME_RAID0_META,
+				      SEG_TYPE_NAME_RAID0,    SEG_TYPE_NAME_RAID0_META,
+				      SEG_TYPE_NAME_RAID4,
 				      SEG_TYPE_NAME_STRIPED, NULL } },
 		{ .current_type = SEG_TYPE_NAME_RAID6_LS_6,
 		  .possible_types = { SEG_TYPE_NAME_RAID6_ZR, SEG_TYPE_NAME_RAID6_NR,
@@ -2621,6 +2656,10 @@ static const struct segment_type *_adjust_final_segtype(struct logical_volume *l
 
 	for (cn = 0; cn < ARRAY_SIZE(pt); cn++) {
 		if (!strcmp(segtype->name, pt[cn].current_type)) {
+			for (pn = 0; pt[cn].possible_types[pn]; pn++)
+				if (!strcmp(new_segtype->name, pt[cn].possible_types[pn]))
+					return get_segtype_from_string(lv->vg->cmd, pt[cn].possible_types[pn]);
+
 			for (pn = 0; pt[cn].possible_types[pn]; pn++)
 				if (!strncmp(new_segtype->name, pt[cn].possible_types[pn], 5))
 					return get_segtype_from_string(lv->vg->cmd, pt[cn].possible_types[pn]);
@@ -2649,7 +2688,7 @@ static int _convert_raid_to_raid(struct logical_volume *lv,
 	unsigned stripes = new_stripes ?: _data_rimages_count(seg, seg->area_count);
 	unsigned stripe_size = new_stripe_size ?: seg->stripe_size;
 
-PFLA("seg->segtype=%s segtype->name=%s", seg->segtype->name, new_segtype->name);
+PFLA("seg->segtype=%s new_segtype->name=%s", seg->segtype->name, new_segtype->name);
 	if (new_segtype == seg->segtype &&
 	    stripes == _data_rimages_count(seg, seg->area_count) &&
 	    stripe_size == seg->stripe_size) {
@@ -2719,16 +2758,15 @@ PFLA("stripes=%u stripe_size=%u seg->stripe_size=%u", stripes, stripe_size, seg-
 		return 0;
 #endif
 
-PFLA("seg->segtype=%s segtype->name=%s", seg->segtype->name, new_segtype->name);
+PFLA("seg->segtype=%s new_segtype->name=%s", seg->segtype->name, new_segtype->name);
 	if (!(final_segtype = _adjust_final_segtype(lv, seg->segtype, new_segtype)))
 		return 0;
-
-PFLA("seg->segtype=%s segtype->name=%s", seg->segtype->name, new_segtype->name);
+PFLA("seg->segtype=%s new_segtype->name=%s final_segtype->name=%s", seg->segtype->name, new_segtype->name, final_segtype ? final_segtype->name : NULL);
 
 	up = is_level_up(seg->segtype, final_segtype);
 	if (!(up ? _raid_level_up : _raid_level_down)(lv, final_segtype, allocate_pvs))
 		return 0;
-PFLA("seg->segtype=%s segtype->name=%s", seg->segtype->name, new_segtype->name);
+PFLA("seg->segtype=%s new_segtype->name=%s", seg->segtype->name, new_segtype->name);
 
 	return 1;
 }
@@ -2802,9 +2840,11 @@ PFLA("seg->segtype=%s segtype->name=%s", seg->segtype->name, new_segtype->name);
 	if (seg_is_striped(seg) && segtype_is_striped_raid(new_segtype)) {
 		int update_and_reload = (segtype_is_raid0(new_segtype) || segtype_is_raid0_meta(new_segtype));
 
-		r = _convert_striped_to_raid0(lv, raid0_segtype,
-					      segtype_is_raid0_meta(new_segtype) /* -> alloc_metadata_devs */,
+PFLA("update_and_reload=%u", update_and_reload);
+		r = _convert_striped_to_raid0(lv,
+					      !segtype_is_raid0(new_segtype) /* -> alloc_metadata_devs */,
 					      update_and_reload);
+PFLA("r=%d", r);
 		/* Final type was raid0 -> already finished with remapping in _covert_striped_to_raid9(). */
 		if (!r || update_and_reload)
 			return r;
@@ -2822,13 +2862,13 @@ PFLA("seg->segtype=%s segtype->name=%s", seg->segtype->name, new_segtype->name);
 	}
 
 seg = first_seg(lv);
-PFLA("seg->segtype=%s segtype->name=%s", seg->segtype->name, new_segtype->name);
+PFLA("seg->segtype=%s new_segtype->name=%s", seg->segtype->name, new_segtype->name);
 
 	/* All the rest of the raid conversions... */
 	r = _convert_raid_to_raid(lv, new_segtype, new_stripes, new_stripe_size, allocate_pvs);
 
 seg = first_seg(lv);
-PFLA("seg->segtype=%s segtype->name=%s final_segtype=%p", seg->segtype->name, new_segtype->name, final_segtype);
+PFLA("seg->segtype=%s new_segtype->name=%s final_segtype=%p", seg->segtype->name, new_segtype->name, final_segtype);
 
 	/* Do the final step to convert from "raid0" to "striped" here */
 	/* HM FIXME: avoid update and reload in _convert_raid_to_raid! */

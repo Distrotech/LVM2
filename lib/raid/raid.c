@@ -467,7 +467,6 @@ static const struct raid_type {
 	{ SEG_TYPE_NAME_RAID1,      0, SEG_AREAS_MIRRORED },
 	{ SEG_TYPE_NAME_RAID10,     0, SEG_AREAS_MIRRORED },
 	{ SEG_TYPE_NAME_RAID4,      1 },
-	{ SEG_TYPE_NAME_RAID4_N,    1 },
 	{ SEG_TYPE_NAME_RAID5,      1 },
 	{ SEG_TYPE_NAME_RAID5_0,    1 },
 	{ SEG_TYPE_NAME_RAID5_N,    1 },

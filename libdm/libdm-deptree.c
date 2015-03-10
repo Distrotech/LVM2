@@ -47,7 +47,6 @@ enum {
 	SEG_RAID1,
 	SEG_RAID10,
 	SEG_RAID4,
-	SEG_RAID4_N,
 	SEG_RAID5_0,
 	SEG_RAID5_N,
 	SEG_RAID5_LA,
@@ -90,7 +89,6 @@ static const struct {
 	{ SEG_RAID1, "raid1"},
 	{ SEG_RAID10, "raid10"},
 	{ SEG_RAID4, "raid4"},
-	{ SEG_RAID4_N, "raid4_n"},
 	{ SEG_RAID5_0, "raid5_0"},
 	{ SEG_RAID5_N, "raid5_n"},
 	{ SEG_RAID5_LA, "raid5_la"},
@@ -2115,7 +2113,6 @@ static int _emit_areas_line(struct dm_task *dmt __attribute__((unused)),
 		case SEG_RAID0_META:
 		case SEG_RAID1:
 		case SEG_RAID4:
-		case SEG_RAID4_N:
 		case SEG_RAID5_0:
 		case SEG_RAID5_N:
 		case SEG_RAID5_LA:
@@ -2568,7 +2565,6 @@ static int _emit_segment_line(struct dm_task *dmt, uint32_t major,
 	case SEG_RAID1:
 	case SEG_RAID10:
 	case SEG_RAID4:
-	case SEG_RAID4_N:
 	case SEG_RAID5_0:
 	case SEG_RAID5_N:
 	case SEG_RAID5_LA:
@@ -4107,7 +4103,6 @@ int dm_tree_node_add_null_area(struct dm_tree_node *node, uint64_t offset)
 	case SEG_RAID0_META:
 	case SEG_RAID1:
 	case SEG_RAID4:
-	case SEG_RAID4_N:
 	case SEG_RAID5_0:
 	case SEG_RAID5_N:
 	case SEG_RAID5_LA:
