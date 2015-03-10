@@ -35,7 +35,7 @@
 #define LVMPOLLD_SOCKET DEFAULT_RUN_DIR "/lvmpolld.socket"
 
 #define PD_LOG_PREFIX "LVMPOLLD"
-#define LVM2_LOG_PREFIX "LVPOLL"
+#define LVM2_LOG_PREFIX "\tLVPOLL"
 
 /* 
  * FIXME: I don't follow the logic behind prefix variables in lvm2
@@ -76,10 +76,9 @@ static void usage(const char *prog, FILE *file)
 		"   -l       Logging message level (-l {all|wire|debug})\n"
 		"   -p       Set path to the pidfile\n"
 		"   -s       Set path to the socket to listen on\n"
-		"   -B       Path to lvm2 binary\n\n", prog);
+		"   -B       Path to lvm2 binary\n"
+		"   -t       Time to wait in seconds before shutdown on idle (missing or 0 = inifinite)\n\n", prog);
 }
-
-#define LVMPOLLD_SBIN_DIR "/usr/sbin/"
 
 static int init(struct daemon_state *s)
 {
@@ -91,8 +90,6 @@ static int init(struct daemon_state *s)
 
 	pdst_init(&ls->id_to_pdlv_poll, "polling");
 	pdst_init(&ls->id_to_pdlv_abort, "abort");
-
-	DEBUGLOG(ls, "%s: LVM_SYSTEM_DIR=%s", PD_LOG_PREFIX, getenv("LVM_SYSTEM_DIR") ?: "<not set>");
 
 	ls->lvm_binary = ls->lvm_binary ?: LVM2_BIN_PATH;
 
@@ -328,7 +325,6 @@ static void *fork_and_poll(void *args)
 {
 	lvmpolld_store_t *pdst;
 	pid_t r;
-	char buf[128];
 	int error = 1;
 
 	lvmpolld_lv_t *pdlv = (lvmpolld_lv_t *) args;
@@ -371,11 +367,6 @@ static void *fork_and_poll(void *args)
 
 		execve(*(pdlv->cmdargv), (char *const *)pdlv->cmdargv, (char *const *)pdlv->cmdenvp);
 
-		/* FIXME: This is illegal remove it (thread aware syscall) */
-		strerror_r(errno, buf, sizeof(buf));
-
-		ERROR(ls, "%s: %s: %s", PD_LOG_PREFIX, "Failed to exec command", buf);
-
 		_exit(101);
 	} else {
 		/* parent */
@@ -401,7 +392,7 @@ static void *fork_and_poll(void *args)
 		outpipe[1] = errpipe[1] = -1;
 
 		error = poll_for_output(pdlv, *outpipe, *errpipe);
-		DEBUGLOG(ls, "%s: %s", PD_LOG_PREFIX, "polling command finished");
+		DEBUGLOG(ls, "%s: %s", PD_LOG_PREFIX, "polling for lvpoll output has finished");
 	}
 
 err:
@@ -759,7 +750,6 @@ int main(int argc, char *argv[])
 		.socket_path = getenv("LVM_LVMPOLLD_SOCKET") ?: LVMPOLLD_SOCKET,
 	};
 
-	// use getopt_long
 	while ((opt = getopt(argc, argv, "?fhVl:p:s:B:t:")) != EOF) {
 		switch (opt) {
 		case '?':
