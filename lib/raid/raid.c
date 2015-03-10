@@ -160,7 +160,7 @@ static int _raid_text_import(struct lv_segment *seg,
 
 static int _raid_text_export(const struct lv_segment *seg, struct formatter *f)
 {
-	int raid0 = seg_is_raid0(seg);
+	int raid0 = (seg_is_raid0(seg) || seg_is_raid0_meta(seg));
 
 	if (raid0)
 		outfc(f, (seg->area_count == 1) ? "# linear" : NULL,
@@ -221,7 +221,7 @@ static int _raid_add_target_line(struct dev_manager *dm __attribute__((unused)),
 		return 0;
 	}
 
-	if (!seg_is_raid0(seg)) {
+	if (!(seg_is_raid0(seg) || seg_is_raid0_meta(seg))) {
 		if (!seg->region_size) {
 			log_error("Missing region size for raid segment in %s.",
 				  seg_lv(seg, 0)->name);

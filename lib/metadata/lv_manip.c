@@ -32,14 +32,13 @@
 #include "memlock.h"
 
 /* HM FIXME: REMOVEME: devel output */
-#if 0
+#if 1
 #define PFL() printf("%s %u\n", __func__, __LINE__);
 #define PFLA(format, arg...) printf("%s %u " format "\n", __func__, __LINE__, arg);
 #else
 #define PFL()
 #define PFLA(format, arg...)
 #endif
-
 
 typedef enum {
 	PREFERRED,
@@ -126,6 +125,7 @@ enum _lv_type_name_enum {
 	 * _lv_layout_and_role_raid() depends on the following order!
 	 */
 	LV_TYPE_RAID0,
+	LV_TYPE_RAID0_META,
 	LV_TYPE_RAID1,
 	LV_TYPE_RAID10,
 	LV_TYPE_RAID4,
@@ -179,6 +179,7 @@ static const char *_lv_type_names[] = {
 	[LV_TYPE_SPARE] =				"spare",
 	[LV_TYPE_VIRTUAL] =				"virtual",
 	[LV_TYPE_RAID0] =				SEG_TYPE_NAME_RAID0,
+	[LV_TYPE_RAID0_META] =				SEG_TYPE_NAME_RAID0_META,
 	[LV_TYPE_RAID1] =				SEG_TYPE_NAME_RAID1,
 	[LV_TYPE_RAID10] =				SEG_TYPE_NAME_RAID10,
 	[LV_TYPE_RAID4] =				SEG_TYPE_NAME_RAID4,
@@ -934,7 +935,7 @@ dm_percent_t copy_percent(const struct logical_volume *lv)
 	uint32_t numerator = 0u, denominator = 0u;
 	struct lv_segment *seg;
 
-	if (seg_is_raid0(first_seg(lv)))
+	if (seg_is_raid0(first_seg(lv)) || seg_is_raid0_meta(first_seg(lv)))
 		return DM_PERCENT_INVALID;
 
 	dm_list_iterate_items(seg, &lv->segments) {
@@ -984,8 +985,6 @@ struct lv_segment *alloc_lv_segment(const struct segment_type *segtype,
 		return_NULL;
 	}
 
-	seg->meta_areas = NULL;
-
 	/*  HM FIXME raid0 optionally w/o rmeta */
 	if (segtype_is_raid(segtype) &&
 	    !segtype_is_raid0(segtype) &&
@@ -993,6 +992,7 @@ struct lv_segment *alloc_lv_segment(const struct segment_type *segtype,
 		dm_pool_free(mem, seg); /* frees everything alloced since seg */
 		return_NULL;
 	}
+PFLA("lv=%s seg->meta_areas=%p", lv->name, seg->meta_areas);
 
 	seg->segtype = segtype;
 	seg->lv = lv;
@@ -1109,7 +1109,8 @@ static int _release_and_discard_lv_segment_area(struct lv_segment *seg, uint32_t
 				return 0;
 
 			meta_area_reduction = mlv->le_count -
-					      raid_rmeta_extents(vg->cmd, lv->le_count - area_reduction, seg->region_size, vg->extent_size);
+					      raid_rmeta_extents(vg->cmd, lv->le_count - area_reduction,
+								 seg->region_size, vg->extent_size);
 			if (lv->le_count - area_reduction == 0)
 				meta_area_reduction++;
 
@@ -1137,15 +1138,9 @@ static int _release_and_discard_lv_segment_area(struct lv_segment *seg, uint32_t
 				 "the top of LV %s:%" PRIu32,
 				 seg->lv->name, seg->le, s, lv->name, seg_le(seg, s));
 
+PFL();
 		if (!remove_seg_from_segs_using_this_lv(lv, seg))
 			return_0;
-
-#if 0
-		/* HM FIXME: TESTME: image component not unliked from VG */
-		/* Remove the LV if it is now empty */
-		if (!unlink_lv_from_vg(lv))
-			return_0;
-#endif
 
 		seg_lv(seg, s) = NULL;
 		seg_le(seg, s) = 0;
@@ -1242,10 +1237,13 @@ int set_lv_segment_area_lv(struct lv_segment *seg, uint32_t area_num,
 	if (status & RAID_META) {
 		/* FIXME: should always be allocated for RAID_META or not for "raid0"? */
 		if (seg->meta_areas) {
+PFLA("metadata LV = %s", lv->name);
 			seg->meta_areas[area_num].type = AREA_LV;
 			seg_metalv(seg, area_num) = lv;
 			seg_metale(seg, area_num) = le;
 		}
+else
+PFLA("NO meta_areas!!! metadata LV = %s", lv->name);
 	} else {
 		seg->areas[area_num].type = AREA_LV;
 		seg_lv(seg, area_num) = lv;
@@ -3589,7 +3587,7 @@ static int _lv_insert_empty_sublvs(struct logical_volume *lv,
 
 		/* Metadata LVs for raid */
 		/*  HM FIXME raid0 optionally w/o rmeta */
-		if (segtype_is_raid(segtype)) {
+		if (segtype_is_raid(segtype) && !segtype_is_raid0(segtype)) {
 			if (dm_snprintf(img_name, len, "%s_rmeta_%u", lv->name, i) < 0)
 				return_0;
 		} else
@@ -3754,6 +3752,7 @@ static int _lv_extend_layered_lv(struct alloc_handle *ah,
 	if (seg_is_striped_raid(seg)) {
 		int adjusted = 0;
 
+		/* HM FIXME: make it larger than just to suit the LV size */
 		while (seg->region_size < (lv->size / (1 << 21))) {
 			seg->region_size *= 2;
 			adjusted = 1;
@@ -3797,6 +3796,7 @@ int lv_extend(struct logical_volume *lv,
 	if (segtype_is_virtual(segtype))
 		return lv_add_virtual_segment(lv, 0u, extents, segtype);
 
+PFL();
 	if (segtype_is_pool(segtype) && !lv->le_count) {
 		/*
 		 * Thinpool and cache_pool allocations treat the metadata
@@ -3808,11 +3808,13 @@ int lv_extend(struct logical_volume *lv,
 	} else if (segtype_is_striped(segtype) || segtype_is_raid(segtype)) {
 		extents = __round_to_stripe_boundary(lv, extents, stripes, 1);
 
+PFL();
 		/* Make sure metadata LVs are being extended as well */
-		if (!segtype_is_striped(segtype))
+		if (!(segtype_is_striped(segtype) || segtype_is_raid0(segtype)))
 			log_count = (mirrors ?: 1) * stripes;
 	}
 
+PFLA("stripes=%u mirrors=%u log_count=%u", stripes, mirrors, log_count);
 #if 1
 	/* FIXME log_count should be 1 for mirrors */
 	if (segtype_is_mirror(segtype))
@@ -6946,7 +6948,7 @@ static struct logical_volume *_lv_create_an_lv(struct volume_group *vg,
 		if (!(create_segtype = get_segtype_from_string(vg->cmd, "striped")))
 			return_0;
 	} else if (seg_is_mirrored(lp) || seg_is_raid(lp)) {
-		if (!seg_is_raid0(lp)) {
+		if (!(seg_is_raid0(lp) || seg_is_raid0_meta(lp))) {
 			/* FIXME: this will not pass cluster lock! */
 			init_mirror_in_sync(lp->nosync);
 
@@ -6957,10 +6959,13 @@ static struct logical_volume *_lv_create_an_lv(struct volume_group *vg,
 				status |= LV_NOTSYNCED;
 			}
 
+PFLA("region_size=%u", lp->region_size);
 			lp->region_size = adjusted_mirror_region_size(vg->extent_size,
 								      lp->extents,
 								      lp->region_size, 0);
+PFLA("region_size=%u", lp->region_size);
 		}
+PFLA("region_size=%u", lp->region_size);
 	} else if (pool_lv && seg_is_thin_volume(lp)) {
 		if (!lv_is_thin_pool(pool_lv)) {
 			log_error("Logical volume %s is not a thin pool.",
@@ -7121,7 +7126,7 @@ static struct logical_volume *_lv_create_an_lv(struct volume_group *vg,
 			goto revert_new_lv;
 		}
 	} else if (seg_is_raid(lp)) {
-		if (!seg_is_raid0(lp)) {
+		if (!(seg_is_raid0(lp) || seg_is_raid0_meta(lp))) {
 			first_seg(lv)->min_recovery_rate = lp->min_recovery_rate;
 			first_seg(lv)->max_recovery_rate = lp->max_recovery_rate;
 		}
