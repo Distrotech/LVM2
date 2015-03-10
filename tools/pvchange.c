@@ -25,6 +25,8 @@ static int _pvchange_single(struct cmd_context *cmd, struct volume_group *vg,
 {
 	struct pvchange_params *params = (struct pvchange_params *) handle->custom_handle;
 	const char *pv_name = pv_dev_name(pv);
+	struct lvmcache_info *info;
+	uint32_t ext_flags;
 	char uuid[64] __attribute__((aligned(8)));
 	unsigned done = 0;
 
@@ -48,10 +50,23 @@ static int _pvchange_single(struct cmd_context *cmd, struct volume_group *vg,
 		}
 		if (!archive(vg))
 			goto_bad;
-	} else if (tagargs) {
-		log_error("Can't change tag on Physical Volume %s not "
-			  "in volume group", pv_name);
-		goto bad;
+	} else {
+		if (tagargs) {
+			log_error("Can't change tag on Physical Volume %s not "
+				  "in volume group", pv_name);
+			goto bad;
+		}
+
+		if (!(info = lvmcache_info_from_pvid((const char *) &pv->id,0))) {
+			log_error("Failed to find cached info for PV %s.", pv_name);
+			goto bad;
+		}
+
+		ext_flags = lvmcache_ext_flags(info);
+		if (ext_flags & PV_EXT_USED && (arg_count(cmd, force_ARG) != DONT_PROMPT_OVERRIDE)) {
+			log_error("Can't change PV \"%s\" that is marked as used without -ff.", pv_name);
+			goto bad;
+		}
 	}
 
 	if (arg_count(cmd, allocatable_ARG)) {

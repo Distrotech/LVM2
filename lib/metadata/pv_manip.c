@@ -697,10 +697,12 @@ const char _really_wipe[] =
 static int pvremove_check(struct cmd_context *cmd, const char *name,
 			  unsigned force_count, unsigned prompt, struct dm_list *pvslist)
 {
+	static const char pvremove_force_hint_msg[] = "(If you are certain you need pvremove, then confirm by using --force twice.)";
 	struct device *dev;
 	struct label *label;
 	struct pv_list *pvl;
-
+	struct lvmcache_info *info;
+	uint32_t ext_flags;
 	struct physical_volume *pv = NULL;
 	int r = 0;
 
@@ -731,6 +733,18 @@ static int pvremove_check(struct cmd_context *cmd, const char *name,
 	}
 
 	if (is_orphan(pv)) {
+		if (!(info = lvmcache_info_from_pvid((const char *)&pv->id, 0))) {
+			log_error("Failed to find cached info for PV %s.", name);
+			goto out;
+		}
+
+		ext_flags = lvmcache_ext_flags(info);
+		if (ext_flags & PV_EXT_USED && force_count < 2) {
+			log_error("PV %s is marked as used.", name);
+			log_error("%s", pvremove_force_hint_msg);
+			goto out;
+		}
+
 		r = 1;
 		goto out;
 	}
@@ -738,7 +752,7 @@ static int pvremove_check(struct cmd_context *cmd, const char *name,
 	/* we must have -ff to overwrite a non orphan */
 	if (force_count < 2) {
 		log_error("PV %s belongs to Volume Group %s so please use vgreduce first.", name, pv_vg_name(pv));
-		log_error("(If you are certain you need pvremove, then confirm by using --force twice.)");
+		log_error("%s", pvremove_force_hint_msg);
 		goto out;
 	}
 

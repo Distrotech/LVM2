@@ -184,6 +184,8 @@ int add_pv_to_vg(struct volume_group *vg, const char *pv_name,
 	struct format_instance *fid = vg->fid;
 	struct dm_pool *mem = vg->vgmem;
 	char uuid[64] __attribute__((aligned(8)));
+	struct lvmcache_info *info;
+	uint32_t ext_flags;
 
 	log_verbose("Adding physical volume '%s' to volume group '%s'",
 		    pv_name, vg->name);
@@ -197,6 +199,17 @@ int add_pv_to_vg(struct volume_group *vg, const char *pv_name,
 		log_error("Physical volume '%s' is already in volume group "
 			  "'%s'", pv_name, pv->vg_name);
 		return 0;
+	} else if (!new_pv) {
+		if (!(info = lvmcache_info_from_pvid((const char *)&pv->id, 0))) {
+			log_error("Failed to find cached info for PV %s.", pv_name);
+			return 0;
+		}
+
+		ext_flags = lvmcache_ext_flags(info);
+		if (ext_flags & PV_EXT_USED) {
+			log_error("Physical volume '%s' is marked as used.", pv_name);
+			return 0;
+		}
 	}
 
 	if (pv->fmt != fid->fmt) {
@@ -1410,6 +1423,8 @@ static int _pvcreate_check(struct cmd_context *cmd, const char *name,
 			   struct pvcreate_params *pp, int *wiped)
 {
 	struct physical_volume *pv;
+	struct lvmcache_info *info;
+	uint32_t ext_flags;
 	struct device *dev;
 	int r = 0;
 	int scan_needed = 0;
@@ -1424,10 +1439,24 @@ static int _pvcreate_check(struct cmd_context *cmd, const char *name,
 
 	/* Allow partial & exported VGs to be destroyed. */
 	/* We must have -ff to overwrite a non orphan */
-	if (pv && !is_orphan(pv) && pp->force != DONT_PROMPT_OVERRIDE) {
-		log_error("Can't initialize physical volume \"%s\" of "
-			  "volume group \"%s\" without -ff", name, pv_vg_name(pv));
-		goto out;
+	if (pv) {
+		if (!is_orphan(pv) && pp->force != DONT_PROMPT_OVERRIDE) {
+			log_error("Can't initialize physical volume \"%s\" of "
+				  "volume group \"%s\" without -ff.", name, pv_vg_name(pv));
+			goto out;
+		}
+
+		if (!(info = lvmcache_info_from_pvid((const char *)&pv->id, 0))) {
+			log_error("Failed to find cached info for PV %s.", name);
+			goto out;
+		}
+
+		ext_flags = lvmcache_ext_flags(info);
+		if (ext_flags & PV_EXT_USED && pp->force != DONT_PROMPT_OVERRIDE) {
+			log_error("Can't initialize physical volume \"%s\" that is marked as used "
+				  "without -ff.", name);
+			goto out;
+		}
 	}
 
 	/* prompt */
