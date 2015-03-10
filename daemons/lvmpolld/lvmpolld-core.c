@@ -62,8 +62,8 @@ typedef struct lvmpolld_state {
 	const char *log_config;
 	const char *lvm_binary;
 
-	lvmpolld_store_t id_to_pdlv_abort;
-	lvmpolld_store_t id_to_pdlv_poll;
+	lvmpolld_store_t *id_to_pdlv_abort;
+	lvmpolld_store_t *id_to_pdlv_poll;
 } lvmpolld_state_t;
 
 static void usage(const char *prog, FILE *file)
@@ -88,8 +88,13 @@ static int init(struct daemon_state *s)
 	if (!daemon_log_parse(ls->log, DAEMON_LOG_OUTLET_STDERR, ls->log_config, 1))
 		return 0;
 
-	pdst_init(&ls->id_to_pdlv_poll, "polling");
-	pdst_init(&ls->id_to_pdlv_abort, "abort");
+	ls->id_to_pdlv_poll = pdst_init("polling");
+	ls->id_to_pdlv_abort = pdst_init("abort");
+
+	if (!ls->id_to_pdlv_poll || !ls->id_to_pdlv_abort) {
+		FATAL(ls, "%s: %s", PD_LOG_PREFIX, "Failed to allocate internal data structures");
+		return 0;
+	}
 
 	ls->lvm_binary = ls->lvm_binary ?: LVM2_BIN_PATH;
 
@@ -117,8 +122,8 @@ static int fini(struct daemon_state *s)
 	 * some lvmpolld_lv_t and/or stores during
 	 * shutdown i.e. on SIGTERM
 	 */
-	pdst_destroy(&ls->id_to_pdlv_poll);
-	pdst_destroy(&ls->id_to_pdlv_abort);
+	pdst_destroy(ls->id_to_pdlv_poll);
+	pdst_destroy(ls->id_to_pdlv_abort);
 
 	return 1;
 }
@@ -140,14 +145,14 @@ static int read_single_line(char **line, size_t *lsize, FILE *file)
 
 static void lvmpolld_stores_lock(lvmpolld_state_t *ls)
 {
-	pdst_lock(&ls->id_to_pdlv_poll);
-	pdst_lock(&ls->id_to_pdlv_abort);
+	pdst_lock(ls->id_to_pdlv_poll);
+	pdst_lock(ls->id_to_pdlv_abort);
 }
 
 static void lvmpolld_stores_unlock(lvmpolld_state_t *ls)
 {
-	pdst_unlock(&ls->id_to_pdlv_abort);
-	pdst_unlock(&ls->id_to_pdlv_poll);
+	pdst_unlock(ls->id_to_pdlv_abort);
+	pdst_unlock(ls->id_to_pdlv_poll);
 }
 
 static void update_active_state(lvmpolld_state_t *ls)
@@ -157,8 +162,8 @@ static void update_active_state(lvmpolld_state_t *ls)
 
 	lvmpolld_stores_lock(ls);
 
-	ls->idle->is_idle = !ls->id_to_pdlv_poll.active_polling_count &&
-			    !ls->id_to_pdlv_abort.active_polling_count;
+	ls->idle->is_idle = !ls->id_to_pdlv_poll->active_polling_count &&
+			    !ls->id_to_pdlv_abort->active_polling_count;
 
 	lvmpolld_stores_unlock(ls);
 
@@ -458,7 +463,7 @@ static response progress_info(client_handle h, lvmpolld_state_t *ls, request req
 
 	DEBUGLOG(ls, "%s: %s: %s", PD_LOG_PREFIX, "ID", id);
 
-	pdst = abort ? &ls->id_to_pdlv_abort : &ls->id_to_pdlv_poll;
+	pdst = abort ? ls->id_to_pdlv_abort : ls->id_to_pdlv_poll;
 
 	pdst_lock(pdst);
 	/* store locked */
@@ -597,7 +602,7 @@ static response poll_init(client_handle h, lvmpolld_state_t *ls, request req, en
 
 	DEBUGLOG(ls, "%s: %s=%s", PD_LOG_PREFIX, "ID", id);
 
-	pdst = abort ? &ls->id_to_pdlv_abort : &ls->id_to_pdlv_poll;
+	pdst = abort ? ls->id_to_pdlv_abort : ls->id_to_pdlv_poll;
 
 	pdst_lock(pdst);
 
@@ -661,14 +666,14 @@ static void lvmpolld_global_lock(lvmpolld_state_t *ls)
 {
 	lvmpolld_stores_lock(ls);
 
-	pdst_locked_lock_all_pdlvs(&ls->id_to_pdlv_poll);
-	pdst_locked_lock_all_pdlvs(&ls->id_to_pdlv_abort);
+	pdst_locked_lock_all_pdlvs(ls->id_to_pdlv_poll);
+	pdst_locked_lock_all_pdlvs(ls->id_to_pdlv_abort);
 }
 
 static void lvmpolld_global_unlock(lvmpolld_state_t *ls)
 {
-	pdst_locked_unlock_all_pdlvs(&ls->id_to_pdlv_abort);
-	pdst_locked_unlock_all_pdlvs(&ls->id_to_pdlv_poll);
+	pdst_locked_unlock_all_pdlvs(ls->id_to_pdlv_abort);
+	pdst_locked_unlock_all_pdlvs(ls->id_to_pdlv_poll);
 
 	lvmpolld_stores_unlock(ls);
 }
@@ -684,12 +689,12 @@ static response dump_state(client_handle h, lvmpolld_state_t *ls, request r)
 
 	buffer_append(b, "# Registered polling operations\n\n");
 	buffer_append(b, "poll {\n");
-	pdst_locked_dump(&ls->id_to_pdlv_poll, b);
+	pdst_locked_dump(ls->id_to_pdlv_poll, b);
 	buffer_append(b, "}\n\n");
 
 	buffer_append(b, "# Registered abort operations\n\n");
 	buffer_append(b, "abort {\n");
-	pdst_locked_dump(&ls->id_to_pdlv_abort, b);
+	pdst_locked_dump(ls->id_to_pdlv_abort, b);
 	buffer_append(b, "}\n\n");
 
 	lvmpolld_global_unlock(ls);

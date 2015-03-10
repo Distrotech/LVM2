@@ -189,17 +189,37 @@ void pdlv_set_polling_finished(lvmpolld_lv_t *pdlv, unsigned finished)
 	pdlv_unlock(pdlv);
 }
 
-void pdst_init(lvmpolld_store_t *pdst, const char *name)
+lvmpolld_store_t *pdst_init(const char *name)
 {
-	pthread_mutex_init(&pdst->lock, NULL);
+	lvmpolld_store_t *pdst = (lvmpolld_store_t *) dm_malloc(sizeof(lvmpolld_store_t));
+	if (!pdst)
+		return NULL;
+
 	pdst->store = dm_hash_create(32);
+	if (!pdst->store)
+		goto err_hash;
+	if (pthread_mutex_init(&pdst->lock, NULL))
+		goto err_mutex;
+
 	pdst->name = name;
+
+	return pdst;
+
+err_mutex:
+	dm_hash_destroy(pdst->store);
+err_hash:
+	dm_free(pdst);
+	return NULL;
 }
 
 void pdst_destroy(lvmpolld_store_t *pdst)
 {
+	if (!pdst)
+		return;
+
 	dm_hash_destroy(pdst->store);
 	pthread_mutex_destroy(&pdst->lock);
+	dm_free(pdst);
 }
 
 void pdst_locked_lock_all_pdlvs(const lvmpolld_store_t *pdst)

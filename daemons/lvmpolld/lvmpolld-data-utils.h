@@ -145,7 +145,7 @@ static inline unsigned pdlv_locked_internal_error(const lvmpolld_lv_t *pdlv)
 
 /* LVMPOLLD_STORE_T manipulation routines */
 
-void pdst_init(lvmpolld_store_t *pdst, const char *name);
+lvmpolld_store_t *pdst_init(const char *name);
 void pdst_destroy(lvmpolld_store_t *pdst);
 
 void pdst_locked_dump(const lvmpolld_store_t *pdst, struct buffer *buff);
