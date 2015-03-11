@@ -2395,9 +2395,13 @@ static int is_same_level(const struct segment_type *t1, const struct segment_typ
 
 static int is_level_up(const struct segment_type *t1, const struct segment_type *t2)
 {
-	return (segtype_is_striped(t1) && segtype_is_raid(t2)) ||
-	       !(segtype_is_raid(t1) && segtype_is_striped(t2)) ||
-	       _cmp_level(t1, t2) < 0;
+	if (segtype_is_raid(t1) && segtype_is_striped(t2))
+		return 0;
+
+	if (segtype_is_striped(t1) && segtype_is_raid(t2))
+		return 1;
+
+	return _cmp_level(t1, t2) < 0;
 }
 
 /*
@@ -2409,7 +2413,7 @@ static int is_level_up(const struct segment_type *t1, const struct segment_type 
  */
 /* HM FIXME: CODEME TESTME */
 static int _convert_reshape(struct logical_volume *lv,
-			     struct segment_type *new_segtype,
+			     const struct segment_type *new_segtype,
 			     const unsigned new_stripes,
 			     const unsigned new_stripe_size,
 		 	     struct dm_list *allocate_pvs)
@@ -2443,6 +2447,7 @@ static int _convert_reshape(struct logical_volume *lv,
 	    !_lv_raid_change_image_count(lv, new_segtype, new_stripes + seg->segtype->parity_devs, allocate_pvs))
 		return 0;
 
+PFLA("new_segtype=%s", new_segtype->name);
 	seg->segtype = new_segtype;
 
 	return 1;
@@ -2508,7 +2513,7 @@ static int _raid_level_up(struct logical_volume *lv,
 			  const struct segment_type *segtype,
 			  struct dm_list *allocate_pvs)
 {
-	return _raid_takeover(lv, 1, segtype, allocate_pvs, "raid1 set %s/%s has to have 2 disks.");
+	return _raid_takeover(lv, 1, segtype, allocate_pvs, "raid1 set %s/%s has to have 2 operational disks.");
 }
 
 	/* Process one level down takeover on @lv to @segtype */
@@ -2516,7 +2521,7 @@ static int _raid_level_down(struct logical_volume *lv,
 			    const struct segment_type *segtype,
 			    struct dm_list *allocate_pvs)
 {
-	return _raid_takeover(lv, 0, segtype, allocate_pvs, "raid5 set %s/%s has to be degraded.");
+	return _raid_takeover(lv, 0, segtype, allocate_pvs, "raid4/5 set %s/%s has have 2 disks and be degraded.");
 }
 
 /*
@@ -2559,9 +2564,9 @@ struct possible_type {
 	const char *current_type;
 	const char *possible_types[13];
 };
-static const struct segment_type *_adjust_final_segtype(struct logical_volume *lv,
-							const struct segment_type *segtype,
-							const struct segment_type *new_segtype)
+static const struct segment_type *_adjust_segtype(struct logical_volume *lv,
+						  const struct segment_type *segtype,
+						  const struct segment_type *new_segtype)
 {
 	unsigned cn, pn;
 	struct possible_type pt[] = {
@@ -2586,32 +2591,38 @@ static const struct segment_type *_adjust_final_segtype(struct logical_volume *l
 				      SEG_TYPE_NAME_RAID5_N,
 				      SEG_TYPE_NAME_RAID6_N_6,  NULL } },
 		{ .current_type = SEG_TYPE_NAME_RAID5,
-		  .possible_types = { SEG_TYPE_NAME_RAID5_0,  SEG_TYPE_NAME_RAID5_N,
+		  .possible_types = { SEG_TYPE_NAME_RAID1,
+				      SEG_TYPE_NAME_RAID5_0,  SEG_TYPE_NAME_RAID5_N,
 				      SEG_TYPE_NAME_RAID5_LS, SEG_TYPE_NAME_RAID5_RS,
 				      SEG_TYPE_NAME_RAID5_LA, SEG_TYPE_NAME_RAID5_RA,
 				      SEG_TYPE_NAME_RAID6_LS_6, NULL } },
 		{ .current_type = SEG_TYPE_NAME_RAID5_LS,
-		  .possible_types = { SEG_TYPE_NAME_RAID5,    SEG_TYPE_NAME_RAID5_0,  SEG_TYPE_NAME_RAID5_N,
+		  .possible_types = { SEG_TYPE_NAME_RAID1,
+				      SEG_TYPE_NAME_RAID5,    SEG_TYPE_NAME_RAID5_0,  SEG_TYPE_NAME_RAID5_N,
 							      SEG_TYPE_NAME_RAID5_RS,
 				      SEG_TYPE_NAME_RAID5_LA, SEG_TYPE_NAME_RAID5_RA,
 		                      SEG_TYPE_NAME_RAID6_LS_6, NULL } },
 		{ .current_type = SEG_TYPE_NAME_RAID5_RS,
-		  .possible_types = { SEG_TYPE_NAME_RAID5,     SEG_TYPE_NAME_RAID5_0,  SEG_TYPE_NAME_RAID5_N,
+		  .possible_types = { SEG_TYPE_NAME_RAID1,
+		  		      SEG_TYPE_NAME_RAID5,     SEG_TYPE_NAME_RAID5_0,  SEG_TYPE_NAME_RAID5_N,
 				      SEG_TYPE_NAME_RAID5_LS, 
 				      SEG_TYPE_NAME_RAID5_LA,  SEG_TYPE_NAME_RAID5_RA,
 		                      SEG_TYPE_NAME_RAID6_RS_6, NULL } },
 		{ .current_type = SEG_TYPE_NAME_RAID5_LA,
-		  .possible_types = { SEG_TYPE_NAME_RAID5,    SEG_TYPE_NAME_RAID5_0,  SEG_TYPE_NAME_RAID5_N,
+		  .possible_types = { SEG_TYPE_NAME_RAID1,
+				      SEG_TYPE_NAME_RAID5,    SEG_TYPE_NAME_RAID5_0,  SEG_TYPE_NAME_RAID5_N,
 				      SEG_TYPE_NAME_RAID5_LS, SEG_TYPE_NAME_RAID5_RS,
 							      SEG_TYPE_NAME_RAID5_RA,
 		                      SEG_TYPE_NAME_RAID6_LA_6, NULL } },
 		{ .current_type = SEG_TYPE_NAME_RAID5_RA,
-		  .possible_types = { SEG_TYPE_NAME_RAID5,    SEG_TYPE_NAME_RAID5_0,  SEG_TYPE_NAME_RAID5_N,
+		  .possible_types = { SEG_TYPE_NAME_RAID1,
+				      SEG_TYPE_NAME_RAID5,    SEG_TYPE_NAME_RAID5_0,  SEG_TYPE_NAME_RAID5_N,
 				      SEG_TYPE_NAME_RAID5_LS, SEG_TYPE_NAME_RAID5_RS,
 				      SEG_TYPE_NAME_RAID5_LA,
 		                      SEG_TYPE_NAME_RAID6_RA_6, NULL } },
 		{ .current_type = SEG_TYPE_NAME_RAID5_0,
-		  .possible_types = { SEG_TYPE_NAME_RAID4,
+		  .possible_types = { SEG_TYPE_NAME_RAID1,
+				      SEG_TYPE_NAME_RAID4,
 				      SEG_TYPE_NAME_RAID5,     SEG_TYPE_NAME_RAID5_N,
 				      SEG_TYPE_NAME_RAID5_LS,  SEG_TYPE_NAME_RAID5_RS,
 				      SEG_TYPE_NAME_RAID5_LA,  SEG_TYPE_NAME_RAID5_RA,
@@ -2683,8 +2694,7 @@ static int _convert_raid_to_raid(struct logical_volume *lv,
 {
 	int up;
 	struct lv_segment *seg = first_seg(lv);
-	struct segment_type *new_segtype = (struct segment_type *) requested_segtype;
-	const struct segment_type *final_segtype;
+	const struct segment_type *new_segtype = requested_segtype;
 	unsigned stripes = new_stripes ?: _data_rimages_count(seg, seg->area_count);
 	unsigned stripe_size = new_stripe_size ?: seg->stripe_size;
 
@@ -2759,12 +2769,13 @@ PFLA("stripes=%u stripe_size=%u seg->stripe_size=%u", stripes, stripe_size, seg-
 #endif
 
 PFLA("seg->segtype=%s new_segtype->name=%s", seg->segtype->name, new_segtype->name);
-	if (!(final_segtype = _adjust_final_segtype(lv, seg->segtype, new_segtype)))
+	if (!(new_segtype = _adjust_segtype(lv, seg->segtype, new_segtype)))
 		return 0;
-PFLA("seg->segtype=%s new_segtype->name=%s final_segtype->name=%s", seg->segtype->name, new_segtype->name, final_segtype ? final_segtype->name : NULL);
 
-	up = is_level_up(seg->segtype, final_segtype);
-	if (!(up ? _raid_level_up : _raid_level_down)(lv, final_segtype, allocate_pvs))
+PFLA("seg->segtype=%s new_segtype->name=%s", seg->segtype->name, new_segtype->name);
+
+	up = is_level_up(seg->segtype, new_segtype);
+	if (!(up ? _raid_level_up : _raid_level_down)(lv, new_segtype, allocate_pvs))
 		return 0;
 PFLA("seg->segtype=%s new_segtype->name=%s", seg->segtype->name, new_segtype->name);
 
