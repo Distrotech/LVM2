@@ -199,6 +199,7 @@ int last_string_from_args(char *args_in, char *last);
 int version_from_args(char *args, unsigned int *major, unsigned int *minor, unsigned int *patch);
 
 int lm_init_vg_dlm(char *ls_name, char *vg_name, uint32_t flags, char *vg_args);
+int lm_prepare_lockspace_dlm(struct lockspace *ls);
 int lm_add_lockspace_dlm(struct lockspace *ls, int adopt);
 int lm_rem_lockspace_dlm(struct lockspace *ls, int free_vg);
 int lm_lock_dlm(struct lockspace *ls, struct resource *r, int ld_mode,
@@ -215,6 +216,7 @@ int lm_init_vg_sanlock(char *ls_name, char *vg_name, uint32_t flags, char *vg_ar
 int lm_init_lv_sanlock(char *ls_name, char *vg_name, char *lv_name, char *vg_args, char *lv_args);
 int lm_free_lv_sanlock(struct lockspace *ls, struct resource *r);
 int lm_rename_vg_sanlock(char *ls_name, char *vg_name, uint32_t flags, char *vg_args);
+int lm_prepare_lockspace_sanlock(struct lockspace *ls);
 int lm_add_lockspace_sanlock(struct lockspace *ls, int adopt);
 int lm_rem_lockspace_sanlock(struct lockspace *ls, int free_vg);
 int lm_lock_sanlock(struct lockspace *ls, struct resource *r, int ld_mode,

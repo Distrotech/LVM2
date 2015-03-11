@@ -39,6 +39,10 @@ static inline void lvmlockd_close(daemon_handle h)
  * Errors returned as the lvmlockd result value.
  */
 #define ENOLS     210 /* lockspace not found */
-#define ESTARTING 213 /* lockspace is starting */
+#define ESTARTING 211 /* lockspace is starting */
+#define EARGS     212
+#define EHOSTID   213
+#define EMANAGER  214
+#define EPREPARE  215
 
 #endif

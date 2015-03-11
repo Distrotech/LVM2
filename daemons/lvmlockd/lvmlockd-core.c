@@ -770,6 +770,22 @@ int version_from_args(char *args, unsigned int *major, unsigned int *minor, unsi
  * be avoided.
  */
 
+static int lm_prepare_lockspace(struct lockspace *ls, struct action *act)
+{
+	int rv;
+
+	if (ls->lm_type == LD_LM_DLM)
+		rv = lm_prepare_lockspace_dlm(ls);
+	else if (ls->lm_type == LD_LM_SANLOCK)
+		rv = lm_prepare_lockspace_sanlock(ls);
+	else
+		return -1;
+
+	if (act)
+		act->lm_rv = rv;
+	return rv;
+}
+
 static int lm_add_lockspace(struct lockspace *ls, struct action *act, int adopt)
 {
 	int rv;
@@ -1911,27 +1927,36 @@ static void *lockspace_thread_main(void *arg_in)
 	log_debug("S %s lm_add_lockspace %s wait %d adopt %d",
 		  ls->name, lm_str(ls->lm_type), wait_flag, adopt_flag);
 
-	if (add_act && !wait_flag) {
-		/* send partial join result back to client */
-		add_act->result = 0;
+	/*
+	 * The prepare step does not wait for anything and is quick;
+	 * it tells us if the parameters are valid and the lm is running.
+	 */
+	error = lm_prepare_lockspace(ls, add_act);
+
+	if (add_act && (!wait_flag || error)) {
+		/* send initial join result back to client */
+		add_act->result = error;
 		add_client_result(add_act);
 		add_act = NULL;
 	}
 
-	/* the lm join can take a while */
+	/*
+	 * The actual lockspace join can take a while.
+	 */
+	if (!error) {
+		error = lm_add_lockspace(ls, add_act, adopt_flag);
 
-	error = lm_add_lockspace(ls, add_act, adopt_flag);
+		log_debug("S %s lm_add_lockspace done %d", ls->name, error);
 
-	log_debug("S %s lm_add_lockspace done %d", ls->name, error);
+		if (ls->sanlock_gl_enabled && gl_lsname_sanlock[0] &&
+		    strcmp(ls->name, gl_lsname_sanlock))
+			sanlock_gl_dup = 1;
 
-	if (ls->sanlock_gl_enabled && gl_lsname_sanlock[0] &&
-	    strcmp(ls->name, gl_lsname_sanlock))
-		sanlock_gl_dup = 1;
-
-	if (add_act) {
-		/* send final join result back to client */
-		add_act->result = error;
-		add_client_result(add_act);
+		if (add_act) {
+			/* send final join result back to client */
+			add_act->result = error;
+			add_client_result(add_act);
+		}
 	}
 
 	pthread_mutex_lock(&ls->mutex);

@@ -866,27 +866,31 @@ int lm_gl_is_enabled(struct lockspace *ls)
  * This should also not create any major problems.
  */
 
-int lm_add_lockspace_sanlock(struct lockspace *ls, int adopt)
+int lm_prepare_lockspace_sanlock(struct lockspace *ls)
 {
 	struct stat st;
-	struct lm_sanlock *lms;
+	struct lm_sanlock *lms = NULL;
 	char lock_lv_name[MAX_ARGS];
 	char lsname[SANLK_NAME_LEN + 1];
 	char disk_path[SANLK_PATH_LEN];
-	int rv;
+	int gl_found;
+	int ret, rv;
 
 	memset(disk_path, 0, sizeof(disk_path));
 	memset(lock_lv_name, 0, sizeof(lock_lv_name));
 
 	rv = check_args_version(ls->vg_args, VG_LOCK_ARGS_MAJOR);
-	if (rv < 0)
-		return rv;
+	if (rv < 0) {
+		ret = -EARGS;
+		goto fail;
+	}
 
 	rv = lock_lv_name_from_args(ls->vg_args, lock_lv_name);
 	if (rv < 0) {
-		log_error("S %s add_lockspace_san lock_lv_name_from_args error %d %s",
+		log_error("S %s prepare_lockspace_san lock_lv_name_from_args error %d %s",
 			  ls->name, rv, ls->vg_args);
-		return rv;
+		ret = -EARGS;
+		goto fail;
 	}
 
 	snprintf(disk_path, SANLK_PATH_LEN, "/dev/mapper/%s-%s",
@@ -908,9 +912,10 @@ int lm_add_lockspace_sanlock(struct lockspace *ls, int adopt)
 
 	rv = stat(disk_path, &st);
 	if (rv < 0) {
-		log_error("S %s add_lockspace_san stat error %d disk_path %s",
+		log_error("S %s prepare_lockspace_san stat error %d disk_path %s",
 			  ls->name, errno, disk_path);
-		return -1;
+		ret = -EARGS;
+		goto fail;
 	}
 
 	if (!ls->host_id) {
@@ -921,18 +926,22 @@ int lm_add_lockspace_sanlock(struct lockspace *ls, int adopt)
 	}
 
 	if (!ls->host_id || ls->host_id > 2000) {
-		log_error("S %s add_lockspace_san invalid host_id %llu",
+		log_error("S %s prepare_lockspace_san invalid host_id %llu",
 			  ls->name, (unsigned long long)ls->host_id);
-		return -1;
+		ret = -EHOSTID;
+		goto fail;
 	}
 
 	lms = malloc(sizeof(struct lm_sanlock));
-	if (!lms)
-		return -ENOMEM;
+	if (!lms) {
+		ret = -ENOMEM;
+		goto fail;
+	}
 
 	memset(lsname, 0, sizeof(lsname));
 	strncpy(lsname, ls->name, SANLK_NAME_LEN);
 
+	memset(lms, 0, sizeof(struct lm_sanlock));
 	memcpy(lms->ss.name, lsname, SANLK_NAME_LEN);
 	lms->ss.host_id_disk.offset = 0;
 	lms->ss.host_id = ls->host_id;
@@ -941,66 +950,83 @@ int lm_add_lockspace_sanlock(struct lockspace *ls, int adopt)
 	if (daemon_test) {
 		if (!gl_lsname_sanlock[0]) {
 			strncpy(gl_lsname_sanlock, lsname, MAX_NAME);
-			log_debug("S %s add_lockspace_san use global lock", lsname);
+			log_debug("S %s prepare_lockspace_san use global lock", lsname);
 		}
 		goto out;
 	}
 
 	lms->sock = sanlock_register();
 	if (lms->sock < 0) {
-		log_error("S %s add_lockspace_san register error %d", lsname, lms->sock);
-		free(lms);
-		return -1;
+		log_error("S %s prepare_lockspace_san register error %d", lsname, lms->sock);
+		lms->sock = 0;
+		ret = -EMANAGER;
+		goto fail;
 	}
 
 	rv = sanlock_restrict(lms->sock, SANLK_RESTRICT_SIGKILL);
 	if (rv < 0) {
 		log_error("S %s restrict error %d", lsname, rv);
+		ret = -EMANAGER;
+		goto fail;
 	}
 
 	lms->align_size = sanlock_align(&lms->ss.host_id_disk);
 	if (lms->align_size <= 0) {
-		log_error("S %s add_lockspace_san align error %d", lsname, lms->align_size);
-		close(lms->sock);
-		free(lms);
-		return -1;
+		log_error("S %s prepare_lockspace_san align error %d", lsname, lms->align_size);
+		ret = -EMANAGER;
+		goto fail;
 	}
 
-	rv = gl_is_enabled(ls, lms);
-	if (rv < 0) {
-		log_error("S %s add_lockspace_san gl_enabled error %d", lsname, rv);
-		close(lms->sock);
-		free(lms);
-		return rv;
+	gl_found = gl_is_enabled(ls, lms);
+	if (gl_found < 0) {
+		log_error("S %s prepare_lockspace_san gl_enabled error %d", lsname, gl_found);
+		ret = -EARGS;
+		goto fail;
 	}
 
-	ls->sanlock_gl_enabled = rv;
+	ls->sanlock_gl_enabled = gl_found;
 
-	if (rv) {
+	if (gl_found) {
 		if (gl_use_dlm) {
-			log_error("S %s add_lockspace_san gl_use_dlm is set", lsname);
+			log_error("S %s prepare_lockspace_san gl_use_dlm is set", lsname);
 		} else if (gl_lsname_sanlock[0] && strcmp(gl_lsname_sanlock, lsname)) {
-			log_error("S %s add_lockspace_san multiple sanlock global locks current %s",
+			log_error("S %s prepare_lockspace_san multiple sanlock global locks current %s",
 				  lsname, gl_lsname_sanlock);
 		} else {
 			strncpy(gl_lsname_sanlock, lsname, MAX_NAME);
-			log_debug("S %s add_lockspace_san use global lock %s",
+			log_debug("S %s prepare_lockspace_san use global lock %s",
 				  lsname, gl_lsname_sanlock);
 		}
 	}
 
+out:
+	ls->lm_data = lms;
+	log_debug("S %s prepare_lockspace_san done", lsname);
+	return 0;
+
+fail:
+	if (lms && lms->sock)
+		close(lms->sock);
+	if (lms)
+		free(lms);
+	return ret;
+}
+
+int lm_add_lockspace_sanlock(struct lockspace *ls, int adopt)
+{
+	struct lm_sanlock *lms = (struct lm_sanlock *)ls->lm_data;
+	int rv;
+
 	rv = sanlock_add_lockspace(&lms->ss, 0);
 	if (rv == -EEXIST && adopt) {
 		/* We could alternatively just skip the sanlock call for adopt. */
-		log_debug("S %s add_lockspace_san adopt found ls", lsname);
+		log_debug("S %s add_lockspace_san adopt found ls", ls->name);
 		goto out;
 	}
 	if (rv < 0) {
 		/* retry for some errors? */
-		log_error("S %s add_lockspace_san add_lockspace error %d", lsname, rv);
-		close(lms->sock);
-		free(lms);
-		return rv;
+		log_error("S %s add_lockspace_san add_lockspace error %d", ls->name, rv);
+		goto fail;
 	}
 
 	/*
@@ -1011,20 +1037,22 @@ int lm_add_lockspace_sanlock(struct lockspace *ls, int adopt)
 	 * orphan leases.
 	 */
 
-	rv = sanlock_set_config(lsname, 0, SANLK_CONFIG_USED_BY_ORPHANS, NULL);
+	rv = sanlock_set_config(ls->name, 0, SANLK_CONFIG_USED_BY_ORPHANS, NULL);
 	if (rv < 0) {
-		log_error("S %s add_lockspace_san set_config error %d", lsname, rv);
+		log_error("S %s add_lockspace_san set_config error %d", ls->name, rv);
 		sanlock_rem_lockspace(&lms->ss, 0);
-		close(lms->sock);
-		free(lms);
-		return rv;
+		goto fail;
 	}
 
 out:
-	log_debug("S %s add_lockspace_san done", lsname);
-
-	ls->lm_data = lms;
+	log_debug("S %s add_lockspace_san done", ls->name);
 	return 0;
+
+fail:
+	close(lms->sock);
+	free(lms);
+	ls->lm_data = NULL;
+	return rv;
 }
 
 int lm_rem_lockspace_sanlock(struct lockspace *ls, int free_vg)

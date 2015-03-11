@@ -35,6 +35,7 @@
 #include "daemon-log.h"
 
 #include "lvmlockd-internal.h"
+#include "lvmlockd-client.h"
 
 /*
  * Using synchronous _wait dlm apis so do not define _REENTRANT and
@@ -158,7 +159,7 @@ int lm_init_vg_dlm(char *ls_name, char *vg_name, uint32_t flags, char *vg_args)
 	return rv;
 }
 
-int lm_add_lockspace_dlm(struct lockspace *ls, int adopt)
+int lm_prepare_lockspace_dlm(struct lockspace *ls)
 {
 	char sys_clustername[MAX_ARGS];
 	char arg_clustername[MAX_ARGS];
@@ -170,7 +171,7 @@ int lm_add_lockspace_dlm(struct lockspace *ls, int adopt)
 
 	rv = read_cluster_name(sys_clustername);
 	if (rv < 0)
-		return rv;
+		return -EMANAGER;
 
 	if (!ls->vg_args[0]) {
 		/* global lockspace has no vg args */
@@ -179,29 +180,35 @@ int lm_add_lockspace_dlm(struct lockspace *ls, int adopt)
 
 	rv = check_args_version(ls->vg_args);
 	if (rv < 0)
-		return rv;
+		return -EARGS;
 
 	rv = cluster_name_from_args(ls->vg_args, arg_clustername);
 	if (rv < 0) {
-		log_error("add_lockspace_dlm %s no cluster name from args %s", ls->name, ls->vg_args);
-		return rv;
+		log_error("prepare_lockspace_dlm %s no cluster name from args %s", ls->name, ls->vg_args);
+		return -EARGS;
 	}
 
 	if (strcmp(sys_clustername, arg_clustername)) {
-		log_error("add_lockspace_dlm %s mismatching cluster names sys %s arg %s",
+		log_error("prepare_lockspace_dlm %s mismatching cluster names sys %s arg %s",
 			  ls->name, sys_clustername, arg_clustername);
-		return -1;
+		return -EARGS;
 	}
 
  skip_args:
 	lmd = malloc(sizeof(struct lm_dlm));
-	if (!lmd) {
-		rv = -ENOMEM;
-		goto out;
-	}
+	if (!lmd)
+		return -ENOMEM;
+
+	ls->lm_data = lmd;
+	return 0;
+}
+
+int lm_add_lockspace_dlm(struct lockspace *ls, int adopt)
+{
+	struct lm_dlm *lmd = (struct lm_dlm *)ls->lm_data;
 
 	if (daemon_test)
-		goto data;
+		return 0;
 
 	if (adopt)
 		lmd->dh = dlm_open_lockspace(ls->name);
@@ -209,17 +216,13 @@ int lm_add_lockspace_dlm(struct lockspace *ls, int adopt)
 		lmd->dh = dlm_new_lockspace(ls->name, 0600, DLM_LSFL_NEWEXCL);
 
 	if (!lmd->dh) {
+		log_error("add_lockspace_dlm %s adopt %d error", ls->name, adopt);
 		free(lmd);
-		rv = -1;
-		log_error("add_lockspace_dlm new error %d", rv);
-		goto out;
+		ls->lm_data = NULL;
+		return -1;
 	}
 
- data:
-	ls->lm_data = lmd;
-	rv = 0;
- out:
-	return rv;
+	return 0;
 }
 
 int lm_rem_lockspace_dlm(struct lockspace *ls, int free_vg)
