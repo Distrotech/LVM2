@@ -14,7 +14,6 @@
 
 #include <assert.h>
 #include <errno.h>
-#include <fcntl.h>
 #include <getopt.h>
 #include <poll.h>
 #include <pthread.h>
@@ -66,6 +65,8 @@ typedef struct lvmpolld_state {
 	lvmpolld_store_t *id_to_pdlv_poll;
 } lvmpolld_state_t;
 
+static pthread_key_t key;
+
 static void usage(const char *prog, FILE *file)
 {
 	fprintf(file, "Usage:\n"
@@ -88,6 +89,11 @@ static int init(struct daemon_state *s)
 	if (!daemon_log_parse(ls->log, DAEMON_LOG_OUTLET_STDERR, ls->log_config, 1))
 		return 0;
 
+	if (pthread_key_create(&key, lvmpolld_thread_data_destroy)) {
+		FATAL(ls, "%s: %s", PD_LOG_PREFIX, "Failed to create pthread key");
+		return 0;
+	}
+
 	ls->id_to_pdlv_poll = pdst_init("polling");
 	ls->id_to_pdlv_abort = pdst_init("abort");
 
@@ -99,7 +105,7 @@ static int init(struct daemon_state *s)
 	ls->lvm_binary = ls->lvm_binary ?: LVM2_BIN_PATH;
 
 	if (access(ls->lvm_binary, X_OK)) {
-		ERROR(ls, "%s: %s %s", PD_LOG_PREFIX, "Execute access rights denied on", ls->lvm_binary);
+		FATAL(ls, "%s: %s %s", PD_LOG_PREFIX, "Execute access rights denied on", ls->lvm_binary);
 		return 0;
 	}
 
@@ -107,40 +113,6 @@ static int init(struct daemon_state *s)
 		ls->idle->is_idle = 1;
 
 	return 1;
-}
-
-static int fini(struct daemon_state *s)
-{
-	lvmpolld_state_t *ls = s->private;
-
-	DEBUGLOG(s, "fini");
-
-	/*
-	 * FIXME: need to add proper cleanup
-	 *
-	 * there may be background jobs accessing
-	 * some lvmpolld_lv_t and/or stores during
-	 * shutdown i.e. on SIGTERM
-	 */
-	pdst_destroy(ls->id_to_pdlv_poll);
-	pdst_destroy(ls->id_to_pdlv_abort);
-
-	return 1;
-}
-
-static response reply_fail(const char *reason)
-{
-	return daemon_reply_simple("failed", "reason = %s", reason, NULL);
-}
-
-static int read_single_line(char **line, size_t *lsize, FILE *file)
-{
-	ssize_t r = getline(line, lsize, file);
-
-	if (r > 0 && *(*line + r - 1) == '\n')
-		*(*line + r - 1) = '\0';
-
-	return (r > 0);
 }
 
 static void lvmpolld_stores_lock(lvmpolld_state_t *ls)
@@ -155,15 +127,86 @@ static void lvmpolld_stores_unlock(lvmpolld_state_t *ls)
 	pdst_unlock(ls->id_to_pdlv_poll);
 }
 
-static void update_active_state(lvmpolld_state_t *ls)
+static void lvmpolld_global_lock(lvmpolld_state_t *ls)
+{
+	lvmpolld_stores_lock(ls);
+
+	pdst_locked_lock_all_pdlvs(ls->id_to_pdlv_poll);
+	pdst_locked_lock_all_pdlvs(ls->id_to_pdlv_abort);
+}
+
+static void lvmpolld_global_unlock(lvmpolld_state_t *ls)
+{
+	pdst_locked_unlock_all_pdlvs(ls->id_to_pdlv_abort);
+	pdst_locked_unlock_all_pdlvs(ls->id_to_pdlv_poll);
+
+	lvmpolld_stores_unlock(ls);
+}
+
+static int fini(struct daemon_state *s)
+{
+	int done;
+	const struct timespec t = { .tv_nsec = 250000000 }; /* .25 sec */
+	lvmpolld_state_t *ls = s->private;
+
+	DEBUGLOG(s, "fini");
+
+	DEBUGLOG(s, "sending cancel requests");
+
+	lvmpolld_global_lock(ls);
+	pdst_locked_send_cancel(ls->id_to_pdlv_poll);
+	pdst_locked_send_cancel(ls->id_to_pdlv_abort);
+	lvmpolld_global_unlock(ls);
+
+	DEBUGLOG(s, "waiting for background threads to finish");
+
+	do {
+		nanosleep(&t, NULL);
+		lvmpolld_stores_lock(ls);
+		done = !pdst_locked_get_active_count(ls->id_to_pdlv_poll) &&
+		       !pdst_locked_get_active_count(ls->id_to_pdlv_abort);
+		lvmpolld_stores_unlock(ls);
+	} while (!done);
+
+	DEBUGLOG(s, "destroying internal data structures");
+
+	lvmpolld_stores_lock(ls);
+	pdst_locked_destroy_all_pdlvs(ls->id_to_pdlv_poll);
+	pdst_locked_destroy_all_pdlvs(ls->id_to_pdlv_abort);
+	lvmpolld_stores_unlock(ls);
+
+	pdst_destroy(ls->id_to_pdlv_poll);
+	pdst_destroy(ls->id_to_pdlv_abort);
+
+	pthread_key_delete(key);
+
+	return 1;
+}
+
+static response reply_fail(const char *reason)
+{
+	return daemon_reply_simple("failed", "reason = %s", reason, NULL);
+}
+
+static int read_single_line(lvmpolld_thread_data_t *data, int err)
+{
+	ssize_t r = getline(&data->line, &data->line_size, err ? data->ferr : data->fout);
+
+	if (r > 0 && *(data->line + r - 1) == '\n')
+		*(data->line + r - 1) = '\0';
+
+	return (r > 0);
+}
+
+static void update_idle_state(lvmpolld_state_t *ls)
 {
 	if (!ls->idle)
 		return;
 
 	lvmpolld_stores_lock(ls);
 
-	ls->idle->is_idle = !ls->id_to_pdlv_poll->active_polling_count &&
-			    !ls->id_to_pdlv_abort->active_polling_count;
+	ls->idle->is_idle = !pdst_locked_get_active_count(ls->id_to_pdlv_poll) &&
+			    !pdst_locked_get_active_count(ls->id_to_pdlv_abort);
 
 	lvmpolld_stores_unlock(ls);
 
@@ -173,19 +216,14 @@ static void update_active_state(lvmpolld_state_t *ls)
 /* make this configurable */
 #define MAX_TIMEOUT 2
 
-static int poll_for_output(lvmpolld_lv_t *pdlv, int outfd, int errfd)
+static int poll_for_output(lvmpolld_lv_t *pdlv, lvmpolld_thread_data_t *data)
 {
-	size_t lsize;
 	int ch_stat, r, wait4, err = 1, fds_count = 2, timeout = 0;
-
-	FILE *fout = NULL, *ferr = NULL;
-
-	char *line = NULL;
 	lvmpolld_cmd_stat_t cmd_state = { .retcode = -1, .signal = 0 };
-	struct pollfd fds[] = { { .fd = outfd, .events = POLLIN },
-				{ .fd = errfd, .events = POLLIN } };
+	struct pollfd fds[] = { { .fd = data->outpipe[0], .events = POLLIN },
+				{ .fd = data->errpipe[0], .events = POLLIN } };
 
-	if (!(fout = fdopen(outfd, "r")) || !(ferr = fdopen(errfd, "r"))) {
+	if (!(data->fout = fdopen(data->outpipe[0], "r")) || !(data->ferr = fdopen(data->errpipe[0], "r"))) {
 		ERROR(pdlv->ls, "%s: %s", PD_LOG_PREFIX, "failed to open file stream");
 		goto out;
 	}
@@ -224,9 +262,9 @@ static int poll_for_output(lvmpolld_lv_t *pdlv, int outfd, int errfd)
 		if (fds[0].revents & POLLIN) {
 			DEBUGLOG(pdlv->ls, "%s: %s", PD_LOG_PREFIX, "caught input data in STDOUT");
 
-			assert(read_single_line(&line, &lsize, fout)); /* may block indef. anyway */
+			assert(read_single_line(data, 0)); /* may block indef. anyway */
 			INFO(pdlv->ls, "%s: PID %d: %s: '%s'", LVM2_LOG_PREFIX,
-			     pdlv->cmd_pid, "STDOUT", line);
+			     pdlv->cmd_pid, "STDOUT", data->line);
 		} else if (fds[0].revents) {
 			if (fds[0].revents & POLLHUP)
 				DEBUGLOG(pdlv->ls, "%s: %s", PD_LOG_PREFIX, "caught POLLHUP");
@@ -242,9 +280,9 @@ static int poll_for_output(lvmpolld_lv_t *pdlv, int outfd, int errfd)
 			DEBUGLOG(pdlv->ls, "%s: %s", PD_LOG_PREFIX,
 				 "caught input data in STDERR");
 
-			assert(read_single_line(&line, &lsize, ferr)); /* may block indef. anyway */
+			assert(read_single_line(data, 1)); /* may block indef. anyway */
 			INFO(pdlv->ls, "%s: PID %d: %s: '%s'", LVM2_LOG_PREFIX,
-			     pdlv->cmd_pid, "STDERR", line);
+			     pdlv->cmd_pid, "STDERR", data->line);
 		} else if (fds[1].revents) {
 			if (fds[1].revents & POLLHUP)
 				DEBUGLOG(pdlv->ls, "%s: %s", PD_LOG_PREFIX, "caught err POLLHUP");
@@ -278,14 +316,14 @@ static int poll_for_output(lvmpolld_lv_t *pdlv, int outfd, int errfd)
 
 	DEBUGLOG(pdlv->ls, "%s: %s", PD_LOG_PREFIX, "about to collect remaining lines");
 	if (fds[0].fd >= 0)
-		while (read_single_line(&line, &lsize, fout)) {
+		while (read_single_line(data, 0)) {
 			assert(r > 0);
-			INFO(pdlv->ls, "%s: PID %d: %s: %s", LVM2_LOG_PREFIX, pdlv->cmd_pid, "STDOUT", line);
+			INFO(pdlv->ls, "%s: PID %d: %s: %s", LVM2_LOG_PREFIX, pdlv->cmd_pid, "STDOUT", data->line);
 		}
 	if (fds[1].fd >= 0)
-		while (read_single_line(&line, &lsize, ferr)) {
+		while (read_single_line(data, 1)) {
 			assert(r > 0);
-			INFO(pdlv->ls, "%s: PID %d: %s: %s", LVM2_LOG_PREFIX, pdlv->cmd_pid, "STDERR", line);
+			INFO(pdlv->ls, "%s: PID %d: %s: %s", LVM2_LOG_PREFIX, pdlv->cmd_pid, "STDERR", data->line);
 		}
 
 	if (WIFEXITED(ch_stat)) {
@@ -303,12 +341,6 @@ static int poll_for_output(lvmpolld_lv_t *pdlv, int outfd, int errfd)
 out:
 	if (!err)
 		pdlv_set_cmd_state(pdlv, &cmd_state);
-
-	if (fout && fclose(fout))
-		WARN(pdlv->ls, "%s: %s", PD_LOG_PREFIX, "failed to close stdout file");
-	if (ferr && fclose(ferr))
-		WARN(pdlv->ls, "%s: %s", PD_LOG_PREFIX, "failed to close stderr file");
-	dm_free(line);
 
 	return err;
 }
@@ -328,30 +360,23 @@ static void debug_print(lvmpolld_state_t *ls, const char * const* ptr)
 
 static void *fork_and_poll(void *args)
 {
-	lvmpolld_store_t *pdst;
+	int outfd, errfd, state;
+	lvmpolld_thread_data_t *data;
 	pid_t r;
-	int error = 1;
 
+	int error = 1;
 	lvmpolld_lv_t *pdlv = (lvmpolld_lv_t *) args;
 	lvmpolld_state_t *ls = pdlv->ls;
 
-	int outpipe[2] = { -1, -1 }, errpipe[2] = { -1, -1 };
+	pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &state);
+	data = lvmpolld_thread_data_constructor(pdlv);
+	pthread_setspecific(key, data);
+	pthread_setcancelstate(state, &state);
 
-	if (pipe(outpipe) || pipe(errpipe)) {
-		ERROR(pdlv->ls, "%s: %s", PD_LOG_PREFIX, "failed to create pipe");
+	if (!data) {
+		ERROR(ls, "%s: %s", PD_LOG_PREFIX, "Failed to initialize per-thread data");
 		goto err;
 	}
-
-	/* FIXME: failure to set O_CLOEXEC will perhaps result in broken polling anyway */
-	/* don't duplicate read end of the pipe */
-	if (fcntl(outpipe[0], F_SETFD, FD_CLOEXEC))
-		WARN(ls, "%s: %s", PD_LOG_PREFIX, "failed to set FD_CLOEXEC on read end of pipe");
-	if (fcntl(outpipe[1], F_SETFD, FD_CLOEXEC))
-		WARN(ls, "%s: %s", PD_LOG_PREFIX, "failed to set FD_CLOEXEC on write end of pipe");
-	if (fcntl(errpipe[0], F_SETFD, FD_CLOEXEC))
-		WARN(ls, "%s: %s", PD_LOG_PREFIX, "failed to set FD_CLOEXEC on read end of err pipe");
-	if (fcntl(errpipe[1], F_SETFD, FD_CLOEXEC))
-		WARN(ls, "%s: %s", PD_LOG_PREFIX, "failed to set FD_CLOEXEC on write end of err pipe");
 
 	DEBUGLOG(ls, "%s: %s", PD_LOG_PREFIX, "cmd line arguments:");
 	debug_print(ls, pdlv->cmdargv);
@@ -361,13 +386,16 @@ static void *fork_and_poll(void *args)
 	debug_print(ls, pdlv->cmdenvp);
 	DEBUGLOG(ls, "%s: %s", PD_LOG_PREFIX, "---end---");
 
+	outfd = data->outpipe[1];
+	errfd = data->errpipe[1];
+
 	r = fork();
 	if (!r) {
 		/* child */
-		/* !!! Do not touch any posix thread primitive !!! */
+		/* !!! Do not touch any posix thread primitives !!! */
 
-		if ((dup2(outpipe[1], STDOUT_FILENO ) != STDOUT_FILENO) ||
-		    (dup2(errpipe[1], STDERR_FILENO ) != STDERR_FILENO))
+		if ((dup2(outfd, STDOUT_FILENO ) != STDOUT_FILENO) ||
+		    (dup2(errfd, STDERR_FILENO ) != STDERR_FILENO))
 			_exit(100);
 
 		execve(*(pdlv->cmdargv), (char *const *)pdlv->cmdargv, (char *const *)pdlv->cmdenvp);
@@ -385,48 +413,47 @@ static void *fork_and_poll(void *args)
 		pdlv->cmd_pid = r;
 
 		/* failure to close write end of any pipe will result in broken polling */
-		if (close(outpipe[1])) {
+		if (close(data->outpipe[1])) {
 			ERROR(ls, "%s: %s", PD_LOG_PREFIX, "failed to close write end of pipe");
 			goto err;
 		}
-		if (close(errpipe[1])) {
+		data->outpipe[1] = -1;
+
+		if (close(data->errpipe[1])) {
 			ERROR(ls, "%s: %s", PD_LOG_PREFIX, "failed to close write end of err pipe");
 			goto err;
 		}
+		data->errpipe[1] = -1;
 
-		outpipe[1] = errpipe[1] = -1;
-
-		error = poll_for_output(pdlv, *outpipe, *errpipe);
+		error = poll_for_output(pdlv, data);
 		DEBUGLOG(ls, "%s: %s", PD_LOG_PREFIX, "polling for lvpoll output has finished");
 	}
 
 err:
 	r = 0;
-	pdst = pdlv->pdst;
 
-	pdst_lock(pdst);
+	pdst_lock(pdlv->pdst);
 
 	if (error) {
 		/* last reader is responsible for pdlv cleanup */
 		r = pdlv->cmd_pid;
 		pdlv_set_internal_error(pdlv, 1);
-	} else
-		pdlv_set_polling_finished(pdlv, 1);
+	}
 
-	pdst_locked_dec(pdst);
+	pdlv_set_polling_finished(pdlv, 1);
+	if (data)
+		data->pdlv = NULL;
 
-	pdst_unlock(pdst);
+	pdst_locked_dec(pdlv->pdst);
 
-	update_active_state(ls);
+	pdst_unlock(pdlv->pdst);
 
-	if (outpipe[0] != -1)
-		close(outpipe[0]);
-	if (outpipe[1] != -1)
-		close(outpipe[1]);
-	if (errpipe[0] != -1)
-		close(errpipe[0]);
-	if (errpipe[1] != -1)
-		close(errpipe[1]);
+	pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &state);
+	lvmpolld_thread_data_destroy(data);
+	pthread_setspecific(key, NULL);
+	pthread_setcancelstate(state, &state);
+
+	update_idle_state(ls);
 
 	/*
 	 * This is unfortunate case where we
@@ -659,23 +686,6 @@ static response poll_init(client_handle h, lvmpolld_state_t *ls, request req, en
 	dm_free(id);
 
 	return daemon_reply_simple(LVMPD_RESP_OK, NULL);
-}
-
-
-static void lvmpolld_global_lock(lvmpolld_state_t *ls)
-{
-	lvmpolld_stores_lock(ls);
-
-	pdst_locked_lock_all_pdlvs(ls->id_to_pdlv_poll);
-	pdst_locked_lock_all_pdlvs(ls->id_to_pdlv_abort);
-}
-
-static void lvmpolld_global_unlock(lvmpolld_state_t *ls)
-{
-	pdst_locked_unlock_all_pdlvs(ls->id_to_pdlv_abort);
-	pdst_locked_unlock_all_pdlvs(ls->id_to_pdlv_poll);
-
-	lvmpolld_stores_unlock(ls);
 }
 
 static response dump_state(client_handle h, lvmpolld_state_t *ls, request r)

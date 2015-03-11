@@ -82,6 +82,16 @@ typedef struct lvmpolld_lv {
 	unsigned internal_error:1; /* unrecoverable error occured in lvmpolld */
 } lvmpolld_lv_t;
 
+typedef struct {
+	char *line;
+	size_t line_size;
+	int outpipe[2];
+	int errpipe[2];
+	FILE *fout;
+	FILE *ferr;
+	lvmpolld_lv_t *pdlv;
+} lvmpolld_thread_data_t;
+
 char *construct_id(const char *sysdir, const char *lvid);
 
 /* LVMPOLLD_LV_T section */
@@ -151,6 +161,8 @@ void pdst_destroy(lvmpolld_store_t *pdst);
 void pdst_locked_dump(const lvmpolld_store_t *pdst, struct buffer *buff);
 void pdst_locked_lock_all_pdlvs(const lvmpolld_store_t *pdst);
 void pdst_locked_unlock_all_pdlvs(const lvmpolld_store_t *pdst);
+void pdst_locked_destroy_all_pdlvs(const lvmpolld_store_t *pdst);
+void pdst_locked_send_cancel(const lvmpolld_store_t *pdst);
 
 static inline void pdst_lock(lvmpolld_store_t *pdst)
 {
@@ -172,7 +184,7 @@ static inline void pdst_locked_dec(lvmpolld_store_t *pdst)
 	pdst->active_polling_count--;
 }
 
-static inline unsigned pdst_locked_get_active_polling_count(const lvmpolld_store_t *pdst)
+static inline unsigned pdst_locked_get_active_count(const lvmpolld_store_t *pdst)
 {
 	return pdst->active_polling_count;
 }
@@ -191,5 +203,8 @@ static inline void pdst_locked_remove(lvmpolld_store_t *pdst, const char *key)
 {
 	dm_hash_remove(pdst->store, key);
 }
+
+lvmpolld_thread_data_t *lvmpolld_thread_data_constructor(lvmpolld_lv_t *pdlv);
+void lvmpolld_thread_data_destroy(void *thread_private);
 
 #endif /* _LVM_LVMPOLLD_DATA_UTILS_H */

@@ -12,6 +12,9 @@
  * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
+#include <fcntl.h>
+#include <unistd.h>
+
 #include "config-util.h"
 #include "libdevmapper.h"
 #include "lvmpolld-data-utils.h"
@@ -178,7 +181,6 @@ void pdlv_set_internal_error(lvmpolld_lv_t *pdlv, unsigned error)
 {
 	pdlv_lock(pdlv);
 	pdlv->internal_error = error;
-	pdlv->polling_finished = 1;
 	pdlv_unlock(pdlv);
 }
 
@@ -291,4 +293,89 @@ void pdst_locked_dump(const lvmpolld_store_t *pdst, struct buffer *buff)
 
 	dm_hash_iterate(n, pdst->store)
 		_pdlv_locked_dump(buff, dm_hash_get_data(pdst->store, n));
+}
+
+void pdst_locked_send_cancel(const lvmpolld_store_t *pdst)
+{
+	lvmpolld_lv_t *pdlv;
+	struct dm_hash_node *n;
+
+	dm_hash_iterate(n, pdst->store) {
+		pdlv = dm_hash_get_data(pdst->store, n);
+		if (!pdlv_locked_polling_finished(pdlv))
+			pthread_cancel(pdlv->tid);
+	}
+}
+
+void pdst_locked_destroy_all_pdlvs(const lvmpolld_store_t *pdst)
+{
+	struct dm_hash_node *n;
+
+	dm_hash_iterate(n, pdst->store)
+		pdlv_destroy(dm_hash_get_data(pdst->store, n));
+}
+
+lvmpolld_thread_data_t *lvmpolld_thread_data_constructor(lvmpolld_lv_t *pdlv)
+{
+	lvmpolld_thread_data_t *data = (lvmpolld_thread_data_t *) dm_malloc(sizeof(lvmpolld_thread_data_t));
+	if (!data)
+		return NULL;
+
+	data->pdlv = NULL;
+	data->line = NULL;
+	data->fout = data->ferr = NULL;
+	data->outpipe[0] = data->outpipe[1] = data->errpipe[0] = data->errpipe[1] = -1;
+
+	if (pipe(data->outpipe) || pipe(data->errpipe)) {
+		lvmpolld_thread_data_destroy(data);
+		return NULL;
+	}
+
+	if (fcntl(data->outpipe[0], F_SETFD, FD_CLOEXEC) ||
+	    fcntl(data->outpipe[1], F_SETFD, FD_CLOEXEC) ||
+	    fcntl(data->errpipe[0], F_SETFD, FD_CLOEXEC) ||
+	    fcntl(data->errpipe[1], F_SETFD, FD_CLOEXEC)) {
+		lvmpolld_thread_data_destroy(data);
+		return NULL;
+	}
+
+	data->pdlv = pdlv;
+
+	return data;
+}
+
+void lvmpolld_thread_data_destroy(void *thread_private)
+{
+	lvmpolld_thread_data_t *data = (lvmpolld_thread_data_t *) thread_private;
+	if (!data)
+		return;
+
+	if (data->pdlv) {
+		pdst_lock(data->pdlv->pdst);
+		pdlv_set_polling_finished(data->pdlv, 1);
+		pdst_locked_dec(data->pdlv->pdst);
+		pdst_unlock(data->pdlv->pdst);
+	}
+
+	dm_free(data->line);
+
+	if (data->fout && !fclose(data->fout))
+		data->outpipe[0] = -1;
+
+	if (data->ferr && !fclose(data->ferr))
+		data->errpipe[0] = -1;
+
+	if (data->outpipe[0] >= 0)
+		close(data->outpipe[0]);
+
+	if (data->outpipe[1] >= 0)
+		close(data->outpipe[1]);
+
+	if (data->errpipe[0] >= 0)
+		close(data->errpipe[0]);
+
+	if (data->errpipe[1] >= 0)
+		close(data->errpipe[1]);
+
+	dm_free(data);
 }
