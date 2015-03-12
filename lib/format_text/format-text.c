@@ -1344,7 +1344,8 @@ static int _text_pv_write(const struct format_type *fmt, struct physical_volume 
 
 	/* Add a new cache entry with PV info or update existing one. */
 	if (!(info = lvmcache_add(fmt->labeller, (const char *) &pv->id,
-				  pv->dev, pv->vg_name, NULL, 0)))
+				  pv->dev, pv->vg_name,
+				  (const char *) pv->vg->id.uuid, 0)))
 		return_0;
 
 	label = lvmcache_get_label(info);

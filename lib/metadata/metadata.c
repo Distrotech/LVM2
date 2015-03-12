@@ -274,15 +274,13 @@ int add_pv_to_vg(struct volume_group *vg, const char *pv_name,
 			break;
 		}
 
-	if (pv->status & UNLABELLED_PV) {
-		if (!(pvw = dm_pool_zalloc(mem, sizeof(*pvw)))) {
-			log_error("pv_to_write allocation for '%s' failed", pv_name);
-			return 0;
-		}
-		pvw->pv = pv;
-		pvw->pp = new_pv ? pp : NULL;
-		dm_list_add(&vg->pvs_to_write, &pvw->list);
+	if (!(pvw = dm_pool_zalloc(mem, sizeof(*pvw)))) {
+		log_error("pv_to_write allocation for '%s' failed", pv_name);
+		return 0;
 	}
+	pvw->pv = pv;
+	pvw->pp = new_pv ? pp : NULL;
+	dm_list_add(&vg->pvs_to_write, &pvw->list);
 
 	return 1;
 }
