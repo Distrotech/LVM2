@@ -145,11 +145,11 @@ int lm_init_vg_dlm(char *ls_name, char *vg_name, uint32_t flags, char *vg_args)
 
 	rv = read_cluster_name(clustername);
 	if (rv < 0)
-		return rv;
+		return -EMANAGER;
 
 	if (strlen(clustername) + strlen(lock_args_version) + 2 > MAX_ARGS) {
 		log_error("init_vg_dlm args too long");
-		return -ENAMETOOLONG;
+		return -EARGS;
 	}
 
 	snprintf(vg_args, MAX_ARGS, "%s:%s", lock_args_version, clustername);

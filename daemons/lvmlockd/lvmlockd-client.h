@@ -44,5 +44,6 @@ static inline void lvmlockd_close(daemon_handle h)
 #define EHOSTID   213
 #define EMANAGER  214
 #define EPREPARE  215
+#define ELOCKD    216
 
 #endif

@@ -263,6 +263,8 @@ int lm_init_vg_sanlock(char *ls_name, char *vg_name, uint32_t flags, char *vg_ar
 	char lock_lv_name[MAX_ARGS];
 	char lock_args_version[MAX_ARGS];
 	const char *gl_name = NULL;
+	uint32_t daemon_version;
+	uint32_t daemon_proto;
 	uint64_t offset;
 	int align_size;
 	int i, rv;
@@ -275,7 +277,7 @@ int lm_init_vg_sanlock(char *ls_name, char *vg_name, uint32_t flags, char *vg_ar
 
 	if (!vg_args || !vg_args[0] || !strcmp(vg_args, "none")) {
 		log_error("S %s init_vg_san vg_args missing", ls_name);
-		return -EINVAL;
+		return -EARGS;
 	}
 
 	snprintf(lock_args_version, MAX_ARGS, "%u.%u.%u",
@@ -285,7 +287,7 @@ int lm_init_vg_sanlock(char *ls_name, char *vg_name, uint32_t flags, char *vg_ar
 	snprintf(lock_lv_name, MAX_ARGS, "%s", vg_args);
 
 	if (strlen(lock_lv_name) + strlen(lock_args_version) + 2 > MAX_ARGS)
-		return -ENAMETOOLONG;
+		return -EARGS;
 
 	snprintf(disk.path, SANLK_PATH_LEN, "/dev/mapper/%s-%s", vg_name, lock_lv_name);
 
@@ -297,11 +299,20 @@ int lm_init_vg_sanlock(char *ls_name, char *vg_name, uint32_t flags, char *vg_ar
 		goto out;
 	}
 
+	rv = sanlock_version(0, &daemon_version, &daemon_proto);
+	if (rv < 0) {
+		log_error("S %s init_vg_san failed to connect to sanlock daemon", ls_name);
+		return -EMANAGER;
+	}
+
+	log_debug("sanlock daemon version %08x proto %08x",
+		  daemon_version, daemon_proto);
+
 	align_size = sanlock_align(&disk);
 	if (align_size <= 0) {
-		log_error("S %s init_vg_san bad align size %d %s",
+		log_error("S %s init_vg_san bad disk align size %d %s",
 			  ls_name, align_size, disk.path);
-		return -EINVAL;
+		return -EARGS;
 	}
 
 	strncpy(ss.name, ls_name, SANLK_NAME_LEN);

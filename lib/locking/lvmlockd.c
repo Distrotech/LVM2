@@ -505,25 +505,41 @@ static int _init_vg_dlm(struct cmd_context *cmd, struct volume_group *vg)
 
 	if (!_lockd_result(reply, &result, NULL)) {
 		ret = 0;
+		result = -ELOCKD;
 	} else {
 		ret = (result < 0) ? 0 : 1;
 	}
 
-	if (!ret) {
-		log_error("_init_vg_dlm lvmlockd result %d", result);
-		goto out;
+	switch (result) {
+	case 0:
+		log_print_unless_silent("VG %s initialized %s lockspace", vg->name, vg->lock_type);
+		break;
+	case -ELOCKD:
+		log_error("VG %s init failed: lvmlockd not available", vg->name);
+		break;
+	case -EARGS:
+		log_error("VG %s init failed: invalid parameters for %s", vg->name, vg->lock_type);
+		break;
+	case -EMANAGER:
+		log_error("VG %s init failed: lock manager %s is not running", vg->name, vg->lock_type);
+		break;
+	default:
+		log_error("VG %s init failed: %d", vg->name, result);
 	}
+
+	if (!ret)
+		goto out;
 
 	reply_str = daemon_reply_str(reply, "vg_lock_args", NULL);
 	if (!reply_str) {
-		log_error("vg_lock_args not returned");
+		log_error("VG %s init failed: lock_args not returned", vg->name);
 		ret = 0;
 		goto out;
 	}
 
 	vg_lock_args = dm_pool_strdup(cmd->mem, reply_str);
 	if (!vg_lock_args) {
-		log_error("vg_lock_args allocation failed");
+		log_error("VG %s init failed: lock_args alloc failed", vg->name);
 		ret = 0;
 	}
 out:
@@ -569,26 +585,46 @@ static int _init_vg_sanlock(struct cmd_context *cmd, struct volume_group *vg)
 
 	if (!_lockd_result(reply, &result, NULL)) {
 		ret = 0;
+		result = -ELOCKD;
 	} else {
 		ret = (result < 0) ? 0 : 1;
 	}
 
+	switch (result) {
+	case 0:
+		log_print_unless_silent("VG %s initialized %s lockspace", vg->name, vg->lock_type);
+		break;
+	case -ELOCKD:
+		log_error("VG %s init failed: lvmlockd not available", vg->name);
+		break;
+	case -EARGS:
+		log_error("VG %s init failed: invalid parameters for %s", vg->name, vg->lock_type);
+		break;
+	case -EMANAGER:
+		log_error("VG %s init failed: lock manager %s is not running", vg->name, vg->lock_type);
+		break;
+	case -EMSGSIZE:
+		log_error("VG %s init failed: no disk space for leases", vg->name);
+		break;
+	default:
+		log_error("VG %s init failed: %d", vg->name, result);
+	}
+
 	if (!ret) {
-		log_error("_init_vg_sanlock lvmlockd result %d", result);
 		_remove_sanlock_lv(cmd, vg, lock_lv_name);
 		goto out;
 	}
 
 	reply_str = daemon_reply_str(reply, "vg_lock_args", NULL);
 	if (!reply_str) {
-		log_error("vg_lock_args not returned");
+		log_error("VG %s init failed: lock_args not returned", vg->name);
 		ret = 0;
 		goto out;
 	}
 
 	vg_lock_args = dm_pool_strdup(cmd->mem, reply_str);
 	if (!vg_lock_args) {
-		log_error("vg_lock_args allocation failed");
+		log_error("VG %s init failed: lock_args alloc failed", vg->name);
 		ret = 0;
 	}
 out:
@@ -826,19 +862,17 @@ int lockd_start_vg(struct cmd_context *cmd, struct volume_group *vg)
 				NULL);
 
 	if (!_lockd_result(reply, &result, NULL)) {
-		result = -1;
 		ret = 0;
+		result = -ELOCKD;
 	} else {
 		ret = (result < 0) ? 0 : 1;
 	}
 
-	if (ret == 1) {
-		log_print_unless_silent("VG %s starting %s lockspace", vg->name, vg->lock_type);
-		goto out;
-	}
-
 	switch (result) {
-	case -1:
+	case 0:
+		log_print_unless_silent("VG %s starting %s lockspace", vg->name, vg->lock_type);
+		break;
+	case -ELOCKD:
 		log_error("VG %s start failed: lvmlockd not available", vg->name);
 		break;
 	case -EEXIST:
