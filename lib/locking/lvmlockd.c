@@ -832,16 +832,31 @@ int lockd_start_vg(struct cmd_context *cmd, struct volume_group *vg)
 		ret = (result < 0) ? 0 : 1;
 	}
 
-	if (result == -EEXIST) {
-		ret = 1;
+	if (ret == 1) {
+		log_print_unless_silent("VG %s starting %s lockspace", vg->name, vg->lock_type);
 		goto out;
 	}
 
-	if (!ret)
-		log_error("Locking start %s VG %s %d", vg->lock_type, vg->name, result);
-	else
-		log_debug("lockd_start_vg %s done", vg->name);
-
+	switch (result) {
+	case -1:
+		log_error("VG %s start failed: lvmlockd not available", vg->name);
+		break;
+	case -EEXIST:
+		log_debug("VG %s start error: already started", vg->name);
+		ret = 1;
+		break;
+	case -EARGS:
+		log_error("VG %s start failed: invalid parameters for %s", vg->name, vg->lock_type);
+		break;
+	case -EHOSTID:
+		log_error("VG %s start failed: invalid sanlock host_id, set in lvmlocal.conf", vg->name);
+		break;
+	case -EMANAGER:
+		log_error("VG %s start failed: lock manager %s is not running", vg->name, vg->lock_type);
+		break;
+	default:
+		log_error("VG %s start failed: %d", vg->name, result);
+	}
 out:
 	daemon_reply_destroy(reply);
 
@@ -877,12 +892,12 @@ int lockd_stop_vg(struct cmd_context *cmd, struct volume_group *vg)
 	}
 
 	if (result == -EBUSY) {
-		log_error("Cannot stop locking in busy VG %s", vg->name);
+		log_error("VG %s stop failed: LVs must first be deactivated", vg->name);
 		goto out;
 	}
 
 	if (!ret) {
-		log_error("Locking stop %s VG %s %d", vg->lock_type, vg->name, result);
+		log_error("VG %s stop failed: %d", vg->name, result);
 		goto out;
 	}
 
@@ -918,7 +933,7 @@ int lockd_start_wait(struct cmd_context *cmd)
 	}
 
 	if (!ret)
-		log_error("Locking start failed");
+		log_error("Lock start failed");
 
 	/*
 	 * Get a list of vgs that started so we can
