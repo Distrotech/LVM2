@@ -93,7 +93,7 @@ int check_lv_segments(struct logical_volume *lv, int complete_vg)
 	struct replicator_site *rsite;
 	struct replicator_device *rdev;
 
-PFLA("lv=%s seg->area_count=%u", lv->name, first_seg(lv)->area_count);
+// PFLA("lv=%s seg->area_count=%u", lv->name, first_seg(lv)->area_count);
 	/* Check LV flags match first segment type */
 	if (complete_vg) {
 		if (lv_is_thin_volume(lv)) {

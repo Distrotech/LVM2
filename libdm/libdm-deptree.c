@@ -2112,6 +2112,7 @@ static int _emit_areas_line(struct dm_task *dmt __attribute__((unused)),
 		case SEG_RAID0:
 		case SEG_RAID0_META:
 		case SEG_RAID1:
+		case SEG_RAID10:
 		case SEG_RAID4:
 		case SEG_RAID5_0:
 		case SEG_RAID5_N:
@@ -2368,10 +2369,7 @@ static int _raid_emit_segment_line(struct dm_task *dmt, uint32_t major,
 
 	for (i = 0; i < area_count; i++)
 		if (seg->rebuilds & (1ULL << i))
-{
 			EMIT_PARAMS(pos, " rebuild %u", i);
-printf("%s %u rebuild %d\n", __func__, __LINE__, i);
-}
 
 	for (i = 0; i < area_count; i++)
 		if (seg->writemostly & (1ULL << i))

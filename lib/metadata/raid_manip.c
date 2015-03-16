@@ -595,22 +595,50 @@ static struct logical_volume *_alloc_image_component(struct logical_volume *lv, 
 	return tmp_lv;
 }
 
-/*
- * Returns raid metadata device size in extents, algorithm from dm-raid ("raid" target) kernel code.
- *
- * I.e. 1 extent for the superblock + N for the MD bitmap
- */
-uint32_t raid_rmeta_extents(struct cmd_context *cmd,
-			    uint32_t rimage_extents, uint32_t region_size, uint32_t extent_size)
+/* Calculate absolute amount of metadata device extens based on @rimage_extents, @region_size and @extens_size */
+static uint32_t _raid_rmeta_extents(struct cmd_context *cmd,
+				    uint32_t rimage_extents, uint32_t region_size, uint32_t extent_size)
 {
-	uint64_t bytes, sectors, size = rimage_extents;
+	uint64_t bytes, regions, sectors;
+uint32_t r;
 
 	region_size = region_size ?: get_default_region_size(cmd);
+	regions = rimage_extents * extent_size / region_size;
 
-	bytes = dm_div_up(size * extent_size / region_size, 8);
-	sectors = dm_div_up(bytes, 512);
+	/* raid and bitmap superblocks + region bytes */
+	sectors = 2 * 8 + dm_div_up(regions, (8 * 512));
 
-	return 1 + dm_div_up(sectors, extent_size);
+PFLA("sectors=%llu", sectors);
+	r = dm_div_up(sectors, extent_size);
+PFLA("regions=%u r=%u", regions, r);
+return r;
+}
+
+/*
+ * Returns raid metadata device size _change_ in extents, algorithm from dm-raid ("raid" target) kernel code.
+ */
+uint32_t raid_rmeta_extents_delta(struct cmd_context *cmd,
+				  uint32_t rimage_extents_cur, uint32_t rimage_extents_new,
+				  uint32_t region_size, uint32_t extent_size)
+{
+	uint32_t rmeta_extents_cur = _raid_rmeta_extents(cmd, rimage_extents_cur, region_size, extent_size);
+	uint32_t rmeta_extents_new = _raid_rmeta_extents(cmd, rimage_extents_new, region_size, extent_size);
+	PFLA("rimage_extents_cur=%u rmeta_extents_cur=%u rimage_extents_new=%u rmeta_extents_new=%u region_size=%u extent_size=%u", rimage_extents_cur, rmeta_extents_cur,  rimage_extents_new, rmeta_extents_new, region_size, extent_size);
+	/* Need minimum size on LV creation */
+	if (!rimage_extents_cur)
+		return rmeta_extents_new;
+
+	/* Need current size on LV deletion */
+	if (!rimage_extents_new)
+		return rmeta_extents_cur;
+
+	if (rmeta_extents_new == rmeta_extents_cur)
+		return 0;
+
+	/* Extending/reducing... */
+	return rmeta_extents_new > rmeta_extents_cur ?
+		rmeta_extents_new - rmeta_extents_cur :
+		rmeta_extents_cur - rmeta_extents_new;
 }
 
 /*
@@ -622,7 +650,7 @@ uint32_t raid_rmeta_extents(struct cmd_context *cmd,
  * be allocated from the same PV(s) as the data device.
  */
 static int _alloc_rmeta_for_lv(struct logical_volume *data_lv,
-			       struct logical_volume **meta_lv)
+		struct logical_volume **meta_lv)
 {
 	struct dm_list allocatable_pvs;
 	struct alloc_handle *ah;
@@ -633,7 +661,7 @@ static int _alloc_rmeta_for_lv(struct logical_volume *data_lv,
 
 	if (!seg_is_linear(seg)) {
 		log_error(INTERNAL_ERROR "Unable to allocate RAID metadata "
-			  "area for non-linear LV, %s", data_lv->name);
+				"area for non-linear LV, %s", data_lv->name);
 		return 0;
 	}
 
@@ -641,20 +669,20 @@ static int _alloc_rmeta_for_lv(struct logical_volume *data_lv,
 
 	(void) dm_strncpy(base_name, data_lv->name, sizeof(base_name));
 	if ((p = strstr(base_name, "_mimage_")) ||
-	    (p = strstr(base_name, "_rimage_")))
+			(p = strstr(base_name, "_rimage_")))
 		*p = '\0';
 
 	if (!get_pv_list_for_lv(data_lv->vg->cmd->mem,
 				data_lv, &allocatable_pvs)) {
 		log_error("Failed to build list of PVs for %s/%s",
-			  data_lv->vg->name, data_lv->name);
+				data_lv->vg->name, data_lv->name);
 		return 0;
 	}
 
 	if (!(ah = allocate_extents(data_lv->vg, NULL, seg->segtype, 0, 1, 0,
-				    seg->region_size,
-				    raid_rmeta_extents(data_lv->vg->cmd, data_lv->le_count,
-						       seg->region_size, data_lv->vg->extent_size),
+					seg->region_size,
+					_raid_rmeta_extents(data_lv->vg->cmd, data_lv->le_count,
+							seg->region_size, data_lv->vg->extent_size),
 				    &allocatable_pvs, data_lv->alloc, 0, NULL)))
 		return_0;
 

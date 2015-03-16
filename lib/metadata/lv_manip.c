@@ -1024,11 +1024,10 @@ static uint32_t __round_to_stripe_boundary(struct logical_volume *lv, uint32_t e
 {
 	uint32_t rest;
 
-PFLA("stripes=%u", stripes);
+PFLA("lv=%s extents=%u stripes=%u", lv->name, extents, stripes);
 	if (!stripes)
 		return extents;
 
-PFLA("extents=%u stripes=%u", extents, stripes);
 	/* Round up extents to stripe divisable amount */
 	if ((rest = extents % stripes)) {
 		extents += up ? stripes - rest : -rest;
@@ -1073,6 +1072,7 @@ static int _release_and_discard_lv_segment_area(struct lv_segment *seg, uint32_t
 	struct lv_segment *cache_seg;
 	struct logical_volume *lv = seg_lv(seg, s);
 
+PFLA("seg_lv(seg, %u)=%s, area_reduction=%u, with_discard=%d", s, seg_type(seg, s) == AREA_LV ? seg_lv(seg,s)->name: NULL, area_reduction, with_discard);
 	if (seg_type(seg, s) == AREA_UNASSIGNED)
 		return 1;
 
@@ -1106,11 +1106,12 @@ static int _release_and_discard_lv_segment_area(struct lv_segment *seg, uint32_t
 			if (!(mlv = seg_metalv(seg, s)))
 				return 0;
 
-			meta_area_reduction = mlv->le_count -
-					      raid_rmeta_extents(vg->cmd, lv->le_count - area_reduction,
-								 seg->region_size, vg->extent_size);
+PFLA("area_reduction=%u lv->le_count=%u mlv->le_count=%u" , area_reduction, lv->le_count, mlv->le_count);
+			meta_area_reduction = raid_rmeta_extents_delta(vg->cmd, lv->le_count, lv->le_count - area_reduction,
+								       seg->region_size, vg->extent_size);
+PFLA("meta_area_reduction=%u" , meta_area_reduction);
 			if (lv->le_count - area_reduction == 0)
-				meta_area_reduction++;
+				meta_area_reduction = mlv->le_count;
 
 			if (meta_area_reduction &&
 			    !lv_reduce(mlv, meta_area_reduction))
@@ -1281,10 +1282,20 @@ static int _lv_segment_add_areas(struct logical_volume *lv,
 static uint32_t __area_len(struct lv_segment *seg, uint32_t extents, uint32_t *area_len)
 {
 	/* Caller must ensure exact divisibility */
-	if (seg_is_striped(seg)|| seg_is_striped_raid(seg)) {
+	if (seg_is_striped(seg) || seg_is_striped_raid(seg)) {
 		uint32_t data_devs = seg->area_count - seg->segtype->parity_devs;
 
+		if (seg_is_raid10(seg)) {
+			if (data_devs % 2) {
+				log_error("raid10 data devices not divisible by 2");
+				return 0;
+			}
+
+			data_devs /= 2;
+		}
+
 		if (extents % data_devs) {
+			/* HM FIXME: message not right for raid10 */
 			log_error("Extents %" PRIu32 " not divisible by #stripes %" PRIu32, extents, data_devs);
 			return 0;
 		}
@@ -1303,15 +1314,17 @@ static int _lv_segment_reduce(struct lv_segment *seg, uint32_t reduction)
 {
 	uint32_t area_reduction, s;
 
-PFL();
+PFLA("reduction=%u", reduction);
 	if (!__area_len(seg, reduction, &area_reduction))
 		return 0;
 
-PFLA("area_reduction=%u", area_reduction);
 	/* Release extents from all segment areas */
 	for (s = 0; s < seg->area_count; s++)
+{
+PFLA("seg_lv(seg, %u)=%s area_reduction=%u", s, seg_type(seg, s) == AREA_LV ? seg_lv(seg, s)->name : NULL, area_reduction);
 		if (!release_and_discard_lv_segment_area(seg, s, area_reduction))
 			return_0;
+}
 
 	seg->len -= reduction;
 	seg->lv->size -= reduction * seg->lv->vg->extent_size;
@@ -1329,7 +1342,7 @@ static uint32_t _calc_area_multiple(const struct segment_type *segtype,
 		return 1;
 
 	/* Striped */
-PFL();
+PFLA("area_count=%u stripes=%u", area_count, stripes);
 	if (segtype_is_striped(segtype))
 		return area_count;
 
@@ -1378,6 +1391,7 @@ static int _lv_reduce(struct logical_volume *lv, uint32_t extents, int delete)
 	uint32_t reduction;
 	struct logical_volume *pool_lv;
 
+PFLA("lv=%s lv->le_count=%u extents=%u", lv->name, lv->le_count, extents);
 	if (seg_is_striped(seg) || seg_is_striped_raid(seg))
 		extents = __round_to_stripe_boundary(lv, extents, _calc_area_multiple(seg->segtype, seg->area_count, 0), 0);
 
@@ -1387,7 +1401,7 @@ static int _lv_reduce(struct logical_volume *lv, uint32_t extents, int delete)
 		clear_snapshot_merge(lv);
 	}
 
-PFLA("lv->le_count=%u extents=%u", lv->le_count, extents);
+PFLA("lv=%s extents=%u", lv->name, extents);
 	count = extents;
 	dm_list_iterate_back_items(seg, &lv->segments) {
 		if (!count)
@@ -1436,6 +1450,7 @@ PFLA("lv->le_count=%u extents=%u", lv->le_count, extents);
 		} else
 			reduction = count;
 
+PFLA("reduction=%u", reduction);
 		if (!_lv_segment_reduce(seg, reduction))
 			return_0;
 
@@ -1646,6 +1661,7 @@ static struct alloc_handle *_alloc_init(struct cmd_context *cmd,
 		area_count = stripes;
 
 	size = sizeof(*ah);
+PFLA("area_count=%u", area_count);
 
 	/*
 	 * It is a requirement that RAID 4/5/6 have to have at least 2 stripes.
@@ -1670,10 +1686,13 @@ static struct alloc_handle *_alloc_init(struct cmd_context *cmd,
 	parity_count = (area_count < 2) ? 0 : segtype->parity_devs;
 #endif
 	alloc_count = area_count + parity_count;
-	if (segtype_is_raid(segtype) && metadata_area_count)
+	if (segtype_is_raid(segtype) && metadata_area_count) {
+		if (metadata_area_count != alloc_count)
+			log_error(INTERNAL_ERROR "Bad metadata_area_count");
+
 		/* RAID has a meta area for each device */
 		alloc_count *= 2;
-	else
+	} else
 		/* mirrors specify their exact log count */
 		alloc_count += metadata_area_count;
 
@@ -1712,7 +1731,7 @@ static struct alloc_handle *_alloc_init(struct cmd_context *cmd,
 	 * a correct area_multiple.
 	 */
 	ah->area_multiple = _calc_area_multiple(segtype, area_count + parity_count, stripes);
-PFLA("ah->area_multiple=%u", ah->area_multiple);
+PFLA("ah->area_multiple=%u new_extents=%u", ah->area_multiple, new_extents);
 	//FIXME: s/mirror_logs_separate/metadata_separate/ so it can be used by others?
 	ah->mirror_logs_separate = find_config_tree_bool(cmd, allocation_mirror_logs_require_separate_pvs_CFG, NULL);
 
@@ -1721,20 +1740,22 @@ PFLA("ah->area_multiple=%u", ah->area_multiple);
 
 	if (segtype_is_raid(segtype)) {
 		if (metadata_area_count) {
-			if (metadata_area_count != area_count)
-				log_error(INTERNAL_ERROR "Bad metadata_area_count");
+			uint32_t m;
 
-			ah->metadata_area_count = area_count;
-			ah->log_len = (existing_extents ? 0 : 1) + /* superblock on raid set creation */
-				      raid_rmeta_extents(cmd, existing_extents + new_extents, region_size, extent_size) -
-				      raid_rmeta_extents(cmd, existing_extents, region_size, extent_size);
+			ah->metadata_area_count = metadata_area_count;
+PFLA("area_count=%u metadata_area_count=%u total_extents=%u", area_count, metadata_area_count, total_extents);
+			ah->log_len = raid_rmeta_extents_delta(cmd,
+							       existing_extents / area_count,
+							       (existing_extents + new_extents) / area_count,
+							       region_size, extent_size);
 			ah->alloc_and_split_meta = ah->log_len ? 1 : 0;
 
 			/*
 			 * We need 'log_len' extents for each
 			 * RAID device's metadata_area
 			 */
-			total_extents += (ah->log_len * ah->area_multiple);
+			total_extents += (ah->log_len * area_count);
+PFLA("existing_extents=%u new_extents=%u ah->log_len=%u total_extents=%u", existing_extents, new_extents, ah->log_len, total_extents);
 		} else {
 			ah->log_area_count = 0;
 			ah->log_len = 0;
@@ -3809,7 +3830,9 @@ PFL();
 PFL();
 		/* Make sure metadata LVs are being extended as well */
 		if (!(segtype_is_striped(segtype) || segtype_is_raid0(segtype)))
-			log_count = (mirrors ?: 1) * stripes;
+			log_count = (mirrors ?: 1) * stripes + segtype->parity_devs;
+
+PFLA("mirrors=%u stripes=%u log_count=%u", mirrors, stripes, log_count);
 	}
 
 PFLA("stripes=%u mirrors=%u log_count=%u", stripes, mirrors, log_count);

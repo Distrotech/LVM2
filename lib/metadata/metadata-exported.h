@@ -1079,7 +1079,9 @@ struct logical_volume *first_replicator_dev(const struct logical_volume *lv);
 /* --  metadata/replicator_manip.c */
 
 /* ++  metadata/raid_manip.c */
-uint32_t raid_rmeta_extents(struct cmd_context *cmd, uint32_t rimage_extents, uint32_t region_size, uint32_t extent_size);
+uint32_t raid_rmeta_extents_delta(struct cmd_context *cmd,
+				  uint32_t rimage_extents_cur, uint32_t rimage_extents_new,
+				  uint32_t region_size, uint32_t extent_size);
 int lv_is_raid_with_tracking(const struct logical_volume *lv);
 uint32_t lv_raid_image_count(const struct logical_volume *lv);
 int lv_raid_change_image_count(struct logical_volume *lv,
