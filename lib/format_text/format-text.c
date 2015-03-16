@@ -1327,6 +1327,7 @@ static void _set_ext_flags(struct physical_volume *pv, struct lvmcache_info *inf
 	else
 		ext_flags |= PV_EXT_USED;
 
+	lvmcache_set_ext_version(info, PV_HEADER_EXTENSION_VSN);
 	lvmcache_set_ext_flags(info, ext_flags);
 }
 
