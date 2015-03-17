@@ -606,11 +606,12 @@ uint32_t r;
 	regions = rimage_extents * extent_size / region_size;
 
 	/* raid and bitmap superblocks + region bytes */
-	sectors = 2 * 8 + dm_div_up(regions, (8 * 512));
+	bytes = 2 * 4096 + dm_div_up(regions, 8);
+	sectors = dm_div_up(bytes, 512);
 
-PFLA("sectors=%llu", sectors);
+PFLA("sectors=%llu", (long long unsigned) sectors);
 	r = dm_div_up(sectors, extent_size);
-PFLA("regions=%u r=%u", regions, r);
+PFLA("regions=%llu r=%llu", (long long unsigned) regions, (long long unsigned) r);
 return r;
 }
 

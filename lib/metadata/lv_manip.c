@@ -1740,13 +1740,13 @@ PFLA("ah->area_multiple=%u new_extents=%u", ah->area_multiple, new_extents);
 
 	if (segtype_is_raid(segtype)) {
 		if (metadata_area_count) {
-			uint32_t m;
+			uint32_t c = mirrors > 1 ? 1 : area_count;
 
 			ah->metadata_area_count = metadata_area_count;
 PFLA("area_count=%u metadata_area_count=%u total_extents=%u", area_count, metadata_area_count, total_extents);
 			ah->log_len = raid_rmeta_extents_delta(cmd,
-							       existing_extents / area_count,
-							       (existing_extents + new_extents) / area_count,
+							       existing_extents / c,
+							       (existing_extents + new_extents) / c,
 							       region_size, extent_size);
 			ah->alloc_and_split_meta = ah->log_len ? 1 : 0;
 
