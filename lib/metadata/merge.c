@@ -20,6 +20,15 @@
 #include "str_list.h"
 #include "segtype.h"
 
+/* HM FIXME: REMOVEME: devel output */
+#if 1
+#define PFL() printf("%s %u\n", __func__, __LINE__);
+#define PFLA(format, arg...) printf("%s %u " format "\n", __func__, __LINE__, arg);
+#else
+#define PFL()
+#define PFLA(format, arg...)
+#endif
+
 /*
  * Attempt to merge two adjacent segments.
  * Currently only supports striped segments on AREA_PV.
@@ -84,6 +93,7 @@ int check_lv_segments(struct logical_volume *lv, int complete_vg)
 	struct replicator_site *rsite;
 	struct replicator_device *rdev;
 
+// PFLA("lv=%s seg->area_count=%u", lv->name, first_seg(lv)->area_count);
 	/* Check LV flags match first segment type */
 	if (complete_vg) {
 		if (lv_is_thin_volume(lv)) {
@@ -139,6 +149,7 @@ int check_lv_segments(struct logical_volume *lv, int complete_vg)
 
 		area_multiplier = seg_is_striped(seg) ? seg->area_count - seg->segtype->parity_devs : 1;
 
+PFLA("segtype=%s seg->area_len=%u seg->area_count=%u parity_devs=%u area_multiplier=%u seg->len=%u", seg->segtype->name, seg->area_len, seg->area_count, seg->segtype->parity_devs, area_multiplier, seg->len);
 		if (seg->area_len * area_multiplier != seg->len) {
 			log_error("LV %s: segment %u has inconsistent "
 				  "area_len %u",
@@ -402,12 +413,18 @@ int check_lv_segments(struct logical_volume *lv, int complete_vg)
 		for (s = 0; s < seg->area_count; s++) {
 			if (seg_type(seg, s) != AREA_LV)
 				continue;
-			if (lv == seg_lv(seg, s))
-				seg_found++;
-
+PFLA("lv=%s s=%u seg->status=%lX seg_lv(seg, %u)=%s", lv->name, s, seg->status, s, seg_lv(seg, s)->name);
 			/* HM FIXME: TESTME */
 			if (seg_is_raid(seg) && seg->meta_areas && lv == seg_metalv(seg, s))
+{
+PFLA("lv=%s s=%u seg->status=%lX seg_lv(seg, %u)=%s", lv->name, s, seg->status, s, seg_lv(seg, s)->name);
 				seg_found++;
+}
+			if (lv == seg_lv(seg, s))
+{
+PFLA("lv=%s s=%u seg->status=%lX seg_lv(seg, %u)=%s", lv->name, s, seg->status, s, seg_lv(seg, s)->name);
+				seg_found++;
+}
 		}
 		if (seg_is_replicator_dev(seg)) {
 			dm_list_iterate_items(rsite, &seg->replicator->rsites) {
@@ -455,12 +472,12 @@ int check_lv_segments(struct logical_volume *lv, int complete_vg)
 #if 0
 			unsigned ss = 0;
 
-			printf("seg->lv=%s\n", seg->lv->name);
+			PFLA("seg->lv=%s", seg->lv->name);
 			dm_list_iterate_items(seg2, &seg->lv->segments) {
 				ss++;
 
-			printf("seg_lv(seg2, 0)->segs_using_this_lv");
-			printf("ss=%u\n", ss);
+			PFLA("seg_lv(seg2, 0)->segs_using_this_lv");
+			PFLA("ss=%u", ss);
 #endif
 			log_error("LV segment %s:%" PRIu32 "-%" PRIu32
 				  " is incorrectly listed as being used by LV %s",

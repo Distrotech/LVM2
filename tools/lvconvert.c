@@ -230,6 +230,8 @@ static int _check_conversion_type(struct cmd_context *cmd, const char *type_str)
 	if (!type_str || !*type_str)
 		return 1;
 
+#if 0
+	/* HM FIXME: TESTME to convert from raid1 to mirror */
 	if (!strcmp(type_str, "mirror")) {
 		if (!arg_count(cmd, mirrors_ARG)) {
 			log_error("--type mirror requires -m/--mirrors");
@@ -237,11 +239,13 @@ static int _check_conversion_type(struct cmd_context *cmd, const char *type_str)
 		}
 		return 1;
 	}
+#endif
 
 	/* FIXME: Check thin-pool and thin more thoroughly! */
 	if (!strcmp(type_str, "snapshot") ||
 	    !strcmp(type_str, "linear") ||
 	    !strcmp(type_str, "striped") ||
+	    !strcmp(type_str, "mirror") || /* HM FIXME: TESTME to convert raid1 to mirror */
 	    !strncmp(type_str, "raid", 4) ||
 	    !strcmp(type_str, "cache-pool") || !strcmp(type_str, "cache") ||
 	    !strcmp(type_str, "thin-pool") || !strcmp(type_str, "thin"))
@@ -1838,10 +1842,10 @@ static int _is_valid_raid_conversion(const struct segment_type *from_segtype,
 
 	/* From striped to raid0 or vice-versa */
 	if (segtype_is_striped(from_segtype) &&
-	    segtype_is_raid0(to_segtype))
+	    segtype_is_raid(to_segtype))
 		return 1;
 
-	if (segtype_is_raid0(from_segtype) &&
+	if (segtype_is_raid(from_segtype) &&
 	    segtype_is_striped(to_segtype))
 		return 1;
 
@@ -1857,6 +1861,11 @@ static int _is_valid_raid_conversion(const struct segment_type *from_segtype,
 	/* From mirror to raid1 */
 	if (segtype_is_mirror(from_segtype) &&
 	    segtype_is_raid1(to_segtype))
+		return 1;
+
+	/* From mirror to raid1 */
+	if (segtype_is_raid1(from_segtype) &&
+	    segtype_is_mirror(to_segtype))
 		return 1;
 
 	/* From raid to raid */
@@ -1902,7 +1911,7 @@ static int _lvconvert_raid(struct logical_volume *lv, struct lvconvert_params *l
 	struct lv_segment *seg = first_seg(lv);
 	dm_percent_t sync_percent;
 
-printf("stripes_ARG=%u stripes_long_ARG=%u\n", arg_count(lv->vg->cmd, stripes_ARG), arg_count(lv->vg->cmd, stripes_long_ARG));
+printf("%s %u stripes_ARG=%u stripes_long_ARG=%u\n", __func__, __LINE__, arg_count(lv->vg->cmd, stripes_ARG), arg_count(lv->vg->cmd, stripes_long_ARG));
 	if (!arg_count(cmd, type_ARG))
 		lp->segtype = seg->segtype;
 
@@ -1936,7 +1945,7 @@ printf("stripes_ARG=%u stripes_long_ARG=%u\n", arg_count(lv->vg->cmd, stripes_AR
 			image_count -= lp->mirrors;
 		else
 			image_count = lp->mirrors + 1;
-printf("image_count=%u", image_count);
+printf("image_count=%u\n", image_count);
 
 		track = arg_count(cmd, trackchanges_ARG);
 		if (image_count < 1 || (track && lp->mirrors != 1)) {
@@ -1957,8 +1966,11 @@ printf("image_count=%u", image_count);
 		return lv_raid_split(lv, lp->lv_split_name,
 				     image_count, lp->pvh);
 
+printf("lp-Segtyoe=%s\n", lp->segtype->name);
 	/* HM FIXME: lv_raid_reshape to cope with changing raid1 image counts too? */
-	if (arg_count(cmd, mirrors_ARG)) {
+	if (!segtype_is_mirror(lp->segtype) &&
+	    (seg_is_linear(seg) || seg_is_raid(seg)) &&
+	    arg_count(cmd, mirrors_ARG)) {
 		if (seg_is_linear(seg))
 			seg->region_size = lp->region_size;
 
@@ -1977,7 +1989,7 @@ printf("stripes=%u stripe_size=%u\n", stripes, stripe_size);
 		if (seg_is_striped(seg))
 			seg->region_size = lp->region_size;
 
-		return lv_raid_reshape(lv, lp->segtype, stripes, stripe_size, lp->pvh);
+		return lv_raid_convert(lv, lp->segtype, stripes, stripe_size, lp->pvh);
 	}
 
 	if (arg_count(cmd, replace_ARG))

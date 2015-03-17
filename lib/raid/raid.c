@@ -34,8 +34,9 @@ static void _raid_display(const struct lv_segment *seg)
 		display_stripe(seg, s, "    ");
 	}
 
-	for (s = 0; seg->meta_areas && s < seg->area_count; ++s)
-		log_print("  Raid Metadata LV%2d\t%s", s, seg_metalv(seg, s)->name);
+	if (seg->meta_areas)
+		for (s = 0; seg->meta_areas && s < seg->area_count; ++s)
+			log_print("  Raid Metadata LV%2d\t%s", s, seg_metalv(seg, s)->name);
 
 	log_print(" ");
 }
@@ -159,7 +160,7 @@ static int _raid_text_import(struct lv_segment *seg,
 
 static int _raid_text_export(const struct lv_segment *seg, struct formatter *f)
 {
-	int raid0 = seg_is_raid0(seg);
+	int raid0 = (seg_is_raid0(seg) || seg_is_raid0_meta(seg));
 
 	if (raid0)
 		outfc(f, (seg->area_count == 1) ? "# linear" : NULL,
@@ -220,7 +221,7 @@ static int _raid_add_target_line(struct dev_manager *dm __attribute__((unused)),
 		return 0;
 	}
 
-	if (!seg_is_raid0(seg)) {
+	if (!(seg_is_raid0(seg) || seg_is_raid0_meta(seg))) {
 		if (!seg->region_size) {
 			log_error("Missing region size for raid segment in %s.",
 				  seg_lv(seg, 0)->name);
@@ -462,10 +463,10 @@ static const struct raid_type {
 	int extra_flags;
 } _raid_types[] = {
 	{ SEG_TYPE_NAME_RAID0,      0 },
+	{ SEG_TYPE_NAME_RAID0_META, 0 },
 	{ SEG_TYPE_NAME_RAID1,      0, SEG_AREAS_MIRRORED },
 	{ SEG_TYPE_NAME_RAID10,     0, SEG_AREAS_MIRRORED },
 	{ SEG_TYPE_NAME_RAID4,      1 },
-	{ SEG_TYPE_NAME_RAID4_N,    1 },
 	{ SEG_TYPE_NAME_RAID5,      1 },
 	{ SEG_TYPE_NAME_RAID5_0,    1 },
 	{ SEG_TYPE_NAME_RAID5_N,    1 },
