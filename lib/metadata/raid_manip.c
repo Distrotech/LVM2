@@ -2457,8 +2457,6 @@ static int _convert_reshape(struct logical_volume *lv,
 		return 0;
 	}
 
-	seg->stripe_size = new_stripe_size;
-
 #if 1
 	/* HM FIXME: REMOVEME once supported */
 	/* No stripes reduction so far */
