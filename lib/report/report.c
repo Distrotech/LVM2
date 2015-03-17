@@ -1117,8 +1117,10 @@ static int _pvinuse_disp(struct dm_report *rh, struct dm_pool *mem,
 	uint32_t ext_flags;
 
 	if (info) {
-		ext_flags = lvmcache_ext_flags(info);
-		return _binary_disp(rh, mem, field, ext_flags & PV_EXT_USED, GET_FIRST_RESERVED_NAME(pv_in_use_y), private);
+		if (lvmcache_ext_version(info) >= 2) {
+			ext_flags = lvmcache_ext_flags(info);
+			return _binary_disp(rh, mem, field, ext_flags & PV_EXT_USED, GET_FIRST_RESERVED_NAME(pv_in_use_y), private);
+		}
 	}
 
 	return _binary_undef_disp(rh, mem, field, private);
