@@ -638,8 +638,8 @@ uint32_t raid_rmeta_extents_delta(struct cmd_context *cmd,
 
 	/* Extending/reducing... */
 	return rmeta_extents_new > rmeta_extents_cur ?
-		rmeta_extents_new - rmeta_extents_cur :
-		rmeta_extents_cur - rmeta_extents_new;
+	       rmeta_extents_new - rmeta_extents_cur :
+	       rmeta_extents_cur - rmeta_extents_new;
 }
 
 /*
