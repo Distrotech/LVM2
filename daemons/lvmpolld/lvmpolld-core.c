@@ -36,14 +36,6 @@
 #define PD_LOG_PREFIX "LVMPOLLD"
 #define LVM2_LOG_PREFIX "\tLVPOLL"
 
-/* 
- * FIXME: I don't follow the logic behind prefix variables in lvm2
- * configure script
- */
-
-/* extract this info from autoconf/automake files */
-#define LVM2_BIN_PATH "/usr/sbin/lvm"
-
 /* predefined reason for response = "failed" case */
 #define REASON_REQ_NOT_IMPLEMENTED "request not implemented"
 #define REASON_MISSING_LVID "request requires lvid set"
@@ -102,7 +94,7 @@ static int init(struct daemon_state *s)
 		return 0;
 	}
 
-	ls->lvm_binary = ls->lvm_binary ?: LVM2_BIN_PATH;
+	ls->lvm_binary = ls->lvm_binary ?: LVM_PATH;
 
 	if (access(ls->lvm_binary, X_OK)) {
 		FATAL(ls, "%s: %s %s", PD_LOG_PREFIX, "Execute access rights denied on", ls->lvm_binary);
