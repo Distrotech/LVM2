@@ -1391,7 +1391,9 @@ static int _lv_reduce(struct logical_volume *lv, uint32_t extents, int delete)
 	uint32_t reduction;
 	struct logical_volume *pool_lv;
 
-PFLA("lv=%s lv->le_count=%u extents=%u", lv->name, lv->le_count, extents);
+PFLA("lv=%s lv->le_count=%u seg=%p extents=%u", lv->name, lv->le_count, seg, extents);
+if (!seg)
+return_0;
 	if (seg_is_striped(seg) || seg_is_striped_raid(seg))
 		extents = __round_to_stripe_boundary(lv, extents, _calc_area_multiple(seg->segtype, seg->area_count, 0), 0);
 
@@ -1554,11 +1556,12 @@ struct alloc_handle {
 	struct dm_pool *mem;
 
 	alloc_policy_t alloc;		/* Overall policy */
-	int approx_alloc;                /* get as much as possible up to new_extents */
+	int approx_alloc;		/* get as much as possible up to new_extents */
 	uint32_t new_extents;		/* Number of new extents required */
 	uint32_t area_count;		/* Number of parallel areas */
-	uint32_t parity_count;   /* Adds to area_count, but not area_multiple */
+	uint32_t parity_count;		/* Adds to area_count, but not area_multiple */
 	uint32_t area_multiple;		/* seg->len = area_len * area_multiple */
+	uint32_t area_multiple_check;	/* Check area_multiple in _allocate() */
 	uint32_t log_area_count;	/* Number of parallel logs */
 	uint32_t metadata_area_count;   /* Number of parallel metadata areas */
 	uint32_t log_len;		/* Length of log/metadata_area */
@@ -1683,12 +1686,18 @@ PFLA("area_count=%u", area_count);
 	parity_count = (area_count <= segtype->parity_devs) ? 0 : segtype->parity_devs;
 	parity_count = segtype->parity_devs;
 #else
-	parity_count = (area_count < 2) ? 0 : segtype->parity_devs;
+	parity_count = (area_count < 2 || !mirrors) ? 0 : segtype->parity_devs;
 #endif
 	alloc_count = area_count + parity_count;
+PFLA("alloc_count=%u parity_count=%u metadata_area_count=%u", alloc_count, parity_count, metadata_area_count);
 	if (segtype_is_raid(segtype) && metadata_area_count) {
-		if (metadata_area_count != alloc_count)
+		if (metadata_area_count != alloc_count) {
 			log_error(INTERNAL_ERROR "Bad metadata_area_count");
+#if 0
+			alloc_count = metadata_area_count;
+			parity_count = 0;
+#endif
+		}
 
 		/* RAID has a meta area for each device */
 		alloc_count *= 2;
@@ -1730,13 +1739,14 @@ PFLA("area_count=%u", area_count);
 	 * is calculated from.  So, we must pass in the total count to get
 	 * a correct area_multiple.
 	 */
-	ah->area_multiple = _calc_area_multiple(segtype, area_count + parity_count, stripes);
+	ah->area_multiple = mirrors ? _calc_area_multiple(segtype, area_count + parity_count, stripes) : area_count;
+	ah->area_multiple_check = mirrors ? 1 : 0;
+
 PFLA("ah->area_multiple=%u new_extents=%u", ah->area_multiple, new_extents);
 	//FIXME: s/mirror_logs_separate/metadata_separate/ so it can be used by others?
 	ah->mirror_logs_separate = find_config_tree_bool(cmd, allocation_mirror_logs_require_separate_pvs_CFG, NULL);
 
-	total_extents = (mirrors || stripes) ? new_extents : 0;
-
+	total_extents = new_extents * area_count;
 
 	if (segtype_is_raid(segtype)) {
 		if (metadata_area_count) {
@@ -3005,7 +3015,8 @@ static int _allocate(struct alloc_handle *ah,
 		return 1;
 	}
 
-        if (ah->area_multiple > 1 &&
+        if (ah->area_multiple_check &&
+	    ah->area_multiple > 1 &&
             (ah->new_extents - alloc_state.allocated) % ah->area_multiple) {
 		log_error("Number of extents requested (%u) needs to be divisible by %d.",
 			  ah->new_extents - alloc_state.allocated,
@@ -3687,7 +3698,8 @@ static int _lv_extend_layered_lv(struct alloc_handle *ah,
 	uint32_t fa, s;
 	int clear_metadata = lv->le_count ? 0 : 1;
 
-	segtype = get_segtype_from_string(lv->vg->cmd, "striped");
+	if (!(segtype = get_segtype_from_string(lv->vg->cmd, "striped")))
+		return_0;
 
 	/*
 	 * The component devices of a "striped" LV all go in the same

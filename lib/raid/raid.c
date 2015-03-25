@@ -240,8 +240,14 @@ static int _raid_add_target_line(struct dev_manager *dm __attribute__((unused)),
 				}
 
 				delta_disks++;
-			} else if (status & LV_RESHAPE_DELTA_DISKS_MINUS)
+			} else if (status & LV_RESHAPE_DELTA_DISKS_MINUS) {
+				if (status & LV_RESHAPE_DELTA_DISKS_PLUS) {
+					log_error(INTERNAL_ERROR "delta disks plus when delta disks minus requested!");
+					return 0;
+				}
+
 				delta_disks--;
+			}
 
 			if (status & LV_WRITEMOSTLY)
 				writemostly |= 1ULL << s;
@@ -336,7 +342,7 @@ static int _raid_target_percent(void **target_state,
 	*total_numerator += numerator;
 	*total_denominator += denominator;
 
-	if (seg)
+	if (seg && denominator)
 		seg->extents_copied = seg->area_len * numerator / denominator;
 
 	*percent = dm_make_percent(numerator, denominator);

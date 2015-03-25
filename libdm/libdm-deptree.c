@@ -12,6 +12,14 @@
  * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
+#if 1
+#define PFL() printf("%s %u\n", __func__, __LINE__);
+#define PFLA(format, arg...) printf("%s %u " format "\n", __func__, __LINE__, arg);
+#else
+#define PFL()
+#define PFLA(format, arg...)
+#endif
+
 #include "dmlib.h"
 #include "libdm-targets.h"
 #include "libdm-common.h"
@@ -2070,8 +2078,10 @@ static int _emit_areas_line(struct dm_task *dmt __attribute__((unused)),
 	unsigned first_time = 1;
 	const char *logtype, *synctype;
 	unsigned log_parm_count;
-
+unsigned a = 1;
+PFLA("seg->area_count=%u", seg->area_count);
 	dm_list_iterate_items(area, &seg->areas) {
+PFLA("a=%u", a++);
 		switch (seg->type) {
 		case SEG_REPLICATOR_DEV:
 			if (!_build_dev_string(devbuf, sizeof(devbuf), area->dev_node))
@@ -2333,6 +2343,10 @@ static int _raid_emit_segment_line(struct dm_task *dmt, uint32_t major,
 	int param_count = 1; /* mandatory 'chunk size'/'stripe size' arg */
 	int pos = 0;
 
+	if (seg->area_count % 2)
+		return 0;
+
+PFLA("seg->area_count=%u", seg->area_count);
 	if ((seg->flags & DM_NOSYNC) || (seg->flags & DM_FORCESYNC))
 		param_count++;
 

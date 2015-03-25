@@ -16,7 +16,7 @@
 #include "polldaemon.h"
 #include "lv_alloc.h"
 
-#define printf(a ...)
+// #define printf(a ...)
 
 struct lvconvert_params {
 	int cache;
@@ -1984,7 +1984,7 @@ printf("lp-Segtyoe=%s\n", lp->segtype->name);
 	     arg_count(cmd, stripesize_ARG))) {
 		unsigned stripes = (arg_count(cmd, stripes_ARG) || arg_count(cmd, stripes_long_ARG)) ? lp->stripes  : 0;
 		unsigned stripe_size = arg_count(cmd, stripesize_ARG) ? lp->stripe_size  : 0;
-printf("stripes=%u stripe_size=%u\n", stripes, stripe_size);
+printf("%s %u stripes=%u stripe_size=%u\n", __func__, __LINE__, stripes, stripe_size);
 
 		if (seg_is_striped(seg))
 			seg->region_size = lp->region_size;
