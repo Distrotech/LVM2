@@ -49,6 +49,7 @@ struct alloc_handle;
 struct alloc_handle *allocate_extents(struct volume_group *vg,
 				      struct logical_volume *lv,
                                       const struct segment_type *segtype,
+				      int extend,
                                       uint32_t stripes,
                                       uint32_t mirrors, uint32_t log_count,
 				      uint32_t log_region_size, uint32_t extents,

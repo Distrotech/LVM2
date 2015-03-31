@@ -1279,7 +1279,7 @@ static int _lv_segment_add_areas(struct logical_volume *lv,
 }
 
 /* Return @area_len for @extents based on @seg's properties (e.g. striped, ...) */
-static uint32_t __area_len(struct lv_segment *seg, uint32_t extents, uint32_t *area_len)
+static uint32_t _area_len(struct lv_segment *seg, uint32_t extents, uint32_t *area_len)
 {
 	/* Caller must ensure exact divisibility */
 	if (seg_is_striped(seg) || seg_is_striped_raid(seg)) {
@@ -1315,7 +1315,7 @@ static int _lv_segment_reduce(struct lv_segment *seg, uint32_t reduction)
 	uint32_t area_reduction, s;
 
 PFLA("reduction=%u", reduction);
-	if (!__area_len(seg, reduction, &area_reduction))
+	if (!_area_len(seg, reduction, &area_reduction))
 		return 0;
 
 	/* Release extents from all segment areas */
@@ -1345,7 +1345,6 @@ static uint32_t _calc_area_multiple(const struct segment_type *segtype,
 PFLA("area_count=%u stripes=%u", area_count, stripes);
 	if (segtype_is_striped(segtype))
 		return area_count;
-
 PFL();
 	/*
 	 * RAID10 - only has 2-way mirror right now.
@@ -1355,27 +1354,26 @@ PFL();
 	 */
 	if (segtype_is_raid10(segtype))
 		return stripes ?: area_count / 2;
-
 PFL();
 	/* RAID0 and parity RAID (e.g. RAID 4/5/6) */
-	if (segtype_is_striped_raid(segtype)) {
+	if (segtype_is_raid(segtype)) {
 		/*
 		 * As articulated in _alloc_init, we can tell by
 		 * the area_count whether a replacement drive is
 		 * being allocated; and if this is the case, then
 		 * there is no area_multiple that should be used.
 		 */
+PFL();
 		if (area_count <= segtype->parity_devs)
 			return 1;
 
+PFLA("r=%u", area_count - segtype->parity_devs);
 		return area_count - segtype->parity_devs;
 	}
 
-PFL();
 	/* Mirrored stripes */
 	if (stripes)
 		return stripes;
-
 PFL();
 	/* Mirrored */
 	return 1;
@@ -1561,7 +1559,7 @@ struct alloc_handle {
 	uint32_t area_count;		/* Number of parallel areas */
 	uint32_t parity_count;		/* Adds to area_count, but not area_multiple */
 	uint32_t area_multiple;		/* seg->len = area_len * area_multiple */
-	uint32_t area_multiple_check;	/* Check area_multiple in _allocate() */
+	uint32_t area_multiple_check;	/* Check area_multiple in _allocate(); needed for striped image additions */
 	uint32_t log_area_count;	/* Number of parallel logs */
 	uint32_t metadata_area_count;   /* Number of parallel metadata areas */
 	uint32_t log_len;		/* Length of log/metadata_area */
@@ -1639,6 +1637,7 @@ static struct alloc_handle *_alloc_init(struct cmd_context *cmd,
 					struct dm_pool *mem,
 					const struct segment_type *segtype,
 					alloc_policy_t alloc, int approx_alloc,
+					int extend,
 					uint32_t existing_extents,
 					uint32_t new_extents,
 					uint32_t mirrors,
@@ -1664,7 +1663,7 @@ static struct alloc_handle *_alloc_init(struct cmd_context *cmd,
 		area_count = stripes;
 
 	size = sizeof(*ah);
-PFLA("area_count=%u", area_count);
+PFLA("extend=%u existing_extents=%u, new_extents=%u, area_count=%u mirrors=%u stripes=%u metadata_area_count=%u", extend, existing_extents, new_extents, area_count, mirrors, stripes, metadata_area_count);
 
 	/*
 	 * It is a requirement that RAID 4/5/6 have to have at least 2 stripes.
@@ -1686,18 +1685,13 @@ PFLA("area_count=%u", area_count);
 	parity_count = (area_count <= segtype->parity_devs) ? 0 : segtype->parity_devs;
 	parity_count = segtype->parity_devs;
 #else
-	parity_count = (area_count < 2 || !mirrors) ? 0 : segtype->parity_devs;
+	parity_count = extend ? segtype->parity_devs : 0;
 #endif
 	alloc_count = area_count + parity_count;
 PFLA("alloc_count=%u parity_count=%u metadata_area_count=%u", alloc_count, parity_count, metadata_area_count);
 	if (segtype_is_raid(segtype) && metadata_area_count) {
-		if (metadata_area_count != alloc_count) {
+		if (metadata_area_count != alloc_count)
 			log_error(INTERNAL_ERROR "Bad metadata_area_count");
-#if 0
-			alloc_count = metadata_area_count;
-			parity_count = 0;
-#endif
-		}
 
 		/* RAID has a meta area for each device */
 		alloc_count *= 2;
@@ -1705,6 +1699,7 @@ PFLA("alloc_count=%u parity_count=%u metadata_area_count=%u", alloc_count, parit
 		/* mirrors specify their exact log count */
 		alloc_count += metadata_area_count;
 
+PFLA("alloc_count=%u parity_count=%u metadata_area_count=%u", alloc_count, parity_count, metadata_area_count);
 	size += sizeof(ah->alloced_areas[0]) * alloc_count;
 
 	if (!(ah = dm_pool_zalloc(mem, size))) {
@@ -1739,32 +1734,31 @@ PFLA("alloc_count=%u parity_count=%u metadata_area_count=%u", alloc_count, parit
 	 * is calculated from.  So, we must pass in the total count to get
 	 * a correct area_multiple.
 	 */
-	ah->area_multiple = mirrors ? _calc_area_multiple(segtype, area_count + parity_count, stripes) : area_count;
-	ah->area_multiple_check = mirrors ? 1 : 0;
+	ah->area_multiple = _calc_area_multiple(segtype, area_count + parity_count, stripes);
 
-PFLA("ah->area_multiple=%u new_extents=%u", ah->area_multiple, new_extents);
+	ah->area_multiple_check = extend ? 1 : 0;
+
 	//FIXME: s/mirror_logs_separate/metadata_separate/ so it can be used by others?
 	ah->mirror_logs_separate = find_config_tree_bool(cmd, allocation_mirror_logs_require_separate_pvs_CFG, NULL);
 
-	total_extents = new_extents * area_count;
+	total_extents = new_extents; //  / ah->area_multiple * area_count;
+PFLA("ah->area_multiple=%u area_count=%u new_extents=%u total_extents=%u", ah->area_multiple, area_count, new_extents, total_extents);
 
 	if (segtype_is_raid(segtype)) {
 		if (metadata_area_count) {
-			uint32_t c = mirrors > 1 ? 1 : area_count;
-
 			ah->metadata_area_count = metadata_area_count;
 PFLA("area_count=%u metadata_area_count=%u total_extents=%u", area_count, metadata_area_count, total_extents);
 			ah->log_len = raid_rmeta_extents_delta(cmd,
-							       existing_extents / c,
-							       (existing_extents + new_extents) / c,
+							       existing_extents / ah->area_multiple,
+							       (existing_extents + new_extents) / ah->area_multiple,
 							       region_size, extent_size);
-			ah->alloc_and_split_meta = ah->log_len ? 1 : 0;
+			ah->alloc_and_split_meta = !!ah->log_len;
 
 			/*
 			 * We need 'log_len' extents for each
 			 * RAID device's metadata_area
 			 */
-			total_extents += (ah->log_len * area_count);
+			total_extents += ah->log_len * area_count;
 PFLA("existing_extents=%u new_extents=%u ah->log_len=%u total_extents=%u", existing_extents, new_extents, ah->log_len, total_extents);
 		} else {
 			ah->log_area_count = 0;
@@ -1805,9 +1799,13 @@ PFLA("existing_extents=%u new_extents=%u ah->log_len=%u total_extents=%u", exist
 	log_debug("Adjusted allocation request to %" PRIu32 " logical extents. Existing size %" PRIu32 ". New size %" PRIu32 ".",
 		  total_extents, existing_extents, total_extents + existing_extents);
 
-	if (mirrors || stripes)
+#if 1
+	// if (mirrors || stripes)
+	if (extend && (mirrors || stripes))
 		total_extents += existing_extents;
+#endif
 
+PFLA("total_extents=%u", total_extents);
 	ah->new_extents = total_extents;
 
 	for (s = 0; s < alloc_count; s++)
@@ -2066,6 +2064,8 @@ static int _alloc_parallel_area(struct alloc_handle *ah, uint32_t max_to_allocat
 		}
 
 		pva = alloc_state->areas[s + ix_log_skip].pva;
+PFLA("ah->alloc_and_split_meta=%u", ah->alloc_and_split_meta);
+PFLA("ah->split_metadata_is_allocated=%u", ah->split_metadata_is_allocated);
 		if (ah->alloc_and_split_meta && !ah->split_metadata_is_allocated) {
 			/*
 			 * The metadata area goes at the front of the allocated
@@ -2113,8 +2113,7 @@ static int _alloc_parallel_area(struct alloc_handle *ah, uint32_t max_to_allocat
 
 	/* Only need to alloc metadata from the first batch */
 	if (ah->alloc_and_split_meta)
-		ah->split_metadata_is_allocated = 0;
-		/* HM FIXME: ah->split_metadata_is_allocated = 1 */;
+		ah->split_metadata_is_allocated = 1;
 
 	ah->total_area_len += area_len;
 
@@ -2164,7 +2163,7 @@ static int _for_each_pv(struct cmd_context *cmd, struct logical_volume *lv,
 
 	area_multiple = _calc_area_multiple(seg->segtype, seg->area_count, 0);
 PFLA("area_multiple=%u", area_multiple);
-	area_len = remaining_seg_len / area_multiple ? : 1;
+	area_len = remaining_seg_len / (area_multiple ? : 1);
 
 	/* For striped mirrors, all the areas are counted, through the mirror layer */
 	if (top_level_area_index == -1)
@@ -2927,6 +2926,7 @@ static int _find_max_parallel_space_for_one_policy(struct alloc_handle *ah, stru
 	do {
 		parallel_pvs = NULL;
 		max_to_allocate = alloc_parms->extents_still_needed - alloc_state->allocated;
+PFLA("max_to_allocate=%u alloc_parms->extents_still_needed=%u alloc_state->allocated=%u", max_to_allocate, alloc_parms->extents_still_needed, alloc_state->allocated);
 
 		/*
 		 * If there are existing parallel PVs, avoid them and reduce
@@ -2950,7 +2950,9 @@ static int _find_max_parallel_space_for_one_policy(struct alloc_handle *ah, stru
 					max_tmp -= ah->log_len;
 				if (max_tmp > (spvs->le + spvs->len) * ah->area_multiple) {
 					max_to_allocate = (spvs->le + spvs->len) * ah->area_multiple - alloc_state->allocated;
+PFLA("max_to_allocate=%u", max_to_allocate);
 					max_to_allocate += (ah->alloc_and_split_meta && !ah->split_metadata_is_allocated) ? ah->log_len : 0;
+PFLA("max_to_allocate=%u", max_to_allocate);
 				}
 				parallel_pvs = &spvs->pvs;
 				break;
@@ -3064,6 +3066,7 @@ static int _allocate(struct alloc_handle *ah,
 		return 0;
 	}
 
+PFLA("ah->new_extents=%u", ah->new_extents);
 	/*
 	 * cling includes implicit cling_by_tags
 	 * but it does nothing unless the lvm.conf setting is present.
@@ -3167,6 +3170,7 @@ int lv_add_virtual_segment(struct logical_volume *lv, uint64_t status,
 struct alloc_handle *allocate_extents(struct volume_group *vg,
 				      struct logical_volume *lv,
 				      const struct segment_type *segtype,
+				      int extend,
 				      uint32_t stripes,
 				      uint32_t mirrors, uint32_t log_count,
 				      uint32_t region_size, uint32_t extents,
@@ -3199,7 +3203,7 @@ struct alloc_handle *allocate_extents(struct volume_group *vg,
 	if (alloc >= ALLOC_INHERIT)
 		alloc = vg->alloc;
 
-	if (!(ah = _alloc_init(vg->cmd, vg->vgmem, segtype, alloc, approx_alloc,
+	if (!(ah = _alloc_init(vg->cmd, vg->vgmem, segtype, alloc, approx_alloc, extend,
 			       lv ? lv->le_count : 0, extents, mirrors, stripes, log_count,
 			       vg->extent_size, region_size,
 			       parallel_areas)))
@@ -3700,7 +3704,7 @@ static int _lv_extend_layered_lv(struct alloc_handle *ah,
 
 	if (!(segtype = get_segtype_from_string(lv->vg->cmd, "striped")))
 		return_0;
-
+PFLA("extents=%u", extents);
 	/*
 	 * The component devices of a "striped" LV all go in the same
 	 * LV.  However, RAID has an LV for each device - making the
@@ -3721,10 +3725,11 @@ static int _lv_extend_layered_lv(struct alloc_handle *ah,
 		}
 
 		sub_lv = seg_lv(seg, s);
+PFLA("extending %s in %s, stripes=%u", sub_lv->name, lv->name, stripes);
 		if (!lv_add_segment(ah, fa, stripes, sub_lv, segtype,
 				    stripe_size, sub_lv->status, 0)) {
 			log_error("Aborting. Failed to extend %s in %s.",
-			  	sub_lv->name, lv->name);
+				  sub_lv->name, lv->name);
 			return 0;
 		}
 
@@ -3754,8 +3759,10 @@ static int _lv_extend_layered_lv(struct alloc_handle *ah,
 	seg = first_seg(lv);
 	seg->area_len += extents;
 	seg->len += extents;
+PFLA("lv->le_count=%u", lv->le_count);
 	lv->le_count += extents;
 	lv->size += (uint64_t) extents * lv->vg->extent_size;
+PFLA("lv->le_count=%u", lv->le_count);
 
 	if (!vg_write(lv->vg) || !vg_commit(lv->vg))
 		return_0;
@@ -3820,14 +3827,13 @@ int lv_extend(struct logical_volume *lv,
 	struct alloc_handle *ah;
 	uint32_t sub_lv_count;
 	uint32_t old_extents;
-	uint32_t new_extents;	/* Total logical size after extension. */
 
 	log_very_verbose("Adding segment of type %s to LV %s.", segtype->name, lv->name);
 
 	if (segtype_is_virtual(segtype))
 		return lv_add_virtual_segment(lv, 0u, extents, segtype);
 
-PFL();
+PFLA("extents=%u", extents);
 	if (segtype_is_pool(segtype) && !lv->le_count) {
 		/*
 		 * Thinpool and cache_pool allocations treat the metadata
@@ -3844,24 +3850,18 @@ PFL();
 		if (!(segtype_is_striped(segtype) || segtype_is_raid0(segtype)))
 			log_count = (mirrors ?: 1) * stripes + segtype->parity_devs;
 
-PFLA("mirrors=%u stripes=%u log_count=%u", mirrors, stripes, log_count);
 	}
 
-PFLA("stripes=%u mirrors=%u log_count=%u", stripes, mirrors, log_count);
+PFLA("extents=%u mirrors=%u stripes=%u log_count=%u", extents, mirrors, stripes, log_count);
 #if 1
 	/* FIXME log_count should be 1 for mirrors */
 	if (segtype_is_mirror(segtype))
 		log_count = 1;
 #endif
-	if (!(ah = allocate_extents(lv->vg, lv, segtype, stripes, mirrors,
+	if (!(ah = allocate_extents(lv->vg, lv, segtype, 1, stripes, mirrors,
 				    log_count, region_size, extents,
 				    allocatable_pvs, alloc, approx_alloc, NULL)))
 		return_0;
-
-	new_extents = ah->new_extents;
-	/* FIXME: "raid0" w/o metadata images! */
-	if (segtype_is_raid(segtype))
-		new_extents -= ah->log_len * ah->area_multiple;
 
 	if (segtype_is_pool(segtype)) {
 		if (!(r = create_pool(lv, segtype, ah, stripes, stripe_size)))
@@ -3891,7 +3891,8 @@ PFLA("stripes=%u mirrors=%u log_count=%u", stripes, mirrors, log_count);
 			goto out;
 		}
 
-		if (!(r = _lv_extend_layered_lv(ah, lv, new_extents - lv->le_count, 0,
+PFLA("extents=%u ah->new_extents=%u lv->le_count=%u", extents, ah->new_extents, lv->le_count);
+		if (!(r = _lv_extend_layered_lv(ah, lv, extents, 0,
 						stripes, stripe_size)))
 			goto_out;
 

@@ -680,7 +680,8 @@ static int _alloc_rmeta_for_lv(struct logical_volume *data_lv,
 		return 0;
 	}
 
-	if (!(ah = allocate_extents(data_lv->vg, NULL, seg->segtype, 0, 1, 0,
+	if (!(ah = allocate_extents(data_lv->vg, NULL, seg->segtype, 0,
+				    0, 1, 0,
 				    seg->region_size,
 				    _raid_rmeta_extents(data_lv->vg->cmd, data_lv->le_count,
 							seg->region_size, data_lv->vg->extent_size),
@@ -825,8 +826,8 @@ PFL();
 			/* Amount of extents for the rimage device(s) */
 			if (segtype_is_striped_raid(seg->segtype)) {
 				stripes = count;
-				mirrors = 0;
-				extents = lv->le_count / _data_rimages_count(seg, seg->area_count);
+				mirrors = 1;
+				extents = count * lv->le_count / _data_rimages_count(seg, seg->area_count);
 PFLA("stripes=%u lv->le_count=%u data_rimages_count=%u", stripes, lv->le_count, _data_rimages_count(seg, seg->area_count));
 			} else {
 				stripes = 1;
@@ -834,7 +835,7 @@ PFLA("stripes=%u lv->le_count=%u data_rimages_count=%u", stripes, lv->le_count, 
 				extents = lv->le_count;
 			}
 
-			if (!(ah = allocate_extents(lv->vg, NULL, segtype,
+			if (!(ah = allocate_extents(lv->vg, NULL, segtype, 0,
 						    stripes, mirrors, log_count,
 						    seg->region_size, extents,
 						    pvs, lv->alloc, 0, parallel_areas)))
@@ -1041,12 +1042,12 @@ static int _raid_add_images(struct logical_volume *lv,
 			    const struct segment_type *segtype,
 			    uint32_t new_count, struct dm_list *pvs)
 {
-	int add_all_rmeta = 0, linear;
+	struct lv_segment *seg = first_seg(lv);
+	int add_all_rmeta = 0, reshape = (seg->segtype == segtype), linear;
 	uint32_t s;
 	uint32_t old_count = lv_raid_image_count(lv);
 	uint32_t count = new_count - old_count;
 	uint64_t lv_flags = LV_REBUILD;
-	struct lv_segment *seg = first_seg(lv);
 	struct dm_list data_lvs, meta_lvs;
 
 PFLA("seg->meta_areas=%p", seg->meta_areas);
@@ -1154,7 +1155,7 @@ PFL();
 		goto fail;
 
 	/* Reshape adding image component pairs -> set delta disks plus flag on new image LVs */
-	if (seg_is_striped_raid(seg)) {
+	if (reshape && seg_is_striped_raid(seg)) {
 PFL();
 		for (s = old_count; s < new_count; s++) {
 PFL();
@@ -1175,7 +1176,7 @@ if (seg_is_striped_raid(seg))
 		return_0;
 PFL();
 	/* Reshape adding image component pairs -> changing size accordingly */
-	if (seg_is_striped_raid(seg)) {
+	if (reshape && seg_is_striped_raid(seg)) {
 		uint32_t new_extents = count * (lv->le_count / _data_rimages_count(seg, old_count));
 
 PFLA("lv->le_count=%u data_rimages=%u extents=%u", lv->le_count, _data_rimages_count(seg, old_count), new_extents);
@@ -1195,7 +1196,7 @@ PFL();
 		return 0;
 
 #if 1
-	/* Reload again after change */
+	/* Reload striped raid again after removal of flags and additon of imgae components to change size */
 	if (seg_is_striped_raid(seg) && !lv_update_and_reload_origin(lv))
 		return_0;
 #endif
@@ -2525,7 +2526,7 @@ PFL();
 	}
 
 	/*
-	 * In case of raid1 -> raid5, takeover will run a degraded 2 disk raid5 set of the same content
+	 * In case of raid1 -> raid5, takeover will run a degraded 2 disk raid5 set with the same content
 	 * in each leg which will get an additional disk allocated afterwards and reloaded starting
 	 * resynchronization to reach full redundance.
 	 *
@@ -2574,7 +2575,7 @@ static int _raid_level_down(struct logical_volume *lv,
 			    const struct segment_type *segtype,
 			    struct dm_list *allocate_pvs)
 {
-	return _raid_takeover(lv, 0, segtype, allocate_pvs, "raid4/5 set %s/%s has have 2 disks and be degraded.");
+	return _raid_takeover(lv, 0, segtype, allocate_pvs, "raid4/5 set %s/%s has to have 2 disks and be degraded.");
 }
 
 /*
@@ -2745,7 +2746,6 @@ static int _convert_raid_to_raid(struct logical_volume *lv,
 				 const unsigned new_stripe_size,
 				 struct dm_list *allocate_pvs)
 {
-	int up;
 	struct lv_segment *seg = first_seg(lv);
 	const struct segment_type *new_segtype = requested_segtype;
 	unsigned stripes = new_stripes ?: _data_rimages_count(seg, seg->area_count);
@@ -2820,8 +2820,8 @@ PFLA("seg->segtype=%s new_segtype->name=%s", seg->segtype->name, new_segtype->na
 
 PFLA("seg->segtype=%s new_segtype->name=%s", seg->segtype->name, new_segtype->name);
 
-	up = is_level_up(seg->segtype, new_segtype);
-	if (!(up ? _raid_level_up : _raid_level_down)(lv, new_segtype, allocate_pvs))
+	if (!(is_level_up(seg->segtype, new_segtype) ?
+	      _raid_level_up : _raid_level_down)(lv, new_segtype, allocate_pvs))
 		return 0;
 PFLA("seg->segtype=%s new_segtype->name=%s", seg->segtype->name, new_segtype->name);
 
