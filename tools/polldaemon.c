@@ -520,6 +520,8 @@ static int _lvmpoll_daemon(struct cmd_context *cmd, struct poll_operation_id *id
 			log_error("Failed to initialize processing handle.");
 			return ECMD_FAILED;
 		} else {
+			if (parms->aborting)
+				parms->interval = 0;
 			_lvmpolld_poll_for_all_vgs(cmd, parms, handle);
 			destroy_processing_handle(cmd, handle);
 			return ECMD_PROCESSED;
