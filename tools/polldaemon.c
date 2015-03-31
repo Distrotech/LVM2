@@ -367,14 +367,9 @@ static void _poll_for_all_vgs(struct cmd_context *cmd,
 }
 
 #ifdef LVMPOLLD_SUPPORT
-struct poll_lv_list {
-	struct dm_list list;
-	struct poll_operation_id *id;
-};
-
 typedef struct {
 	struct daemon_parms *parms;
-	struct dm_list plvs;
+	struct dm_list idls;
 } lvmpolld_parms_t;
 
 static int report_progress(struct cmd_context *cmd, struct poll_operation_id *id,
@@ -427,7 +422,7 @@ static int _lvmpolld_init_poll_vg(struct cmd_context *cmd, const char *vgname,
 	int r;
 	struct lv_list *lvl;
 	struct logical_volume *lv;
-	struct poll_lv_list *plv;
+	struct poll_id_list *idl;
 	struct poll_operation_id id;
 	lvmpolld_parms_t *lpdp = (lvmpolld_parms_t *) handle->custom_handle;
 
@@ -452,17 +447,10 @@ static int _lvmpolld_init_poll_vg(struct cmd_context *cmd, const char *vgname,
 		r = lvmpolld_poll_init(cmd, &id, lpdp->parms);
 
 		if (r && !lpdp->parms->background) {
-			plv = (struct poll_lv_list *) dm_malloc(sizeof(struct poll_lv_list));
-			if (!plv)
+			if (!(idl = poll_id_list_create(cmd->mem, &id)))
 				return ECMD_FAILED;
 
-			plv->id = copy_poll_operation_id(&id);
-			if (!plv->id) {
-				dm_free(plv);
-				return ECMD_FAILED;
-			}
-
-			dm_list_add(&lpdp->plvs, &plv->list);
+			dm_list_add(&lpdp->idls, &idl->list);
 		}
 	}
 
@@ -474,33 +462,36 @@ static void _lvmpolld_poll_for_all_vgs(struct cmd_context *cmd,
 				       struct processing_handle *handle)
 {
 	int r;
-	struct poll_lv_list *plv, *tlv;
+	struct dm_list *first;
+	struct poll_id_list *idl, *tlv;
 	unsigned finished;
 	lvmpolld_parms_t lpdp = {
 		.parms = parms
 	};
 
-	dm_list_init(&lpdp.plvs);
+	dm_list_init(&lpdp.idls);
 
 	handle->custom_handle = &lpdp;
 
 	process_each_vg(cmd, 0, NULL, 0, handle, _lvmpolld_init_poll_vg);
 
-	while (!dm_list_empty(&lpdp.plvs)) {
-		dm_list_iterate_items_safe(plv, tlv, &lpdp.plvs) {
-			r = lvmpolld_request_info(plv->id, lpdp.parms,
+	first = dm_list_first(&lpdp.idls);
+
+	while (!dm_list_empty(&lpdp.idls)) {
+		dm_list_iterate_items_safe(idl, tlv, &lpdp.idls) {
+			r = lvmpolld_request_info(idl->id, lpdp.parms,
 						  &finished);
-			if (!r || finished) {
-				dm_list_del(&plv->list);
-				destroy_poll_operation_id(plv->id);
-				dm_free(plv);
-			}
+			if (!r || finished)
+				dm_list_del(&idl->list);
 			else
-				report_progress(cmd, plv->id, lpdp.parms);
+				report_progress(cmd, idl->id, lpdp.parms);
 		}
 
 		_nanosleep(lpdp.parms->interval, 0);
 	}
+
+	if (first)
+		dm_pool_free(cmd->mem, dm_list_item(first, struct poll_id_list));
 }
 
 static int _lvmpoll_daemon(struct cmd_context *cmd, struct poll_operation_id *id,
