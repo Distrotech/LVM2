@@ -721,16 +721,6 @@ static int _free_vg_sanlock(struct cmd_context *cmd, struct volume_group *vg)
 	return ret;
 }
 
-/*
- * Called to remove lvmlockd's record of the local vg which it caches as an
- * optimization.
- */
-
-static int _free_vg_local(struct cmd_context *cmd, struct volume_group *vg)
-{
-	return 1;
-}
-
 /* vgcreate */
 
 int lockd_init_vg(struct cmd_context *cmd, struct volume_group *vg)
@@ -779,8 +769,6 @@ void lockd_free_vg_final(struct cmd_context *cmd, struct volume_group *vg)
 
 	switch (lock_type_to_num(vg->lock_type)) {
 	case LOCK_TYPE_NONE:
-		_free_vg_local(cmd, vg);
-		break;
 	case LOCK_TYPE_CLVM:
 	case LOCK_TYPE_SANLOCK:
 		break;
