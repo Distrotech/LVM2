@@ -558,20 +558,14 @@ void vg_remove_pvs(struct volume_group *vg)
 	}
 }
 
-int vg_remove(struct volume_group *vg)
+int vg_remove_direct(struct volume_group *vg)
 {
 	struct physical_volume *pv;
 	struct pv_list *pvl;
 	int ret = 1;
 
-	if (!lock_vol(vg->cmd, VG_ORPHANS, LCK_VG_WRITE, NULL)) {
-		log_error("Can't get lock for orphan PVs");
-		return 0;
-	}
-
 	if (!vg_remove_mdas(vg)) {
 		log_error("vg_remove_mdas %s failed", vg->name);
-		unlock_vg(vg->cmd, VG_ORPHANS);
 		return 0;
 	}
 
@@ -614,6 +608,20 @@ int vg_remove(struct volume_group *vg)
 		log_print_unless_silent("Volume group \"%s\" successfully removed", vg->name);
 	else
 		log_error("Volume group \"%s\" not properly removed", vg->name);
+
+	return ret;
+}
+
+int vg_remove(struct volume_group *vg)
+{
+	int ret;
+
+	if (!lock_vol(vg->cmd, VG_ORPHANS, LCK_VG_WRITE, NULL)) {
+		log_error("Can't get lock for orphan PVs");
+		return 0;
+	}
+
+	ret = vg_remove_direct(vg);
 
 	unlock_vg(vg->cmd, VG_ORPHANS);
 	return ret;

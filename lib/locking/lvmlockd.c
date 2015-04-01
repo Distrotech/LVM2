@@ -377,6 +377,7 @@ static int _create_sanlock_lv(struct cmd_context *cmd, struct volume_group *vg,
 	}
 
 	lv_set_hidden(lv);
+
 	return 1;
 }
 
@@ -530,22 +531,29 @@ static int _init_vg_dlm(struct cmd_context *cmd, struct volume_group *vg)
 	if (!ret)
 		goto out;
 
-	reply_str = daemon_reply_str(reply, "vg_lock_args", NULL);
-	if (!reply_str) {
+	if (!(reply_str = daemon_reply_str(reply, "vg_lock_args", NULL))) {
 		log_error("VG %s init failed: lock_args not returned", vg->name);
 		ret = 0;
 		goto out;
 	}
 
-	vg_lock_args = dm_pool_strdup(cmd->mem, reply_str);
-	if (!vg_lock_args) {
+	if (!(vg_lock_args = dm_pool_strdup(cmd->mem, reply_str))) {
 		log_error("VG %s init failed: lock_args alloc failed", vg->name);
 		ret = 0;
+		goto out;
 	}
-out:
-	daemon_reply_destroy(reply);
 
 	vg->lock_args = vg_lock_args;
+
+	if (!vg_write(vg) || !vg_commit(vg)) {
+		log_error("VG %s init failed: vg_write vg_commit", vg->name);
+		ret = 0;
+		goto out;
+	}
+
+	ret = 1;
+out:
+	daemon_reply_destroy(reply);
 	return ret;
 }
 
@@ -610,27 +618,44 @@ static int _init_vg_sanlock(struct cmd_context *cmd, struct volume_group *vg)
 		log_error("VG %s init failed: %d", vg->name, result);
 	}
 
-	if (!ret) {
-		_remove_sanlock_lv(cmd, vg, lock_lv_name);
+	if (!ret)
 		goto out;
-	}
 
-	reply_str = daemon_reply_str(reply, "vg_lock_args", NULL);
-	if (!reply_str) {
+	if (!(reply_str = daemon_reply_str(reply, "vg_lock_args", NULL))) {
 		log_error("VG %s init failed: lock_args not returned", vg->name);
 		ret = 0;
 		goto out;
 	}
 
-	vg_lock_args = dm_pool_strdup(cmd->mem, reply_str);
-	if (!vg_lock_args) {
+	if (!(vg_lock_args = dm_pool_strdup(cmd->mem, reply_str))) {
 		log_error("VG %s init failed: lock_args alloc failed", vg->name);
 		ret = 0;
+		goto out;
 	}
-out:
-	daemon_reply_destroy(reply);
 
 	vg->lock_args = vg_lock_args;
+
+	if (!vg_write(vg) || !vg_commit(vg)) {
+		log_error("VG %s init failed: vg_write vg_commit", vg->name);
+		ret = 0;
+		goto out;
+	}
+
+	ret = 1;
+out:
+	if (!ret) {
+		/*
+		 * The usleep delay gives sanlock time to close the lock lv,
+		 * and usually avoids having an annoying error printed.
+		 */
+		usleep(1000000);
+		_deactivate_sanlock_lv(cmd, vg);
+		_remove_sanlock_lv(cmd, vg, lock_lv_name);
+		if (!vg_write(vg) || !vg_commit(vg))
+			stack;
+	}
+
+	daemon_reply_destroy(reply);
 	return ret;
 }
 
@@ -712,8 +737,13 @@ static int _free_vg_sanlock(struct cmd_context *cmd, struct volume_group *vg)
 		goto out;
 	}
 
-	_deactivate_sanlock_lv(cmd, vg);
+	/*
+	 * The usleep delay gives sanlock time to close the lock lv,
+	 * and usually avoids having an annoying error printed.
+	 */
+	usleep(1000000);
 
+	_deactivate_sanlock_lv(cmd, vg);
 	_remove_sanlock_lv(cmd, vg, lock_lv_name);
  out:
 	daemon_reply_destroy(reply);
@@ -843,7 +873,7 @@ int lockd_start_vg(struct cmd_context *cmd, struct volume_group *vg)
 				"pid = %d", getpid(),
 				"vg_name = %s", vg->name,
 				"vg_lock_type = %s", vg->lock_type,
-				"vg_lock_args = %s", vg->lock_args,
+				"vg_lock_args = %s", vg->lock_args ?: "none",
 				"vg_uuid = %s", uuid[0] ? uuid : "none",
 				"version = %d", (int64_t)vg->seqno,
 				"host_id = %d", host_id,
@@ -879,7 +909,7 @@ int lockd_start_vg(struct cmd_context *cmd, struct volume_group *vg)
 	default:
 		log_error("VG %s start failed: %d", vg->name, result);
 	}
-out:
+
 	daemon_reply_destroy(reply);
 
 	return ret;

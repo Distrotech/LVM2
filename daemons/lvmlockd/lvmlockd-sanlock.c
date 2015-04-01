@@ -398,8 +398,9 @@ int lm_init_vg_sanlock(char *ls_name, char *vg_name, uint32_t flags, char *vg_ar
 		rd.rs.disks[0].offset = offset;
 
 		rv = sanlock_write_resource(&rd.rs, 0, 0, 0);
-		if (rv == -EMSGSIZE) {
+		if (rv == -EMSGSIZE || rv == -ENOSPC) {
 			/* This indicates the end of the device is reached. */
+			rv = -EMSGSIZE;
 			break;
 		}
 
@@ -471,10 +472,11 @@ int lm_init_lv_sanlock(char *ls_name, char *vg_name, char *lv_name,
 		memset(rd.rs.name, 0, SANLK_NAME_LEN);
 
 		rv = sanlock_read_resource(&rd.rs, 0);
-		if (rv == -EMSGSIZE) {
+		if (rv == -EMSGSIZE || rv == -ENOSPC) {
 			/* This indicates the end of the device is reached. */
 			log_debug("S %s init_lv_san read limit offset %llu",
 				  ls_name, (unsigned long long)offset);
+			rv = -EMSGSIZE;
 			return rv;
 		}
 
@@ -648,8 +650,9 @@ int lm_rename_vg_sanlock(char *ls_name, char *vg_name, uint32_t flags, char *vg_
 		rd.rs.num_disks = 1;
 
 		rv = sanlock_read_resource(&rd.rs, 0);
-		if (rv == -EMSGSIZE) {
+		if (rv == -EMSGSIZE || rv == -ENOSPC) {
 			/* This indicates the end of the device is reached. */
+			rv = -EMSGSIZE;
 			break;
 		}
 
@@ -1140,8 +1143,9 @@ static int find_lv_offset(struct lockspace *ls, struct resource *r,
 		memset(rd.rs.name, 0, SANLK_NAME_LEN);
 
 		rv = sanlock_read_resource(&rd.rs, 0);
-		if (rv == -EMSGSIZE) {
+		if (rv == -EMSGSIZE || rv == -ENOSPCE) {
 			/* This indicates the end of the device is reached. */
+			rv = -EMSGSIZE;
 			break;
 		}
 

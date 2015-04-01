@@ -111,12 +111,6 @@ int vgcreate(struct cmd_context *cmd, int argc, char **argv)
 		}
 	}
 
-	if (!lockd_init_vg(cmd, vg)) {
-		log_error("Failed to initialize lock args for lock type %s",
-			  vp_new.lock_type);
-		goto_bad;
-	}
-
 	if (vg_is_clustered(vg))
 		clustered_message = "Clustered ";
 	else if (locking_is_clustered())
@@ -128,6 +122,14 @@ int vgcreate(struct cmd_context *cmd, int argc, char **argv)
 	/* Store VG on disk(s) */
 	if (!vg_write(vg) || !vg_commit(vg))
 		goto_bad;
+
+	if (!lockd_init_vg(cmd, vg)) {
+		log_error("Failed to initialize lock args for lock type %s",
+			  vp_new.lock_type);
+		vg_remove_pvs(vg);
+		vg_remove_direct(vg);
+		goto_bad;
+	}
 
 	unlock_vg(cmd, VG_ORPHANS);
 	unlock_vg(cmd, vp_new.vg_name);
