@@ -483,7 +483,7 @@ static void _lvmpolld_poll_for_all_vgs(struct cmd_context *cmd,
 						  &finished);
 			if (!r || finished)
 				dm_list_del(&idl->list);
-			else
+			else if (!parms->aborting)
 				report_progress(cmd, idl->id, lpdp.parms);
 		}
 
@@ -501,12 +501,16 @@ static int _lvmpoll_daemon(struct cmd_context *cmd, struct poll_operation_id *id
 	struct processing_handle *handle = NULL;
 	unsigned finished = 0;
 
+	if (parms->aborting)
+		parms->interval = 0;
+
 	if (id) {
 		r = lvmpolld_poll_init(cmd, id, parms);
 		if (r && !parms->background) {
 			while (1) {
 				if (!(r = lvmpolld_request_info(id, parms, &finished)) ||
-				    finished || !(r = report_progress(cmd, id, parms)))
+				    finished ||
+				    (!parms->aborting && !(r = report_progress(cmd, id, parms))))
 					break;
 
 				_nanosleep(parms->interval, 0);
@@ -520,8 +524,6 @@ static int _lvmpoll_daemon(struct cmd_context *cmd, struct poll_operation_id *id
 			log_error("Failed to initialize processing handle.");
 			return ECMD_FAILED;
 		} else {
-			if (parms->aborting)
-				parms->interval = 0;
 			_lvmpolld_poll_for_all_vgs(cmd, parms, handle);
 			destroy_processing_handle(cmd, handle);
 			return ECMD_PROCESSED;
