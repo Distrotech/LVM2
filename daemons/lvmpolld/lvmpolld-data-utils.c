@@ -13,6 +13,8 @@
  */
 
 #include <fcntl.h>
+#include <signal.h>
+#include <sys/types.h>
 #include <unistd.h>
 
 #include "config-util.h"
@@ -352,6 +354,12 @@ void lvmpolld_thread_data_destroy(void *thread_private)
 
 	if (data->pdlv) {
 		pdst_lock(data->pdlv->pdst);
+		/*
+		 * FIXME: skip this step if lvmpolld is activated
+		 * 	  by systemd.
+		 */
+		if (!pdlv_get_polling_finished(data->pdlv))
+			kill(data->pdlv->cmd_pid, SIGTERM);
 		pdlv_set_polling_finished(data->pdlv, 1);
 		pdst_locked_dec(data->pdlv->pdst);
 		pdst_unlock(data->pdlv->pdst);
