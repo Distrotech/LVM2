@@ -4175,10 +4175,12 @@ bad:
 static struct volume_group *_recover_vg(struct cmd_context *cmd,
 			 const char *vg_name, const char *vgid)
 {
+	int vg_lock_held;
 	int consistent = 1;
 	struct volume_group *vg;
 
-	unlock_vg(cmd, vg_name);
+	if ((vg_lock_held = lvmcache_vgname_is_locked(vg_name)))
+		unlock_vg(cmd, vg_name);
 
 	dev_close_all();
 
@@ -4196,8 +4198,14 @@ static struct volume_group *_recover_vg(struct cmd_context *cmd,
 		goto_bad;
 	}
 
+	if (!vg_lock_held)
+		unlock_vg(cmd, vg_name);
+
 	return (struct volume_group *)vg;
 bad:
+	if (!vg_lock_held && lvmcache_vgname_is_locked(vg_name))
+		unlock_vg(cmd, vg_name);
+
 	if (is_orphan_vg(vg_name))
 		log_error("Recovery of standalone physical volumes failed.");
 	else
@@ -4266,6 +4274,14 @@ static int _get_pvs(struct cmd_context *cmd, uint32_t warn_flags,
 		if (!(vg = vg_read_internal(cmd, vgname, (!vgslist) ? vgid : NULL, warn_flags, &consistent))) {
 			stack;
 			continue;
+		}
+
+		if (!consistent) {
+			release_vg(vg);
+			if (!(vg = _recover_vg(cmd, vgname, (!vgslist) ? vgid : NULL))) {
+				stack;
+				continue;
+			}
 		}
 
 		/* Move PVs onto results list */
