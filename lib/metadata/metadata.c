@@ -4169,6 +4169,43 @@ bad:
 	return NULL;
 }
 
+/*
+ * VG is left unlocked on failure
+ */
+static struct volume_group *_recover_vg(struct cmd_context *cmd,
+			 const char *vg_name, const char *vgid)
+{
+	int consistent = 1;
+	struct volume_group *vg;
+
+	unlock_vg(cmd, vg_name);
+
+	dev_close_all();
+
+	if (!lock_vol(cmd, vg_name, LCK_VG_WRITE, NULL))
+		goto_bad;
+
+	if (!(vg = vg_read_internal(cmd, vg_name, vgid, WARN_PV_READ, &consistent))) {
+		unlock_vg(cmd, vg_name);
+		goto_bad;
+	}
+
+	if (!consistent) {
+		release_vg(vg);
+		unlock_vg(cmd, vg_name);
+		goto_bad;
+	}
+
+	return (struct volume_group *)vg;
+bad:
+	if (is_orphan_vg(vg_name))
+		log_error("Recovery of standalone physical volumes failed.");
+	else
+		log_error("Recovery of volume group \"%s\" failed.", vg_name);
+
+	return NULL;
+}
+
 /* May return empty list */
 struct dm_list *get_vgnames(struct cmd_context *cmd, int include_internal)
 {
@@ -4540,43 +4577,6 @@ static uint32_t _vg_bad_status_bits(const struct volume_group *vg,
 int vg_check_status(const struct volume_group *vg, uint64_t status)
 {
 	return !_vg_bad_status_bits(vg, status);
-}
-
-/*
- * VG is left unlocked on failure
- */
-static struct volume_group *_recover_vg(struct cmd_context *cmd,
-			 const char *vg_name, const char *vgid)
-{
-	int consistent = 1;
-	struct volume_group *vg;
-
-	unlock_vg(cmd, vg_name);
-
-	dev_close_all();
-
-	if (!lock_vol(cmd, vg_name, LCK_VG_WRITE, NULL))
-		goto_bad;
-
-	if (!(vg = vg_read_internal(cmd, vg_name, vgid, WARN_PV_READ, &consistent))) {
-		unlock_vg(cmd, vg_name);
-		goto_bad;
-	}
-
-	if (!consistent) {
-		release_vg(vg);
-		unlock_vg(cmd, vg_name);
-		goto_bad;
-	}
-
-	return (struct volume_group *)vg;
-bad:
-	if (is_orphan_vg(vg_name))
-		log_error("Recovery of standalone physical volumes failed.");
-	else
-		log_error("Recovery of volume group \"%s\" failed.", vg_name);
-
-	return NULL;
 }
 
 static int _allow_system_id(struct cmd_context *cmd, const char *system_id)
