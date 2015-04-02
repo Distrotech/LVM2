@@ -4556,20 +4556,27 @@ static struct volume_group *_recover_vg(struct cmd_context *cmd,
 	dev_close_all();
 
 	if (!lock_vol(cmd, vg_name, LCK_VG_WRITE, NULL))
-		return_NULL;
+		goto_bad;
 
 	if (!(vg = vg_read_internal(cmd, vg_name, vgid, WARN_PV_READ, &consistent))) {
 		unlock_vg(cmd, vg_name);
-		return_NULL;
+		goto_bad;
 	}
 
 	if (!consistent) {
 		release_vg(vg);
 		unlock_vg(cmd, vg_name);
-		return_NULL;
+		goto_bad;
 	}
 
 	return (struct volume_group *)vg;
+bad:
+	if (is_orphan_vg(vg_name))
+		log_error("Recovery of standalone physical volumes failed.");
+	else
+		log_error("Recovery of volume group \"%s\" failed.", vg_name);
+
+	return NULL;
 }
 
 static int _allow_system_id(struct cmd_context *cmd, const char *system_id)
@@ -4798,12 +4805,8 @@ static struct volume_group *_vg_lock_and_read(struct cmd_context *cmd, const cha
 	if (!consistent && !failure) {
 		release_vg(vg);
 		if (!(vg = _recover_vg(cmd, vg_name, vgid))) {
-			if (is_orphan_vg(vg_name))
-				log_error("Recovery of standalone physical volumes failed.");
-			else
-				log_error("Recovery of volume group \"%s\" failed.",
-					  vg_name);
 			failure |= FAILED_RECOVERY;
+			stack;
 			goto bad_no_unlock;
 		}
 	}
