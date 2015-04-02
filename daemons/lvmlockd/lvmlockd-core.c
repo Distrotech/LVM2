@@ -4358,7 +4358,8 @@ static int get_lockd_vgs(struct list_head *vg_lockd)
 
 				r->type = LD_RT_LV;
 				strncpy(r->name, lv_cn->key, MAX_NAME);
-				strncpy(r->lv_args, lock_args, MAX_ARGS);
+				if (lock_args)
+					strncpy(r->lv_args, lock_args, MAX_ARGS);
 				list_add_tail(&r->list, &ls->resources);
 			}
 		}
@@ -4366,7 +4367,7 @@ static int get_lockd_vgs(struct list_head *vg_lockd)
 		daemon_reply_destroy(reply);
 
 		log_debug("get_lockd_vgs %s lock_type %s lock_args %s",
-			  ls->vg_name, lock_type, lock_args);
+			  ls->vg_name, lock_type, lock_args ?: "none");
 
 		if (rv < 0)
 			break;
@@ -4552,6 +4553,7 @@ static void adopt_locks(void)
 		if (!strcmp(ls1->name, gl_lsname_dlm)) {
 			list_del(&ls1->list);
 			free(ls1);
+			continue;
 		}
 
 		found = 0;

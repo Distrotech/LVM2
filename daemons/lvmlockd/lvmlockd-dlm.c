@@ -311,6 +311,9 @@ int lm_rem_resource_dlm(struct lockspace *ls, struct resource *r)
 
 	lksb = &rdd->lksb;
 
+	if (!lksb->sb_lkid)
+		goto out;
+
 	rv = dlm_ls_unlock_wait(lmd->dh, lksb->sb_lkid, 0, lksb);
 	if (rv < 0) {
 		log_error("S %s R %s rem_resource_dlm unlock error %d", ls->name, r->name, rv);
@@ -365,7 +368,8 @@ static int lm_adopt_dlm(struct lockspace *ls, struct resource *r, int ld_mode,
 	mode = to_dlm_mode(ld_mode);
 	if (mode < 0) {
 		log_error("adopt_dlm invalid mode %d", ld_mode);
-		return -EINVAL;
+		rv = -EINVAL;
+		goto fail;
 	}
 
 	log_debug("S %s R %s adopt_dlm", ls->name, r->name);
@@ -376,20 +380,26 @@ static int lm_adopt_dlm(struct lockspace *ls, struct resource *r, int ld_mode,
 	/*
 	 * dlm returns 0 for success, -EAGAIN if an orphan is
 	 * found with another mode, and -ENOENT if no orphan.
+	 *
+	 * cast/bast/param are (void *)1 because the kernel
+	 * returns errors if some are null.
 	 */
 
-	rv = dlm_ls_lock(lmd->dh, mode, lksb, flags,
-			 r->name, strlen(r->name),
-			 0, NULL, NULL, NULL, NULL);
+	rv = dlm_ls_lockx(lmd->dh, mode, lksb, flags,
+			  r->name, strlen(r->name), 0,
+			  (void *)1, (void *)1, (void *)1,
+			  NULL, NULL);
 
 	if (rv == -EAGAIN) {
 		log_debug("S %s R %s adopt_dlm adopt mode %d try other mode",
 			  ls->name, r->name, ld_mode);
-		return -EUCLEAN;
+		rv = -EUCLEAN;
+		goto fail;
 	}
 	if (rv < 0) {
-		log_debug("S %s R %s adopt_dlm error %d", ls->name, r->name, rv);
-		return rv;
+		log_debug("S %s R %s adopt_dlm mode %d flags %x error %d errno %d",
+			  ls->name, r->name, mode, flags, rv, errno);
+		goto fail;
 	}
 
 	/*
@@ -403,6 +413,10 @@ static int lm_adopt_dlm(struct lockspace *ls, struct resource *r, int ld_mode,
 	 * this lock in the same mode it's already in.
 	 */
 
+	return rv;
+
+ fail:
+	lm_rem_resource_dlm(ls, r);
 	return rv;
 }
 
@@ -618,6 +632,9 @@ int lm_get_lockspaces_dlm(struct list_head *ls_rejoin)
 
 	while ((de = readdir(ls_dir))) {
 		if (de->d_name[0] == '.')
+			continue;
+
+		if (strncmp(de->d_name, LVM_LS_PREFIX, strlen(LVM_LS_PREFIX)))
 			continue;
 
 		if (!(ls = alloc_lockspace())) {
