@@ -17,6 +17,14 @@
 
 #include <fcntl.h>
 
+#if 1
+#define PFL() printf("%s %u\n", __func__, __LINE__);
+#define PFLA(format, arg...) printf("%s %u " format "\n", __func__, __LINE__, arg);
+#else
+#define PFL()
+#define PFLA(format, arg...)
+#endif
+
 struct lvcreate_cmdline_params {
 	percent_type_t percent;
 	uint64_t size;
@@ -538,6 +546,7 @@ static int _read_mirror_and_raid_params(struct cmd_context *cmd,
 		/* Default to 2 mirrored areas if '--type mirror|raid1|raid10' */
 		lp->mirrors = seg_is_mirrored(lp) ? 2 : 1;
 
+PFLA("mirrors=%u stripes=%u", lp->mirrors, lp->stripes);
 	if (lp->stripes < 2 &&
 	    (segtype_is_raid0(lp->segtype) || segtype_is_raid10(lp->segtype)))
 		if (arg_count(cmd, stripes_ARG)) {
@@ -568,6 +577,14 @@ static int _read_mirror_and_raid_params(struct cmd_context *cmd,
 	    !segtype_is_raid0(lp->segtype) &&
 	    !segtype_is_raid10(lp->segtype)) {
 		log_error("Stripe argument cannot be used with segment type, %s",
+			  lp->segtype->name);
+		return 0;
+	}
+
+	if (arg_count(cmd, mirrors_ARG) && segtype_is_raid(lp->segtype) &&
+	    !segtype_is_raid1(lp->segtype) &&
+	    !segtype_is_raid10(lp->segtype)) {
+		log_error("Mirror argument cannot be used with segment type, %s",
 			  lp->segtype->name);
 		return 0;
 	}
