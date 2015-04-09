@@ -1019,7 +1019,7 @@ static int _convert_linear_to_raid1(struct logical_volume *lv)
 	return 1;
 }
 
-/* Reset any rebuild or reshape flags on @lv, first segment already passed to the kernel */
+/* Reset any rebuild or reshape disk flags on @lv, first segment already passed to the kernel */
 static int _reset_flags_passed_to_kernel(struct logical_volume *lv)
 {
 	int flag_cleared = 0;
@@ -1027,15 +1027,11 @@ static int _reset_flags_passed_to_kernel(struct logical_volume *lv)
 	struct lv_segment *seg = first_seg(lv);
 
 	for (s = 0; s < seg->area_count; s++) {
-		if ((seg_metalv(seg, s)->status & LV_REBUILD) ||
-		    (seg_lv(seg, s)->status & LV_REBUILD)) {
-			seg_metalv(seg, s)->status &= ~LV_REBUILD;
-			seg_lv(seg, s)->status &= ~LV_REBUILD;
-			flag_cleared = 1;
-		}
-		
-		if ((seg_lv(seg, s)->status & (LV_RESHAPE_DELTA_DISKS_PLUS|LV_RESHAPE_DELTA_DISKS_MINUS))) {
-			seg_lv(seg, s)->status &= ~(LV_RESHAPE_DELTA_DISKS_PLUS|LV_RESHAPE_DELTA_DISKS_MINUS);
+		if ((seg_metalv(seg, s)->status & (LV_REBUILD|LV_RESHAPE_DELTA_DISKS_PLUS|LV_RESHAPE_DELTA_DISKS_MINUS)) ||
+		    (seg_lv(seg, s)->status & (LV_REBUILD|LV_RESHAPE_DELTA_DISKS_PLUS|LV_RESHAPE_DELTA_DISKS_MINUS))) {
+			seg_metalv(seg, s)->status &= ~(LV_REBUILD|LV_RESHAPE_DELTA_DISKS_PLUS|LV_RESHAPE_DELTA_DISKS_MINUS);
+			seg_lv(seg, s)->status &= ~(LV_REBUILD|LV_RESHAPE_DELTA_DISKS_PLUS|LV_RESHAPE_DELTA_DISKS_MINUS);
+
 			flag_cleared = 1;
 		}
 	}
@@ -1196,8 +1192,9 @@ PFL();
 	if (reshape_disks) {
 		uint32_t new_extents = count * (lv->le_count / _data_rimages_count(seg, old_count));
 
-PFLA("lv->le_count=%u data_rimages=%u extents=%u", lv->le_count, _data_rimages_count(seg, old_count), new_extents);
+PFLA("lv->le_count=%u data_rimages=%u new_extents=%u", lv->le_count, _data_rimages_count(seg, old_count), new_extents);
 		lv->le_count += new_extents;
+		lv->size = lv->le_count * lv->vg->extent_size;
 		seg->len += new_extents;
 		seg->area_len += new_extents;
 PFLA("lv->le_count=%u", lv->le_count);
@@ -1212,11 +1209,13 @@ PFL();
 	if (!_reset_flags_passed_to_kernel(lv))
 		return 0;
 
-#if 0
 	/* Reload striped raid again after removal of flags to change size */
-	if (reshape_disks && !lv_update_and_reload_origin(lv))
-		return_0;
-#endif
+	if (reshape_disks) {
+		sleep(2);
+
+		if (!lv_update_and_reload_origin(lv))
+			return_0;
+	}
 PFL();
 	return 1;
 
@@ -1466,13 +1465,12 @@ static int _raid_remove_images(struct logical_volume *lv,
 			       const struct segment_type *segtype,
 			       uint32_t new_count, struct dm_list *pvs)
 {
-	int raid0 = segtype_is_raid0(segtype);
 	struct lv_segment *seg = first_seg(lv);
+	int raid0 = segtype_is_raid0(segtype);
+	int reshape_disks = (seg_is_striped_raid(seg) && segtype && is_same_level(seg->segtype, segtype));
+	unsigned old_count = seg->area_count;
 	struct dm_list removal_list;
 	struct lv_list *lvl;
-#if 0
-	unsigned s;
-#endif
 
 PFLA("segtype=%s new_count=%u", segtype->name, new_count);
 	dm_list_init(&removal_list);
@@ -1515,6 +1513,24 @@ PFLA("segtype=%s new_count=%u", segtype->name, new_count);
 		log_error("Relocation of areas arrays failed.");
 		return 0;
 	}
+
+
+	/* Reshape adding image component pairs -> change size accordingly */
+	if (reshape_disks) {
+		uint32_t minus_extents = (old_count - new_count) * (lv->le_count / _data_rimages_count(seg, old_count));
+
+PFLA("lv->le_count=%u data_rimages=%u minus_extents=%u", lv->le_count, _data_rimages_count(seg, old_count), minus_extents);
+		lv->le_count -= minus_extents;
+		lv->size = lv->le_count * lv->vg->extent_size;
+		seg->len -= minus_extents;
+		seg->area_len -= minus_extents;
+PFLA("lv->le_count=%u", lv->le_count);
+	}
+
+PFL();
+
+
+
 
 	seg->area_count = new_count;
 PFL();
@@ -2435,6 +2451,26 @@ static int _convert_raid0_to_striped(struct logical_volume *lv,
  * allocation of new stripes.
  */
 /* HM FIXME: CODEME TESTME */
+static int _already_reshaped(struct logical_volume *lv, const unsigned dev_count)
+{
+	char *raid_health;
+
+	if (!lv_raid_dev_health(lv, &raid_health))
+		return_0;
+
+	if (strlen(raid_health) == dev_count) {
+		unsigned s;
+
+		for (s = 0; s < strlen(raid_health); s++)
+			if (raid_health[s] != 'A')
+				return 0;
+
+		return 1;
+	}
+
+	return 0;
+}
+
 static int _convert_reshape(struct logical_volume *lv,
 			     const struct segment_type *new_segtype,
 			     const unsigned new_stripes,
@@ -2472,14 +2508,24 @@ static int _convert_reshape(struct logical_volume *lv,
 		 */
 		} else {
 			uint32_t s;
+
+			if (_already_reshaped(lv, new_stripes + seg->segtype->parity_devs)) {
+				if (!_lv_raid_change_image_count(lv, new_segtype,
+								 new_stripes + seg->segtype->parity_devs,											   allocate_pvs))
+					return 0;
+
+				update_and_reload = 0;
+
+			} else {
 PFL();
-			for (s = new_stripes; s < old_stripes; s++)
+				for (s = new_stripes; s < old_stripes; s++)
 {
 PFL();
-				seg_lv(seg, s)->status |= LV_RESHAPE_DELTA_DISKS_MINUS;
+					seg_lv(seg, s)->status |= LV_RESHAPE_DELTA_DISKS_MINUS;
 }
-			update_and_reload = 1;
-			reset_flags = 1;
+				update_and_reload = 1;
+				reset_flags = 1;
+			}
 		}
 	}
 
