@@ -1190,13 +1190,13 @@ PFL();
 PFL();
 	/* Reshape adding image component pairs -> change size accordingly */
 	if (reshape_disks) {
-		uint32_t new_extents = count * (lv->le_count / _data_rimages_count(seg, old_count));
+		uint32_t plus_extents = count * (lv->le_count / _data_rimages_count(seg, old_count));
 
-PFLA("lv->le_count=%u data_rimages=%u new_extents=%u", lv->le_count, _data_rimages_count(seg, old_count), new_extents);
-		lv->le_count += new_extents;
+PFLA("lv->le_count=%u data_rimages=%u plus_extents=%u", lv->le_count, _data_rimages_count(seg, old_count), plus_extents);
+		lv->le_count += plus_extents;
 		lv->size = lv->le_count * lv->vg->extent_size;
-		seg->len += new_extents;
-		seg->area_len += new_extents;
+		seg->len += plus_extents;
+		seg->area_len += plus_extents;
 PFLA("lv->le_count=%u", lv->le_count);
 	}
 
@@ -1211,7 +1211,7 @@ PFL();
 
 	/* Reload striped raid again after removal of flags to change size */
 	if (reshape_disks) {
-		sleep(2);
+		sleep(2); /* HM FIXME: REMOVEME: hack to allow for add/remove disk devel until out of place reshape is supported */
 
 		if (!lv_update_and_reload_origin(lv))
 			return_0;
@@ -2451,24 +2451,31 @@ static int _convert_raid0_to_striped(struct logical_volume *lv,
  * allocation of new stripes.
  */
 /* HM FIXME: CODEME TESTME */
+
+/*
+ * Compares current raid disk count of active RAID set to requested @dev_count
+ *
+ * Returns:
+ *
+ * 	0: error
+ * 	1: active dev count = @dev_count
+ * 	2: active dev count < @dev_count
+ * 	3: active dev count > @dev_count
+ *
+ */
 static int _already_reshaped(struct logical_volume *lv, const unsigned dev_count)
 {
 	char *raid_health;
+	size_t dev_active;
 
 	if (!lv_raid_dev_health(lv, &raid_health))
 		return_0;
 
-	if (strlen(raid_health) == dev_count) {
-		unsigned s;
+	dev_active = strlen(raid_health);
+	if (dev_active > dev_count)
+		return 3;
 
-		for (s = 0; s < strlen(raid_health); s++)
-			if (raid_health[s] != 'A')
-				return 0;
-
-		return 1;
-	}
-
-	return 0;
+	return (dev_active == dev_count) ? 1 : 2;
 }
 
 static int _convert_reshape(struct logical_volume *lv,
@@ -2481,9 +2488,12 @@ static int _convert_reshape(struct logical_volume *lv,
 	int reset_flags = 0;
 	struct lv_segment *seg = first_seg(lv);
 	unsigned old_stripes = _data_rimages_count(seg, seg->area_count);
+	unsigned old_dev_count = seg->area_count;
+	unsigned new_dev_count = new_stripes + seg->segtype->parity_devs;
 
+PFLA("old_dev_count=%u new_dev_count=%u", old_dev_count, new_dev_count);
 	if (seg->segtype == new_segtype &&
-	    seg->area_count - seg->segtype->parity_devs == new_stripes &&
+	    old_dev_count == new_dev_count &&
 	    seg->stripe_size == new_stripe_size) {
 		log_error("Nothing to do");
 		return 0;
@@ -2492,40 +2502,61 @@ static int _convert_reshape(struct logical_volume *lv,
 	seg->stripe_size = new_stripe_size;
 
 	/* Handle disk addition/removal reshaping */
-	if (old_stripes != new_stripes) {
-		if (old_stripes < new_stripes) {
-			if (!_lv_raid_change_image_count(lv, new_segtype, new_stripes + seg->segtype->parity_devs, allocate_pvs))
+	if (old_dev_count < new_dev_count) {
+PFL();
+		if (!_lv_raid_change_image_count(lv, new_segtype, new_dev_count, allocate_pvs))
+			return 0;
+
+		update_and_reload = 0;
+
+	/*
+ 	 * HM FIXME: I don't like the flow doing this here and in _raid_add_images on addition
+	 */
+
+	} else {
+		uint32_t s;
+
+		switch (_already_reshaped(lv, new_dev_count)) {
+		case 0:
+			/* Status retrieve error (e.g. raid set not activated) -> can't proceed */
+			return 0;
+
+		case 3:
+			/*
+			 * Disk removal reshape step 1:
+			 *
+			 * we got more disks active than requested via @new_stripes
+			 *
+			 * -> flag the ones to remove
+			 *
+			 */
+PFL();
+			for (s = new_dev_count; s < old_dev_count; s++)
+				seg_lv(seg, s)->status |= LV_RESHAPE_DELTA_DISKS_MINUS;
+
+			update_and_reload = 1;
+			reset_flags = 1;
+			break;
+
+		case 2:
+			/*
+		 	* Disk removel reshape step 2:
+		 	*
+		 	* we got the proper (smaller) amount of devices active
+		 	* for a previously finished disk removal reshape
+		 	*
+		 	* -> remove the freed up images
+		 	*
+		 	*/
+PFL();
+			if (!_lv_raid_change_image_count(lv, new_segtype, new_dev_count, allocate_pvs))
 				return 0;
 
 			update_and_reload = 0;
+			break;
 
-		/* HM FIXME:
-		 *
-		 * i don't like the flow doing this here and in _raid_add_images on addtion
-		 *
-		 * This is only step one of two: once the disks have been reshaped and thus
-		 * removed from the set, they need to be deallocated still.
-		 */
-		} else {
-			uint32_t s;
-
-			if (_already_reshaped(lv, new_stripes + seg->segtype->parity_devs)) {
-				if (!_lv_raid_change_image_count(lv, new_segtype,
-								 new_stripes + seg->segtype->parity_devs,											   allocate_pvs))
-					return 0;
-
-				update_and_reload = 0;
-
-			} else {
-PFL();
-				for (s = new_stripes; s < old_stripes; s++)
-{
-PFL();
-					seg_lv(seg, s)->status |= LV_RESHAPE_DELTA_DISKS_MINUS;
-}
-				update_and_reload = 1;
-				reset_flags = 1;
-			}
+		default:
+			return 0;
 		}
 	}
 
@@ -2986,13 +3017,13 @@ PFLA("r=%d", r);
 	}
 
 seg = first_seg(lv);
-PFLA("seg->segtype=%s new_segtype->name=%s", seg->segtype->name, new_segtype->name);
+PFLA("r=%d seg->segtype=%s seg->area_count=%u new_segtype->name=%s final_segtype=%p", r, seg->segtype->name, seg->area_count, new_segtype->name, final_segtype);
 
 	/* All the rest of the raid conversions... */
 	r = _convert_raid_to_raid(lv, new_segtype, new_stripes, new_stripe_size, allocate_pvs);
 
 seg = first_seg(lv);
-PFLA("r=%d seg->segtype=%s new_segtype->name=%s final_segtype=%p", r, seg->segtype->name, new_segtype->name, final_segtype);
+PFLA("r=%d seg->segtype=%s seg->area_count=%u new_segtype->name=%s final_segtype=%p", r, seg->segtype->name, seg->area_count, new_segtype->name, final_segtype);
 
 	/* Do the final step to convert from "raid0" to "striped" here if requested */
 	/* HM FIXME: avoid update and reload in _convert_raid_to_raid! */
