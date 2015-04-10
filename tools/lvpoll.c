@@ -14,8 +14,8 @@
 
 #include "tools.h"
 #include "polldaemon.h"
-#include "pvmove.h"
-#include "lvconvert.h"
+#include "pvmove_poll.h"
+#include "lvconvert_poll.h"
 #include "polling_ops.h"
 
 static struct poll_functions _pvmove_fns = {
