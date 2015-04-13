@@ -1528,10 +1528,6 @@ PFLA("lv->le_count=%u", lv->le_count);
 	}
 
 PFL();
-
-
-
-
 	seg->area_count = new_count;
 PFL();
 	/* Convert to linear? */
@@ -2555,7 +2551,8 @@ PFL();
 			if (!_lv_raid_change_image_count(lv, new_segtype, new_dev_count, allocate_pvs))
 				return 0;
 
-			update_and_reload = 0;
+			update_and_reload = 1;
+			reset_flags = 0;
 			break;
 
 		default:
