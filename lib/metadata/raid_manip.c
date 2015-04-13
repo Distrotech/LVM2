@@ -2463,19 +2463,20 @@ static int _convert_raid0_to_striped(struct logical_volume *lv,
  * 	3: active dev count > @dev_count
  *
  */
-static int _already_reshaped(struct logical_volume *lv, const unsigned dev_count)
+static int _reshaped_state(struct logical_volume *lv, const unsigned dev_count)
 {
 	char *raid_health;
-	size_t dev_active;
+	unsigned dev_active;
 
 	if (!lv_raid_dev_health(lv, &raid_health))
 		return_0;
 
-	dev_active = strlen(raid_health);
-	if (dev_active > dev_count)
-		return 3;
+	dev_active = (unsigned) strlen(raid_health);
 
-	return (dev_active == dev_count) ? 1 : 2;
+	if (dev_active == dev_count)
+		return 1;
+
+	return dev_active < dev_count ? 2 : 3;
 }
 
 static int _convert_reshape(struct logical_volume *lv,
@@ -2513,11 +2514,13 @@ PFL();
  	 * HM FIXME: I don't like the flow doing this here and in _raid_add_images on addition
 	 */
 
-	} else {
+	} else if (old_dev_count > new_dev_count) {
 		uint32_t s;
 
-		switch (_already_reshaped(lv, new_dev_count)) {
+PFLA("_reshaped_state() returned %d", _reshaped_state(lv, new_dev_count));
+		switch (_reshaped_state(lv, new_dev_count)) {
 		case 0:
+PFL();
 			/* Status retrieve error (e.g. raid set not activated) -> can't proceed */
 			return 0;
 
@@ -2538,7 +2541,7 @@ PFL();
 			reset_flags = 1;
 			break;
 
-		case 2:
+		case 1:
 			/*
 		 	* Disk removel reshape step 2:
 		 	*
@@ -2556,6 +2559,8 @@ PFL();
 			break;
 
 		default:
+PFL();
+			log_error(INTERNAL_ERROR "Bad return provided to %s.", __func__);
 			return 0;
 		}
 	}
