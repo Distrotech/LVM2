@@ -11,6 +11,9 @@
 
 . lib/inittest
 
+# okozina:??? (there's some interaction between lvmpolld and lvconvert --repair i'm afraid)
+test -e LOCAL_LVMPOLLD && skip
+
 which mkfs.ext2 || skip
 aux mirror_recovery_works || skip
 

@@ -11,6 +11,9 @@
 
 . lib/inittest
 
+# okozina:???
+test -e LOCAL_LVMPOLLD && skip
+
 flatten() {
 	cat > flatten.config
 	for s in `egrep '^[a-z]+ {$' flatten.config | sed -e s,{$,,`; do

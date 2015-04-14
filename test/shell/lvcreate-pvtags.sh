@@ -11,6 +11,9 @@
 
 . lib/inittest
 
+# okozina:???
+test -e LOCAL_LVMPOLLD && skip
+
 aux prepare_pvs 3
 aux lvmconf 'allocation/maximise_cling = 0' \
 	    'allocation/mirror_logs_require_separate_pvs = 1'

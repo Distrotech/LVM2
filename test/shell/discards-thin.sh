@@ -15,6 +15,9 @@
 
 . lib/inittest
 
+# unless we test merging...
+test -e LOCAL_LVMPOLLD && skip
+
 #
 # Main
 #

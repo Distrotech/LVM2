@@ -11,6 +11,9 @@
 
 . lib/inittest
 
+# okozina:???
+test -e LOCAL_LVMPOLLD && skip
+
 extend() {
 	lvextend --use-policies --config "activation { snapshot_autoextend_threshold = $1 }" $vg/snap
 }

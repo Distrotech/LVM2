@@ -16,6 +16,9 @@
 
 . lib/inittest
 
+# perhaps remove this condition due to lvm dumpconfig cmd
+test -e LOCAL_LVMPOLLD && skip
+
 aux prepare_pvs 5
 get_devs
 

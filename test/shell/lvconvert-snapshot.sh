@@ -14,6 +14,9 @@
 
 . lib/inittest
 
+# no merge
+test -e LOCAL_LVMPOLLD && skip
+
 aux prepare_pvs 1
 
 vgcreate -s 1k $vg $(cat DEVICES)

@@ -11,6 +11,9 @@
 
 . lib/inittest
 
+# okozina:???
+test -e LOCAL_LVMPOLLD && skip
+
 aux prepare_vg 3
 
 pvchange --metadataignore y "$dev1"

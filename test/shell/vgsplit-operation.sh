@@ -16,6 +16,9 @@ export LVM_TEST_LVMETAD_DEBUG_OPTS=${LVM_TEST_LVMETAD_DEBUG_OPTS-}
 
 . lib/inittest
 
+# okozina:???
+test -e LOCAL_LVMPOLLD && skip
+
 COMM() {
 	LAST_TEST="$@"
 }
