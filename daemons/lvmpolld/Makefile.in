@@ -39,11 +39,7 @@ CFLAGS += $(DAEMON_CFLAGS)
 lvmpolld: $(OBJECTS) $(top_builddir)/libdaemon/client/libdaemonclient.a \
 		    $(top_builddir)/libdaemon/server/libdaemonserver.a
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(OBJECTS) \
-	$(DL_LIBS) $(LVMLIBS) $(LIBS) -rdynamic
-
-lvmpolld-testclient: lvmpolld-testclient.o $(top_builddir)/libdaemon/client/libdaemonclient.a
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ lvmpolld-testclient.o \
-	$(DL_LIBS) $(LVMLIBS) $(LIBS) -rdynamic
+	$(DL_LIBS) $(LVMLIBS) $(LIBS)
 
 install_lvmpolld: lvmpolld
 	$(INSTALL_PROGRAM) -D $< $(sbindir)/$(<F)
