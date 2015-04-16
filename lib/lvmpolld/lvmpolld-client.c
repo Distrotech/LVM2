@@ -272,7 +272,7 @@ int lvmpolld_request_info(const struct poll_operation_id *id, const struct daemo
 	*finished = info.finished;
 
 	if (info.error)
-		return 0;
+		return_0;
 
 	if (info.finished) {
 		if (info.cmd_signal)
