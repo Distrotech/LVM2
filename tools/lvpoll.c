@@ -97,7 +97,7 @@ static int poll_lv(struct cmd_context *cmd, const char *lv_name)
 int lvpoll(struct cmd_context *cmd, int argc, char **argv)
 {
 	if (!arg_count(cmd, polloperation_ARG)) {
-		log_error("--poll-operation parameter is mandatory");
+		log_error("--polloperation parameter is mandatory");
 		return EINVALID_CMD_LINE;
 	}
 
@@ -110,9 +110,6 @@ int lvpoll(struct cmd_context *cmd, int argc, char **argv)
 		log_error("Provide full VG/LV name");
 		return EINVALID_CMD_LINE;
 	}
-
-	log_print_unless_silent("LVM_SYSTEM_DIR=%s", getenv("LVM_SYSTEM_DIR") ?: "<not set>");
-	log_verbose("cmdline: %s", cmd->cmd_line);
 
 	return poll_lv(cmd, argv[0]);
 }
