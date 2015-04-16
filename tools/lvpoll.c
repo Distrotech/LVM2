@@ -89,7 +89,7 @@ static int poll_lv(struct cmd_context *cmd, const char *lv_name)
 	};
 
 	if (!_set_daemon_parms(cmd, &parms))
-		return EINVALID_CMD_LINE;
+		return_EINVALID_CMD_LINE;
 
 	return wait_for_single_lv(cmd, &id, &parms) ? ECMD_PROCESSED : ECMD_FAILED;
 }
