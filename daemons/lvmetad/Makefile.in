@@ -16,9 +16,9 @@ top_srcdir = @top_srcdir@
 top_builddir = @top_builddir@
 
 SOURCES = lvmetad-core.c
-#SOURCES2 = testclient.c
+SOURCES2 = testclient.c
 
-TARGETS = lvmetad
+TARGETS = lvmetad lvmetad-testclient
 
 .PHONY: install_lvmetad
 
@@ -33,17 +33,13 @@ LVMLIBS = -ldaemonserver $(LVMINTERNAL_LIBS) -ldevmapper
 
 LIBS += $(PTHREAD_LIBS)
 
-LDFLAGS += -L$(top_builddir)/libdaemon/server $(DAEMON_LDFLAGS)
+LDFLAGS += -L$(top_builddir)/libdaemon/server $(EXTRA_EXEC_LDFLAGS)
 CLDFLAGS += -L$(top_builddir)/libdaemon/server
-CFLAGS += $(DAEMON_CFLAGS)
+CFLAGS += $(EXTRA_EXEC_CFLAGS)
 
 lvmetad: $(OBJECTS) $(top_builddir)/libdaemon/client/libdaemonclient.a \
 		    $(top_builddir)/libdaemon/server/libdaemonserver.a
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(OBJECTS) \
-	$(DL_LIBS) $(LVMLIBS) $(LIBS) -rdynamic
-
-lvmetad-testclient: testclient.o $(top_builddir)/libdaemon/client/libdaemonclient.a
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ testclient.o \
 	$(DL_LIBS) $(LVMLIBS) $(LIBS) -rdynamic
 
 # TODO: No idea. No idea how to test either.
