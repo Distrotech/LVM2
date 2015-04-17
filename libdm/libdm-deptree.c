@@ -2381,10 +2381,12 @@ PFLA("seg->area_count=%u", seg->area_count);
 	if (seg->delta_disks)
 		EMIT_PARAMS(pos, " delta_disks %d", seg->delta_disks);
 
+PFLA("seg->rebuilds=%X", seg->rebuilds);
 	for (i = 0; i < area_count; i++)
 		if (seg->rebuilds & (1ULL << i))
 			EMIT_PARAMS(pos, " rebuild %u", i);
 
+PFLA("seg->writemostly=%X", seg->writemostly);
 	for (i = 0; i < area_count; i++)
 		if (seg->writemostly & (1ULL << i))
 			EMIT_PARAMS(pos, " write_mostly %u", i);

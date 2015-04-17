@@ -21,6 +21,7 @@
 #include "activate.h"
 #include "lv_alloc.h"
 #include "lvm-string.h"
+#include "lvm-signal.h"
 
 #if 1
 #include "dump.h"
@@ -1054,6 +1055,10 @@ static int _reset_flags_passed_to_kernel(struct logical_volume *lv)
  * absolute @new_count using @pvs to allocate from
  *
  */
+static int _raid_extract_images(struct logical_volume *lv, uint32_t new_count,
+			        struct dm_list *target_pvs, int shift,
+			        struct dm_list *extracted_meta_lvs,
+			        struct dm_list *extracted_data_lvs);
 static int _raid_add_images(struct logical_volume *lv,
 			    const struct segment_type *segtype,
 			    uint32_t new_count, struct dm_list *pvs)
@@ -1143,6 +1148,7 @@ PFL();
 	}
 PFL();
 	/* Metadata LVs must be cleared before being added to the array */
+	log_debug_metadata("Clearing newly allocated metadata LVs");
 	if (!_clear_lvs(&meta_lvs))
 		goto fail;
 
@@ -1180,13 +1186,13 @@ PFL();
 			seg_lv(seg, s)->status |= LV_RESHAPE_DELTA_DISKS_PLUS;
 		}
 	}
-
 PFL();
 	if (!linear)
 		seg->segtype = segtype;
 
 	if (!lv_update_and_reload_origin(lv))
-		return_0;
+		goto fail;
+
 PFL();
 	/* Reshape adding image component pairs -> change size accordingly */
 	if (reshape_disks) {
@@ -2476,15 +2482,15 @@ static int _reshaped_state(struct logical_volume *lv, const unsigned dev_count)
 }
 
 static int _convert_reshape(struct logical_volume *lv,
-			     const struct segment_type *new_segtype,
-			     const unsigned new_stripes,
-			     const unsigned new_stripe_size,
-		 	     struct dm_list *allocate_pvs)
+			    const struct segment_type *new_segtype,
+			    int yes, int force,
+			    const unsigned new_stripes,
+			    const unsigned new_stripe_size,
+		 	    struct dm_list *allocate_pvs)
 {
 	int update_and_reload = 1;
 	int reset_flags = 0;
 	struct lv_segment *seg = first_seg(lv);
-	unsigned old_stripes = _data_rimages_count(seg, seg->area_count);
 	unsigned old_dev_count = seg->area_count;
 	unsigned new_dev_count = new_stripes + seg->segtype->parity_devs;
 
@@ -2496,11 +2502,42 @@ PFLA("old_dev_count=%u new_dev_count=%u", old_dev_count, new_dev_count);
 		return 0;
 	}
 
+	if (new_stripes < 2) {
+		log_error("Too few stripes requested");
+		return 0;
+	}
+
 	seg->stripe_size = new_stripe_size;
 
 	/* Handle disk addition/removal reshaping */
 	if (old_dev_count < new_dev_count) {
 PFL();
+		if (!yes && yes_no_prompt("Do you really want to add stripes to %s/%s extending it? [y/n]: ",
+				  lv->vg->name, lv->name) == 'n') {
+			log_error("Logical volume %s/%s NOT converted to extend", lv->vg->name, lv->name);
+			return 0;
+		}
+		if (sigint_caught())
+			return_0;
+
+		switch (_reshaped_state(lv, old_dev_count)) {
+		case 0:
+PFL();
+			/* Status retrieve error (e.g. raid set not activated) -> can't proceed */
+			return 0;
+		case 1:
+			break;
+		case 2:
+		case 3:
+			log_error(INTERNAL_ERROR "Device count is incorrrect. "
+						 "Forgotten \"lvconvert --stripes ...\" to remove images after reshape?");
+			return 0;
+
+		default:
+			log_error(INTERNAL_ERROR "Bad return provided to %s.", __func__);
+			return 0;
+		}
+
 		if (!_lv_raid_change_image_count(lv, new_segtype, new_dev_count, allocate_pvs))
 			return 0;
 
@@ -2513,7 +2550,6 @@ PFL();
 	} else if (old_dev_count > new_dev_count) {
 		uint32_t s;
 
-PFLA("_reshaped_state() returned %d", _reshaped_state(lv, new_dev_count));
 		switch (_reshaped_state(lv, new_dev_count)) {
 		case 0:
 PFL();
@@ -2530,6 +2566,14 @@ PFL();
 			 *
 			 */
 PFL();
+			if (!yes && yes_no_prompt("Do you really want to remove stripes from %s/%s reducing it? [y/n]: ",
+					  lv->vg->name, lv->name) == 'n') {
+				log_error("Logical volume %s/%s NOT converted to reduce", lv->vg->name, lv->name);
+				return 0;
+			}
+			if (sigint_caught())
+				return_0;
+
 			for (s = new_dev_count; s < old_dev_count; s++)
 				seg_lv(seg, s)->status |= LV_RESHAPE_DELTA_DISKS_MINUS;
 
@@ -2551,7 +2595,17 @@ PFL();
 			if (!_lv_raid_change_image_count(lv, new_segtype, new_dev_count, allocate_pvs))
 				return 0;
 
+#if 1
+			if (!vg_write(lv->vg) || !vg_commit(lv->vg)) {
+				log_error("Failed to write reshaped %s/%s", lv->vg->name, lv->name);
+				return 0;
+			}
+
+			backup(lv->vg);
+			update_and_reload = 0;
+#else
 			update_and_reload = 1;
+#endif
 			reset_flags = 0;
 			break;
 
@@ -2568,7 +2622,7 @@ PFLA("new_segtype=%s seg->area_count=%u", new_segtype->name, seg->area_count);
 	if (update_and_reload) {
 		if (!lv_update_and_reload(lv))
 			return_0;
-
+PFL();
 		/* HM FIXME: i don't like the flow doing this here and in _raid_add_images on addition of component images */
 		/*
 	 	 * Now that the 'RESHAPE_DELTA_DISKS_MINUS' has made its way to
@@ -2577,6 +2631,7 @@ PFLA("new_segtype=%s seg->area_count=%u", new_segtype->name, seg->area_count);
 	 	 */
 		if (reset_flags && !_reset_flags_passed_to_kernel(lv))
 			return 0;
+PFL();
 	}
 
 	return 1;
@@ -2651,6 +2706,7 @@ PFLA("seg->segtype=%s segtyoe->name=%s", seg->segtype->name, segtype->name);
 
 static int _raid_level_up(struct logical_volume *lv,
 			  const struct segment_type *segtype,
+			  int yes, int force,
 			  struct dm_list *allocate_pvs)
 {
 	return _raid_takeover(lv, 1, segtype, allocate_pvs, "raid1 set %s/%s has to have 2 operational disks.");
@@ -2659,8 +2715,19 @@ static int _raid_level_up(struct logical_volume *lv,
 	/* Process one level down takeover on @lv to @segtype */
 static int _raid_level_down(struct logical_volume *lv,
 			    const struct segment_type *segtype,
+			    int yes, int force,
 			    struct dm_list *allocate_pvs)
 {
+	if (!yes && segtype_is_raid0(segtype)) {
+		if (yes_no_prompt("Do you really want to convert %s/%s with type %s to %s loosing redundancy? [y/n]: ",
+				  lv->vg->name, lv->name, first_seg(lv)->segtype->name, segtype->name) == 'n') {
+			log_error("Logical volume %s/%s NOT converted", lv->vg->name, lv->name);
+			return 0;
+		}
+		if (sigint_caught())
+			return_0;
+	}
+
 	return _raid_takeover(lv, 0, segtype, allocate_pvs, "raid4/5 set %s/%s has to have 2 disks and be degraded.");
 }
 
@@ -2829,6 +2896,7 @@ static const struct segment_type *_adjust_segtype(struct logical_volume *lv,
  */
 static int _convert_raid_to_raid(struct logical_volume *lv,
 				 const struct segment_type *requested_segtype,
+				 int yes, int force,
 				 const unsigned new_stripes,
 				 const unsigned new_stripe_size,
 				 struct dm_list *allocate_pvs)
@@ -2887,7 +2955,7 @@ PFLA("stripes=%u stripe_size=%u seg->stripe_size=%u", stripes, stripe_size, seg-
 	 */
 	if (is_same_level(seg->segtype, new_segtype)) {
 PFLA("stripes=%u stripe_size=%u seg->stripe_size=%u", stripes, stripe_size, seg->stripe_size);
-		return _convert_reshape(lv, new_segtype, stripes, stripe_size, allocate_pvs);
+		return _convert_reshape(lv, new_segtype, yes, force, stripes, stripe_size, allocate_pvs);
 	}
 
 	/*
@@ -2915,7 +2983,7 @@ PFLA("seg->segtype=%s new_segtype->name=%s", seg->segtype->name, new_segtype->na
 PFLA("seg->segtype=%s new_segtype->name=%s", seg->segtype->name, new_segtype->name);
 
 	if (!(is_level_up(seg->segtype, new_segtype) ?
-	      _raid_level_up : _raid_level_down)(lv, new_segtype, allocate_pvs))
+	      _raid_level_up : _raid_level_down)(lv, new_segtype, yes, force, allocate_pvs))
 		return 0;
 PFLA("seg->segtype=%s new_segtype->name=%s", seg->segtype->name, new_segtype->name);
 
@@ -2941,6 +3009,7 @@ PFLA("seg->segtype=%s new_segtype->name=%s", seg->segtype->name, new_segtype->na
  */
 int lv_raid_convert(struct logical_volume *lv,
 		    const struct segment_type *new_segtype,
+		    int yes, int force,
 		    const unsigned new_stripes,
 		    const unsigned new_stripe_size,
 		    struct dm_list *allocate_pvs)
@@ -2983,6 +3052,9 @@ PFL();
 		return 0;
 	}
 
+	if (!archive(lv->vg))
+		return_0;
+
 	/* Mirror -> RAID1 conversion */
 	if (seg_is_mirror(seg) && segtype_is_raid1(new_segtype))
 		return _convert_mirror_to_raid1(lv, new_segtype);
@@ -3010,6 +3082,15 @@ PFLA("r=%d", r);
 	} else if (segtype_is_striped(new_segtype)) {
 		if (seg_is_raid0(seg))
 			return _convert_raid0_to_striped(lv, new_segtype);
+		else if (!yes) {
+			if (yes_no_prompt("Do you really want to convert %s/%s with type %s to %s loosing redundancy? [y/n]: ",
+					  lv->vg->name, lv->name, seg->segtype->name, new_segtype->name) == 'n') {
+				log_error("Logical volume %s/%s NOT converted", lv->vg->name, lv->name);
+				return 0;
+			}
+			if (sigint_caught())
+				return_0;
+		}
 
 		/* Memorize the final "striped" segment type */
 		final_segtype = new_segtype;
@@ -3018,14 +3099,8 @@ PFLA("r=%d", r);
 		new_segtype = raid0_segtype;
 	}
 
-seg = first_seg(lv);
-PFLA("r=%d seg->segtype=%s seg->area_count=%u new_segtype->name=%s final_segtype=%p", r, seg->segtype->name, seg->area_count, new_segtype->name, final_segtype);
-
 	/* All the rest of the raid conversions... */
-	r = _convert_raid_to_raid(lv, new_segtype, new_stripes, new_stripe_size, allocate_pvs);
-
-seg = first_seg(lv);
-PFLA("r=%d seg->segtype=%s seg->area_count=%u new_segtype->name=%s final_segtype=%p", r, seg->segtype->name, seg->area_count, new_segtype->name, final_segtype);
+	r = _convert_raid_to_raid(lv, new_segtype, yes, force, new_stripes, new_stripe_size, allocate_pvs);
 
 	/* Do the final step to convert from "raid0" to "striped" here if requested */
 	/* HM FIXME: avoid update and reload in _convert_raid_to_raid! */
@@ -3144,6 +3219,26 @@ static int _avoid_pvs_with_other_images_of_lv(struct logical_volume *lv, struct 
 	return for_each_sub_lv(lv, _avoid_pvs_of_lv, allocate_pvs);
 }
 
+/* Helper fn to generate LV names and set segment area lv */
+static int _generate_name_and_set_segment(struct logical_volume *lv,
+					  uint32_t s, uint32_t sd,
+					  struct dm_list *lvs, char **tmp_names)
+{
+	struct lv_segment *raid_seg = first_seg(lv);
+	struct lv_list *lvl = dm_list_item(dm_list_first(lvs), struct lv_list);
+
+	dm_list_del(&lvl->list);
+	if (!(tmp_names[sd] = _generate_raid_name(lv, s == sd ? "rmeta" : "rimage", s)))
+		return_0;
+	if (!set_lv_segment_area_lv(raid_seg, s, lvl->lv, 0, lvl->lv->status)) {
+		log_error("Failed to add %s to %s", lvl->lv->name, lv->name);
+		return 0;
+	}
+
+	lv_set_hidden(lvl->lv);
+	return 1;
+}
+
 /*
  * lv_raid_replace
  * @lv
@@ -3169,9 +3264,9 @@ int lv_raid_replace(struct logical_volume *lv,
 	dm_list_init(&new_data_lvs);
 
 	/* Replacement for raid0 would request data loss */
-	if (seg_is_raid0(raid_seg)) {
-		log_error("Replacement of devices in %s/%s raid0 LV prohibited.",
-			  lv->vg->name, lv->name);
+	if (seg_is_raid0(raid_seg) || seg_is_raid0_meta(raid_seg)) {
+		log_error("Replacement of devices in %s/%s %s LV prohibited.",
+			  lv->vg->name, lv->name, raid_seg->segtype->name);
 		return 0;
 	}
 
@@ -3353,37 +3448,16 @@ try_again:
 
 		if ((seg_type(raid_seg, s) == AREA_UNASSIGNED) &&
 		    (seg_metatype(raid_seg, s) == AREA_UNASSIGNED)) {
-			/* Adjust the new metadata LV name */
-			lvl = dm_list_item(dm_list_first(&new_meta_lvs),
-					   struct lv_list);
-			dm_list_del(&lvl->list);
-			if (!(tmp_names[s] = _generate_raid_name(lv, "rmeta", s)))
-				return_0;
-			if (!set_lv_segment_area_lv(raid_seg, s, lvl->lv, 0,
-						    lvl->lv->status)) {
-				log_error("Failed to add %s to %s",
-					  lvl->lv->name, lv->name);
+			if (!_generate_name_and_set_segment(lv, s, s,  &new_meta_lvs, tmp_names) ||
+			    !_generate_name_and_set_segment(lv, s, sd, &new_data_lvs, tmp_names))
 				return 0;
-			}
-			lv_set_hidden(lvl->lv);
-
-			/* Adjust the new data LV name */
-			lvl = dm_list_item(dm_list_first(&new_data_lvs),
-					   struct lv_list);
-			dm_list_del(&lvl->list);
-			if (!(tmp_names[sd] = _generate_raid_name(lv, "rimage", s)))
-				return_0;
-			if (!set_lv_segment_area_lv(raid_seg, s, lvl->lv, 0,
-						    lvl->lv->status)) {
-				log_error("Failed to add %s to %s",
-					  lvl->lv->name, lv->name);
-				return 0;
-			}
-			lv_set_hidden(lvl->lv);
 		} else
 			tmp_names[s] = tmp_names[sd] = NULL;
 	}
 
+#if 0
+dump_lv("", lv);
+#endif
 	if (!lv_update_and_reload_origin(lv))
 		return_0;
 
@@ -3401,6 +3475,9 @@ try_again:
 		}
 	}
 
+#if 0
+dump_lv("", lv);
+#endif
 	/* FIXME: will this discontinue a running rebuild of the replaced legs? */
 	/* HM: no, because md will restart based on the recovery_cp offset in the superblock */
 	if (!lv_update_and_reload_origin(lv))

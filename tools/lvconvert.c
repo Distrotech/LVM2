@@ -1989,7 +1989,7 @@ printf("%s %u stripes=%u stripe_size=%u\n", __func__, __LINE__, stripes, stripe_
 		if (seg_is_striped(seg))
 			seg->region_size = lp->region_size;
 
-		return lv_raid_convert(lv, lp->segtype, stripes, stripe_size, lp->pvh);
+		return lv_raid_convert(lv, lp->segtype, lp->yes, lp->force, stripes, stripe_size, lp->pvh);
 	}
 
 	if (arg_count(cmd, replace_ARG))

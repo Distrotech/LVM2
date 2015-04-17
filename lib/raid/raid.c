@@ -25,6 +25,14 @@
 #include "metadata.h"
 #include "lv_alloc.h"
 
+#if 1
+#define PFL() printf("%s %u\n", __func__, __LINE__);
+#define PFLA(format, arg...) printf("%s %u " format "\n", __func__, __LINE__, arg);
+#else
+#define PFL()
+#define PFLA(format, arg...)
+#endif
+
 static void _raid_display(const struct lv_segment *seg)
 {
 	unsigned s;
@@ -222,6 +230,7 @@ static int _raid_add_target_line(struct dev_manager *dm __attribute__((unused)),
 	}
 
 	if (!(seg_is_raid0(seg) || seg_is_raid0_meta(seg))) {
+PFL();
 		if (!seg->region_size) {
 			log_error("Missing region size for raid segment in %s.",
 				  seg_lv(seg, 0)->name);
@@ -231,6 +240,7 @@ static int _raid_add_target_line(struct dev_manager *dm __attribute__((unused)),
 		for (s = 0; s < seg->area_count; s++) {
 			uint64_t status = seg_lv(seg, s)->status;
 
+PFLA("lv=%s status=%X", seg_lv(seg, s)->name, status);
 			if (status & LV_REBUILD)
 				rebuilds |= 1ULL << s;
 			if (status & LV_RESHAPE_DELTA_DISKS_PLUS) {
@@ -283,6 +293,8 @@ static int _raid_add_target_line(struct dev_manager *dm __attribute__((unused)),
 	if (!seg_is_raid0(seg)) {
 		params.region_size = seg->region_size;
 		params.rebuilds = rebuilds;
+PFLA("params.rebuilds=%X", params.rebuilds);
+PFLA("params.writemostly=%X", params.writemostly);
 		params.min_recovery_rate = seg->min_recovery_rate;
 		params.max_recovery_rate = seg->max_recovery_rate;
 		params.delta_disks = delta_disks;
