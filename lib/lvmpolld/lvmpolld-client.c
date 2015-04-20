@@ -78,57 +78,74 @@ void lvmpolld_disconnect(void)
 	}
 }
 
+static void _process_error_response(daemon_reply rep)
+{
+	if (!strcmp(daemon_reply_str(rep, "response", ""), LVMPD_RESP_FAILED))
+		log_error("lvmpolld failed to process a request. The reason was: %s.",
+			  daemon_reply_str(rep, "reason", "<empty>"));
+	else if (!strcmp(daemon_reply_str(rep, "response", ""), LVMPD_RESP_EINVAL))
+		log_error("lvmpolld couldn't handle a request. "
+			  "It might be due to daemon internal state. The reason was: %s.",
+			  daemon_reply_str(rep, "reason", "<empty>"));
+	else
+		log_error("Unexpected response %s. The reason: %s.",
+			  daemon_reply_str(rep, "response", "<empty>"),
+			  daemon_reply_str(rep, "reason", "<empty>"));
+
+	log_print_unless_silent("For more detailed information see lvmpolld log file.");
+}
+
 static struct progress_info _request_progress_info(const char *uuid, unsigned abort)
 {
-	daemon_reply repl;
+	daemon_reply rep;
 	const char *e = getenv("LVM_SYSTEM_DIR");
 	struct progress_info ret = { .error = 1, .finished = 1 };
 	daemon_request req = daemon_request_make(LVMPD_REQ_PROGRESS);
 
 	if (!daemon_request_extend(req, LVMPD_PARM_LVID " = %s", uuid, NULL)) {
-		log_error("failed to create " LVMPD_REQ_PROGRESS " request");
+		log_error("Failed to create " LVMPD_REQ_PROGRESS " request.");
 		goto out_req;
 	}
 
 	if (abort &&
 	    !daemon_request_extend(req, LVMPD_PARM_ABORT " = %d", abort, NULL)) {
-		log_error("failed to create " LVMPD_REQ_PROGRESS " request");
+		log_error("Failed to create " LVMPD_REQ_PROGRESS " request.");
 		goto out_req;
 	}
 
 	if (e &&
 	    !(daemon_request_extend(req, LVMPD_PARM_SYSDIR " = %s",
 				    e, NULL))) {
-		log_error("failed to create " LVMPD_REQ_PROGRESS " request");
+		log_error("Failed to create " LVMPD_REQ_PROGRESS " request.");
 		goto out_req;
 	}
 
-	repl = daemon_send(_lvmpolld, req);
-	if (repl.error) {
-		log_error("failed to process request/response to/from lvmpolld");
-		goto out_repl;
+	rep = daemon_send(_lvmpolld, req);
+	if (rep.error) {
+		log_error("Failed to process request with error %s (errno: %d).",
+			  strerror(rep.error), rep.error);
+		goto out_rep;
 	}
 
-	if (!strcmp(daemon_reply_str(repl, "response", ""), LVMPD_RESP_IN_PROGRESS)) {
+	if (!strcmp(daemon_reply_str(rep, "response", ""), LVMPD_RESP_IN_PROGRESS)) {
 		ret.finished = 0;
 		ret.error = 0;
-	} else if (!strcmp(daemon_reply_str(repl, "response", ""), LVMPD_RESP_FINISHED)) {
-		if (!strcmp(daemon_reply_str(repl, "reason", ""), LVMPD_REAS_SIGNAL))
-			ret.cmd_signal = daemon_reply_int(repl, LVMPD_PARM_VALUE, 0);
+	} else if (!strcmp(daemon_reply_str(rep, "response", ""), LVMPD_RESP_FINISHED)) {
+		if (!strcmp(daemon_reply_str(rep, "reason", ""), LVMPD_REAS_SIGNAL))
+			ret.cmd_signal = daemon_reply_int(rep, LVMPD_PARM_VALUE, 0);
 		else
-			ret.cmd_retcode = daemon_reply_int(repl, LVMPD_PARM_VALUE, -1);
+			ret.cmd_retcode = daemon_reply_int(rep, LVMPD_PARM_VALUE, -1);
 		ret.error = 0;
-	} else if (!strcmp(daemon_reply_str(repl, "response", ""), LVMPD_RESP_NOT_FOUND)) {
-		log_verbose("lvmpolld: no polling operation in progress regarding LV %s", uuid);
+	} else if (!strcmp(daemon_reply_str(rep, "response", ""), LVMPD_RESP_NOT_FOUND)) {
+		log_verbose("No polling operation in progress regarding LV %s.", uuid);
 		ret.error = 0;
-	} else if (!strcmp(daemon_reply_str(repl, "response", ""), LVMPD_RESP_FAILED))
-		log_error("failed to receive progress data: %s",
-			  daemon_reply_str(repl, "reason", "<empty>"));
-	else
-		log_error("Unexpected lvmpolld response: %s",
-			  daemon_reply_str(repl, "response", ""));
-out_repl:
-	daemon_reply_destroy(repl);
+	} else {
+		_process_error_response(rep);
+		stack;
+	}
+
+out_rep:
+	daemon_reply_destroy(rep);
 out_req:
 	daemon_request_destroy(req);
 
@@ -156,7 +173,7 @@ static int _process_poll_init(const struct cmd_context *cmd, const char *poll_ty
 		return r;
 
 	if (snprintf(str, INTERV_SIZE, "%u", parms->interval) >= INTERV_SIZE) {
-		log_warn("interval string conversion got truncated");
+		log_warn("Interval string conversion got truncated.");
 		str[INTERV_SIZE - 1] = '\0';
 	}
 
@@ -167,43 +184,46 @@ static int _process_poll_init(const struct cmd_context *cmd, const char *poll_ty
 					LVMPD_PARM_INTERVAL " = %s", str,
 					"cmdline = %s", cmd->cmd_line, /* FIXME: debug param only */
 					NULL)) {
-		log_error("failed to create %s request", poll_type);
+		log_error("Failed to create %s request.", poll_type);
 		goto out_req;
 	}
 
 	if (parms->aborting &&
 	    !(daemon_request_extend(req, LVMPD_PARM_ABORT " = %d", parms->aborting, NULL))) {
-		log_error("failed to create %s request" , poll_type);
+		log_error("Failed to create %s request." , poll_type);
 		goto out_req;
 	}
 
 	if (cmd->handles_missing_pvs &&
 	    !(daemon_request_extend(req, LVMPD_PARM_HANDLE_MISSING_PVS " = %d",
 				    cmd->handles_missing_pvs, NULL))) {
-		log_error("failed to create %s request" , poll_type);
+		log_error("Failed to create %s request." , poll_type);
 		goto out_req;
 	}
 
 	if (e &&
 	    !(daemon_request_extend(req, LVMPD_PARM_SYSDIR " = %s",
 				    e, NULL))) {
-		log_error("failed to create %s request" , poll_type);
+		log_error("Failed to create %s request." , poll_type);
 		goto out_req;
 	}
 
 	rep = daemon_send(_lvmpolld, req);
 
+	if (rep.error) {
+		log_error("Failed to process request with error %s (errno: %d).",
+			  strerror(rep.error), rep.error);
+		goto out_rep;
+	}
+
 	if (!strcmp(daemon_reply_str(rep, "response", ""), LVMPD_RESP_OK))
 		r = 1;
 	else {
-		if (rep.error)
-			log_error("failed to process request with error %s (errno: %d)",
-				  strerror(rep.error), rep.error);
-		else
-			log_error("failed to initialise lvmpolld operation: %s. The reason: %s",
-				  poll_type, daemon_reply_str(rep, "reason", ""));
+		_process_error_response(rep);
+		stack;
 	}
 
+out_rep:
 	daemon_reply_destroy(rep);
 out_req:
 	daemon_request_destroy(req);
@@ -233,22 +253,22 @@ int lvmpolld_poll_init(const struct cmd_context *cmd, const struct poll_operatio
 	}
 
 	if (parms->lv_type & PVMOVE) {
-		log_verbose("lvmpolld: pvmove%s", parms->aborting ? "--abort" : "");
+		log_verbose("lvmpolld: requesting pvmove%s", parms->aborting ? " abort." : ".");
 		r =  _process_poll_init(cmd, LVMPD_REQ_PVMOVE, id, parms);
 	} else if (parms->lv_type & CONVERTING) {
-		log_verbose("lvmpolld: convert mirror");
+		log_verbose("lvmpolld: requesting convert mirror.");
 		r =  _process_poll_init(cmd, LVMPD_REQ_CONVERT, id, parms);
 	} else if (parms->lv_type & MERGING) {
 		if (parms->lv_type & SNAPSHOT) {
-			log_verbose("lvmpolld: Merge snapshot");
+			log_verbose("lvmpolld: requesting snapshot merge.");
 			r =  _process_poll_init(cmd, LVMPD_REQ_MERGE, id, parms);
 		}
 		else if (parms->lv_type & THIN_VOLUME) {
-			log_verbose("lvmpolld: Merge thin snapshot");
+			log_verbose("lvmpolld: thin snapshot merge.");
 			r = _process_poll_init(cmd, LVMPD_REQ_MERGE_THIN, id, parms);
 		}
 		else {
-			log_error(INTERNAL_ERROR "Unsupported poll operation");
+			log_error(INTERNAL_ERROR "Unsupported poll operation.");
 		}
 	} else
 		log_error(INTERNAL_ERROR "Unsupported poll operation");
@@ -276,13 +296,13 @@ int lvmpolld_request_info(const struct poll_operation_id *id, const struct daemo
 
 	if (info.finished) {
 		if (info.cmd_signal)
-			log_error("lvmpolld: polling command got terminated by signal (%d)",
+			log_error("Polling command got terminated by signal (%d).",
 				  info.cmd_signal);
 		else if (info.cmd_retcode)
-			log_error("lvmpolld: polling command exited with return code: %d",
+			log_error("Polling command exited with return code: %d.",
 				  info.cmd_retcode);
 		else  {
-			log_verbose("lvmpolld: polling finished successfully");
+			log_verbose("Polling finished successfully.");
 			ret = 1;
 		}
 	} else
