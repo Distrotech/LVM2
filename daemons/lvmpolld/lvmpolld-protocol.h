@@ -39,6 +39,7 @@
 #define LVMPD_RESP_FAILED	"failed"
 #define LVMPD_RESP_FINISHED	"finished"
 #define LVMPD_RESP_IN_PROGRESS	"in_progress"
+#define LVMPD_RESP_EINVAL	"invalid"
 #define LVMPD_RESP_NOT_FOUND	"not_found"
 #define LVMPD_RESP_OK		"OK"
 

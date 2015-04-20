@@ -78,11 +78,11 @@ const char **cmdargv_ctr(const lvmpolld_lv_t *pdlv, const char *lvm_binary, unsi
 
 	/* pass handle-missing-pvs. used by mirror polling operation */
 	if (handle_missing_pvs &&
-	    !add_to_cmd_arr(&cmd_argv, "--handle-missing-pvs", &i, MIN_ARGV_SIZE))
+	    !add_to_cmd_arr(&cmd_argv, "--handlemissingpvs", &i, MIN_ARGV_SIZE))
 		goto err;
 
 	/* one of: "convert", "pvmove", "merge", "merge_thin" */
-	if (!add_to_cmd_arr(&cmd_argv, "--poll-operation", &i, MIN_ARGV_SIZE) ||
+	if (!add_to_cmd_arr(&cmd_argv, "--polloperation", &i, MIN_ARGV_SIZE) ||
 	    !add_to_cmd_arr(&cmd_argv, polling_ops[pdlv->type], &i, MIN_ARGV_SIZE))
 		goto err;
 

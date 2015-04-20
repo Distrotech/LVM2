@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2015 Red Hat, Inc.
+ * Copyright (C) 2014-2015 Red Hat, Inc.
  *
  * This file is part of LVM2.
  *
@@ -45,7 +45,7 @@
 #define REASON_ILLEGAL_ABORT_REQUEST "abort only supported with PVMOVE polling operation"
 #define REASON_DIFFERENT_OPERATION_IN_PROGRESS "Different operation on LV already in progress"
 #define REASON_INVALID_INTERVAL "request requires interval set"
-#define REASON_INTERNAL_ERROR "lvmpolld internal error"
+#define REASON_ENOMEM "not enough memory"
 
 typedef struct lvmpolld_state {
 	daemon_idle *idle;
@@ -175,9 +175,9 @@ static int fini(struct daemon_state *s)
 	return 1;
 }
 
-static response reply_fail(const char *reason)
+static response reply(const char *res, const char *reason)
 {
-	return daemon_reply_simple("failed", "reason = %s", reason, NULL);
+	return daemon_reply_simple(res, "reason = %s", reason, NULL);
 }
 
 static int read_single_line(lvmpolld_thread_data_t *data, int err)
@@ -227,7 +227,6 @@ static int poll_for_output(lvmpolld_lv_t *pdlv, lvmpolld_thread_data_t *data)
 
 		DEBUGLOG(pdlv->ls, "%s: %s %d", PD_LOG_PREFIX, "poll() returned", r);
 		if (r < 0) {
-			/* likely ENOMEM happened */
 			ERROR(pdlv->ls, "%s: %s (PID %d) %s (%d): %s",
 			      PD_LOG_PREFIX, "poll() for LVM2 cmd", pdlv->cmd_pid,
 			      "ended with error", errno, "(strerror())");
@@ -472,12 +471,12 @@ static response progress_info(client_handle h, lvmpolld_state_t *ls, request req
 	unsigned abort = daemon_request_int(req, LVMPD_PARM_ABORT, 0);
 
 	if (!lvid)
-		return reply_fail(REASON_MISSING_LVID);
+		return reply(LVMPD_RESP_FAILED, REASON_MISSING_LVID);
 
 	id = construct_id(sysdir, lvid);
 	if (!id) {
-		ERROR(ls, "%s: %s", PD_LOG_PREFIX, "failed to construct id");
-		return reply_fail(REASON_INTERNAL_ERROR);
+		ERROR(ls, "%s: %s", PD_LOG_PREFIX, "progress_info request failed to construct ID.");
+		return reply(LVMPD_RESP_FAILED, REASON_ENOMEM);
 	}
 
 	DEBUGLOG(ls, "%s: %s: %s", PD_LOG_PREFIX, "ID", id);
@@ -485,7 +484,6 @@ static response progress_info(client_handle h, lvmpolld_state_t *ls, request req
 	pdst = abort ? ls->id_to_pdlv_abort : ls->id_to_pdlv_poll;
 
 	pdst_lock(pdst);
-	/* store locked */
 
 	pdlv = pdst_locked_lookup(pdst, id);
 	if (pdlv) {
@@ -505,13 +503,12 @@ static response progress_info(client_handle h, lvmpolld_state_t *ls, request req
 	/* pdlv must not be dereferenced from now on */
 
 	pdst_unlock(pdst);
-	/* store unlocked */
 
 	dm_free(id);
 
 	if (pdlv) {
 		if (st.internal_error)
-			return reply_fail(REASON_POLLING_FAILED);
+			return reply(LVMPD_RESP_FAILED, REASON_POLLING_FAILED);
 
 		if (st.polling_finished)
 			r = daemon_reply_simple(LVMPD_RESP_FINISHED,
@@ -519,8 +516,7 @@ static response progress_info(client_handle h, lvmpolld_state_t *ls, request req
 						LVMPD_PARM_VALUE " = %d", st.cmd_state.signal ?: st.cmd_state.retcode,
 						NULL);
 		else
-			r = daemon_reply_simple(LVMPD_RESP_IN_PROGRESS,
-						NULL);
+			r = daemon_reply_simple(LVMPD_RESP_IN_PROGRESS, NULL);
 	}
 	else
 		r = daemon_reply_simple(LVMPD_RESP_NOT_FOUND, NULL);
@@ -543,7 +539,7 @@ static lvmpolld_lv_t *construct_pdlv(request req, lvmpolld_state_t *ls,
 			   interval, 2 * uinterval, pdst);
 
 	if (!pdlv) {
-		ERROR(ls, "%s: %s", PD_LOG_PREFIX, "Failed to create pdlv");
+		ERROR(ls, "%s: %s", PD_LOG_PREFIX, "failed to create internal LV data structure.");
 		return NULL;
 	}
 
@@ -599,24 +595,24 @@ static response poll_init(client_handle h, lvmpolld_state_t *ls, request req, en
 	assert(type < POLL_TYPE_MAX);
 
 	if (abort && type != PVMOVE)
-		return reply_fail(REASON_ILLEGAL_ABORT_REQUEST);
+		return reply(LVMPD_RESP_EINVAL, REASON_ILLEGAL_ABORT_REQUEST);
 
 	if (!interval || strpbrk(interval, "-") || sscanf(interval, "%u", &uinterval) != 1)
-		return reply_fail(REASON_INVALID_INTERVAL);
+		return reply(LVMPD_RESP_EINVAL, REASON_INVALID_INTERVAL);
 
 	if (!lvname)
-		return reply_fail(REASON_MISSING_LVNAME);
+		return reply(LVMPD_RESP_FAILED, REASON_MISSING_LVNAME);
 
 	if (!lvid)
-		return reply_fail(REASON_MISSING_LVID);
+		return reply(LVMPD_RESP_FAILED, REASON_MISSING_LVID);
 
 	if (!vgname)
-		return reply_fail(REASON_MISSING_VGNAME);
+		return reply(LVMPD_RESP_FAILED, REASON_MISSING_VGNAME);
 
 	id = construct_id(sysdir, lvid);
 	if (!id) {
-		ERROR(ls, "%s: %s", PD_LOG_PREFIX, "failed to construct id");
-		return reply_fail(REASON_INTERNAL_ERROR);
+		ERROR(ls, "%s: %s", PD_LOG_PREFIX, "poll_init request failed to construct ID.");
+		return reply(LVMPD_RESP_FAILED, REASON_ENOMEM);
 	}
 
 	DEBUGLOG(ls, "%s: %s=%s", PD_LOG_PREFIX, "ID", id);
@@ -642,8 +638,13 @@ static response poll_init(client_handle h, lvmpolld_state_t *ls, request req, en
 	if (pdlv) {
 		if (!pdlv_is_type(pdlv, type)) {
 			pdst_unlock(pdst);
+			ERROR(ls, "%s: %s '%s': expected: %s, requested: %s",
+			      PD_LOG_PREFIX, "poll operation type mismatch on LV identified by",
+			      id,
+			      polling_op(pdlv_get_type(pdlv)), polling_op(type));
 			dm_free(id);
-			return reply_fail(REASON_DIFFERENT_OPERATION_IN_PROGRESS);
+			return reply(LVMPD_RESP_EINVAL,
+				     REASON_DIFFERENT_OPERATION_IN_PROGRESS);
 		}
 	} else {
 		pdlv = construct_pdlv(req, ls, pdst, interval, id, vgname,
@@ -651,21 +652,22 @@ static response poll_init(client_handle h, lvmpolld_state_t *ls, request req, en
 		if (!pdlv) {
 			pdst_unlock(pdst);
 			dm_free(id);
-			return reply_fail(REASON_INTERNAL_ERROR);
+			return reply(LVMPD_RESP_FAILED, REASON_ENOMEM);
 		}
 		if (!pdst_locked_insert(pdst, id, pdlv)) {
 			pdlv_destroy(pdlv);
 			pdst_unlock(pdst);
+			ERROR(ls, "%s: %s", PD_LOG_PREFIX, "couldn't store internal LV data structure");
 			dm_free(id);
-			return reply_fail(REASON_INTERNAL_ERROR);
+			return reply(LVMPD_RESP_FAILED, REASON_ENOMEM);
 		}
 		if (!spawn_detached_thread(pdlv)) {
-			ERROR(ls, "%s: %s", PD_LOG_PREFIX, "failed to spawn detached thread");
+			ERROR(ls, "%s: %s", PD_LOG_PREFIX, "failed to spawn detached monitoring thread");
 			pdst_locked_remove(pdst, id);
 			pdlv_destroy(pdlv);
 			pdst_unlock(pdst);
 			dm_free(id);
-			return reply_fail(REASON_INTERNAL_ERROR);
+			return reply(LVMPD_RESP_FAILED, REASON_ENOMEM);
 		}
 
 		pdst_locked_inc(pdst);
@@ -722,7 +724,7 @@ static response handler(struct daemon_state s, client_handle h, request r)
 	else if (!strcmp(rq, LVMPD_REQ_DUMP))
 		return dump_state(h, ls, r);
 	else
-		return reply_fail(REASON_REQ_NOT_IMPLEMENTED);
+		return reply(LVMPD_RESP_EINVAL, REASON_REQ_NOT_IMPLEMENTED);
 }
 
 static int process_timeout_arg(const char *str, unsigned *max_timeouts)

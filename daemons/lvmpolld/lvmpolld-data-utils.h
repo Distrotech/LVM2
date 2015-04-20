@@ -129,6 +129,11 @@ static inline unsigned pdlv_get_timeout(const lvmpolld_lv_t *pdlv)
 	return pdlv->pdtimeout;
 }
 
+static inline enum poll_type pdlv_get_type(const lvmpolld_lv_t *pdlv)
+{
+	return pdlv->type;
+}
+
 unsigned pdlv_get_polling_finished(lvmpolld_lv_t *pdlv);
 lvmpolld_lv_state_t pdlv_get_status(lvmpolld_lv_t *pdlv);
 void pdlv_set_cmd_state(lvmpolld_lv_t *pdlv, const lvmpolld_cmd_stat_t *cmd_state);
