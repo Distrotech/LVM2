@@ -3478,6 +3478,7 @@ dump_lv("", lv);
 #if 0
 dump_lv("", lv);
 #endif
+sleep(6);
 	/* FIXME: will this discontinue a running rebuild of the replaced legs? */
 	/* HM: no, because md will restart based on the recovery_cp offset in the superblock */
 	if (!lv_update_and_reload_origin(lv))

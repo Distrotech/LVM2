@@ -2342,6 +2342,7 @@ static int _raid_emit_segment_line(struct dm_task *dmt, uint32_t major,
 	uint32_t area_count = seg->area_count / 2;
 	int param_count = 1; /* mandatory 'chunk size'/'stripe size' arg */
 	int pos = 0;
+	unsigned type;
 
 	if (seg->area_count % 2)
 		return 0;
@@ -2367,7 +2368,12 @@ PFLA("seg->area_count=%u", seg->area_count);
 	if ((seg->type == SEG_RAID1) && seg->stripe_size)
 		log_error("WARNING: Ignoring RAID1 stripe size");
 
-	EMIT_PARAMS(pos, "%s %d %u", _dm_segtypes[seg->type].target,
+	/* Kernel only expects "raid0", not "raid0_meta" */
+	type = seg->type;
+	if (seg->type == SEG_RAID0_META)
+		type = SEG_RAID0;
+
+	EMIT_PARAMS(pos, "%s %d %u", _dm_segtypes[type].target,
 		    param_count, seg->stripe_size);
 
 	if (seg->flags & DM_NOSYNC)
@@ -2381,12 +2387,10 @@ PFLA("seg->area_count=%u", seg->area_count);
 	if (seg->delta_disks)
 		EMIT_PARAMS(pos, " delta_disks %d", seg->delta_disks);
 
-PFLA("seg->rebuilds=%X", seg->rebuilds);
 	for (i = 0; i < area_count; i++)
 		if (seg->rebuilds & (1ULL << i))
 			EMIT_PARAMS(pos, " rebuild %u", i);
 
-PFLA("seg->writemostly=%X", seg->writemostly);
 	for (i = 0; i < area_count; i++)
 		if (seg->writemostly & (1ULL << i))
 			EMIT_PARAMS(pos, " write_mostly %u", i);
