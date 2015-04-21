@@ -111,7 +111,8 @@ lvmpolld_lv_t *pdlv_create(lvmpolld_state_t *ls, const char *id,
 		.sinterval = dm_strdup(sinterval), /* copy */
 		.pdtimeout = pdtimeout ?: PDTIMEOUT_DEF,
 		.cmd_state = { .retcode = -1, .signal = 0 },
-		.pdst = pdst
+		.pdst = pdst,
+		.init_rq_count = 1
 	}, *pdlv = (lvmpolld_lv_t *) dm_malloc(sizeof(lvmpolld_lv_t));
 
 	if (!pdlv || !tmp.lvid || !tmp.lvname || !tmp.lvm_system_dir_env || !tmp.sinterval)
@@ -269,6 +270,8 @@ static void _pdlv_locked_dump(struct buffer *buff, const lvmpolld_lv_t *pdlv)
 	if (dm_snprintf(tmp, sizeof(tmp), "\t\tpolling_finished=%d\n", pdlv->polling_finished) > 0)
 		buffer_append(buff, tmp);
 	if (dm_snprintf(tmp, sizeof(tmp), "\t\terror_occured=%d\n", pdlv->error) > 0)
+		buffer_append(buff, tmp);
+	if (dm_snprintf(tmp, sizeof(tmp), "\t\tinit_requests_count=%d\n", pdlv->init_rq_count) > 0)
 		buffer_append(buff, tmp);
 
 	/* lvm_commmand-section { */

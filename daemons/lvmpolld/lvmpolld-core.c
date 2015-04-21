@@ -665,6 +665,7 @@ static response poll_init(client_handle h, lvmpolld_state_t *ls, request req, en
 			return reply(LVMPD_RESP_EINVAL,
 				     REASON_DIFFERENT_OPERATION_IN_PROGRESS);
 		}
+		pdlv->init_rq_count++; /* safe. protected by store lock */
 	} else {
 		pdlv = construct_pdlv(req, ls, pdst, interval, id, vgname,
 				      lvname, sysdir, type, abort, uinterval);
