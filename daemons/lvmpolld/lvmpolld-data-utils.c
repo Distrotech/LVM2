@@ -262,7 +262,7 @@ static void _pdlv_locked_dump(struct buffer *buff, const lvmpolld_lv_t *pdlv)
 		buffer_append(buff, tmp);
 	if (dm_snprintf(tmp, sizeof(tmp), "\t\tlvm_command_interval=\"%s\"\n", pdlv->sinterval ?: "<undefined>") > 0)
 		buffer_append(buff, tmp);
-	if (dm_snprintf(tmp, sizeof(tmp), "\t\tLVM_SYSTEM_DIR=%s\n",
+	if (dm_snprintf(tmp, sizeof(tmp), "\t\tLVM_SYSTEM_DIR=\"%s\"\n",
 			(*pdlv->lvm_system_dir_env ? (pdlv->lvm_system_dir_env + strlen("LVM_SYSTEM_DIR=")) : "<undefined>")) > 0)
 		buffer_append(buff, tmp);
 	if (dm_snprintf(tmp, sizeof(tmp), "\t\tlvm_command_pid=%d\n", pdlv->cmd_pid) > 0)
