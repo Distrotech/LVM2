@@ -48,7 +48,7 @@ typedef struct {
 } lvmpolld_cmd_stat_t;
 
 typedef struct {
-	unsigned internal_error:1;
+	unsigned error:1;
 	unsigned polling_finished:1;
 	lvmpolld_cmd_stat_t cmd_state;
 } lvmpolld_lv_state_t;
@@ -79,7 +79,7 @@ typedef struct lvmpolld_lv {
 	/* block of shared variables protected by lock */
 	lvmpolld_cmd_stat_t cmd_state;
 	unsigned polling_finished:1; /* no more updates */
-	unsigned internal_error:1; /* unrecoverable error occured in lvmpolld */
+	unsigned error:1; /* unrecoverable error occured in lvmpolld */
 } lvmpolld_lv_t;
 
 typedef struct {
@@ -138,7 +138,7 @@ static inline enum poll_type pdlv_get_type(const lvmpolld_lv_t *pdlv)
 unsigned pdlv_get_polling_finished(lvmpolld_lv_t *pdlv);
 lvmpolld_lv_state_t pdlv_get_status(lvmpolld_lv_t *pdlv);
 void pdlv_set_cmd_state(lvmpolld_lv_t *pdlv, const lvmpolld_cmd_stat_t *cmd_state);
-void pdlv_set_internal_error(lvmpolld_lv_t *pdlv, unsigned error);
+void pdlv_set_error(lvmpolld_lv_t *pdlv, unsigned error);
 void pdlv_set_polling_finished(lvmpolld_lv_t *pdlv, unsigned finished);
 
 /*
@@ -154,9 +154,9 @@ static inline int pdlv_locked_polling_finished(const lvmpolld_lv_t *pdlv)
 	return pdlv->polling_finished;
 }
 
-static inline unsigned pdlv_locked_internal_error(const lvmpolld_lv_t *pdlv)
+static inline unsigned pdlv_locked_error(const lvmpolld_lv_t *pdlv)
 {
-	return pdlv->internal_error;
+	return pdlv->error;
 }
 
 /* LVMPOLLD_STORE_T manipulation routines */

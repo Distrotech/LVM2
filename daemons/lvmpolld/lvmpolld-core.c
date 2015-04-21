@@ -447,7 +447,7 @@ err:
 	if (error) {
 		/* last reader is responsible for pdlv cleanup */
 		r = pdlv->cmd_pid;
-		pdlv_set_internal_error(pdlv, 1);
+		pdlv_set_error(pdlv, 1);
 	}
 
 	pdlv_set_polling_finished(pdlv, 1);
@@ -511,7 +511,7 @@ static response progress_info(client_handle h, lvmpolld_state_t *ls, request req
 		 */
 		st = pdlv_get_status(pdlv);
 
-		if (st.internal_error || st.polling_finished) {
+		if (st.error || st.polling_finished) {
 			INFO(ls, "%s: %s %s", PD_LOG_PREFIX,
 			     "Polling finished. Removing related data structure for LV",
 			     lvid);
@@ -526,7 +526,7 @@ static response progress_info(client_handle h, lvmpolld_state_t *ls, request req
 	dm_free(id);
 
 	if (pdlv) {
-		if (st.internal_error)
+		if (st.error)
 			return reply(LVMPD_RESP_FAILED, REASON_POLLING_FAILED);
 
 		if (st.polling_finished)

@@ -164,7 +164,7 @@ lvmpolld_lv_state_t pdlv_get_status(lvmpolld_lv_t *pdlv)
 	lvmpolld_lv_state_t r;
 
 	pdlv_lock(pdlv);
-	r.internal_error = pdlv_locked_internal_error(pdlv);
+	r.error = pdlv_locked_error(pdlv);
 	r.polling_finished = pdlv_locked_polling_finished(pdlv);
 	r.cmd_state = pdlv_locked_cmd_state(pdlv);
 	pdlv_unlock(pdlv);
@@ -179,10 +179,10 @@ void pdlv_set_cmd_state(lvmpolld_lv_t *pdlv, const lvmpolld_cmd_stat_t *cmd_stat
 	pdlv_unlock(pdlv);
 }
 
-void pdlv_set_internal_error(lvmpolld_lv_t *pdlv, unsigned error)
+void pdlv_set_error(lvmpolld_lv_t *pdlv, unsigned error)
 {
 	pdlv_lock(pdlv);
-	pdlv->internal_error = error;
+	pdlv->error = error;
 	pdlv_unlock(pdlv);
 }
 
@@ -268,7 +268,7 @@ static void _pdlv_locked_dump(struct buffer *buff, const lvmpolld_lv_t *pdlv)
 		buffer_append(buff, tmp);
 	if (dm_snprintf(tmp, sizeof(tmp), "\t\tpolling_finished=%d\n", pdlv->polling_finished) > 0)
 		buffer_append(buff, tmp);
-	if (dm_snprintf(tmp, sizeof(tmp), "\t\tinternal_error_occured=%d\n", pdlv->internal_error) > 0)
+	if (dm_snprintf(tmp, sizeof(tmp), "\t\terror_occured=%d\n", pdlv->error) > 0)
 		buffer_append(buff, tmp);
 
 	/* lvm_commmand-section { */
