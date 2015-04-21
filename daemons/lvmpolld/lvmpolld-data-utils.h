@@ -89,6 +89,7 @@ typedef struct {
 	int errpipe[2];
 	FILE *fout;
 	FILE *ferr;
+	char buf[1024];
 	lvmpolld_lv_t *pdlv;
 } lvmpolld_thread_data_t;
 
