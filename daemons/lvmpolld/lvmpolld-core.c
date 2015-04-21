@@ -164,13 +164,15 @@ static int fini(struct daemon_state *s)
 
 	DEBUGLOG(s, "waiting for background threads to finish");
 
-	do {
-		nanosleep(&t, NULL);
+	while(1) {
 		lvmpolld_stores_lock(ls);
 		done = !pdst_locked_get_active_count(ls->id_to_pdlv_poll) &&
 		       !pdst_locked_get_active_count(ls->id_to_pdlv_abort);
 		lvmpolld_stores_unlock(ls);
-	} while (!done);
+		if (done)
+			break;
+		nanosleep(&t, NULL);
+	}
 
 	DEBUGLOG(s, "destroying internal data structures");
 
