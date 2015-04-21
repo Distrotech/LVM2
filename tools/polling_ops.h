@@ -20,6 +20,6 @@
 #define PVMOVE_POLL "pvmove"
 #define CONVERT_POLL "convert"
 #define MERGE_POLL "merge"
-#define MERGE_THIN_POLL "merge_thin" 
+#define MERGE_THIN_POLL "merge_thin"
 
 #endif /* _LVM_TOOL_POLLING_OPS_H */
