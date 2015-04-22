@@ -147,8 +147,10 @@ prepare_lvmpolld() {
 	local run_valgrind=
 	test "${LVM_VALGRIND_LVMPOLLD:-0}" -eq 0 || run_valgrind="run_valgrind"
 
+	kill_sleep_kill_ LOCAL_LVMPOLLD ${LVM_VALGRIND_LVMPOLLD:-0}
+
 	echo "preparing lvmpolld..."
-	$run_valgrind lvmpolld -f "$@" -s "$TESTDIR/lvmpolld.socket" -B "$TESTDIR/lib/lvm" -l all,debug &
+	$run_valgrind lvmpolld -f "$@" -s "$TESTDIR/lvmpolld.socket" -B "$TESTDIR/lib/lvm" -l all &
 	echo $! > LOCAL_LVMPOLLD
 	while ! test -e "$TESTDIR/lvmpolld.socket"; do echo -n .; sleep .1; done # wait for the socket
 	echo ok
@@ -169,6 +171,10 @@ lvmpolld_talk() {
 	else
 		socat "unix-connect:$TESTDIR/lvmpolld.socket" -
 	fi | tee -a lvmpolld-talk.txt
+}
+
+lvmpolld_dump() {
+	(echo 'request="dump"'; echo '##') | lvmpolld_talk "$@"
 }
 
 teardown_devs_prefixed() {
@@ -1133,16 +1139,57 @@ dmsetup_wrapped() {
 	dmsetup "$@"
 }
 
+awk_parse_init_count_in_lvmpolld_dump() {
+	printf '%s' \
+	\
+	$'BEGINFILE { x=0; answ=0; FS="="; key="[[:space:]]*"vkey }' \
+	$'{' \
+		$'if (/.*{$/) { x++ }' \
+		$'else if (/.*}$/) { x-- }' \
+		$'else if ( x == 2 && $1 ~ key) { value=substr($2, 2); value=substr(value, 1, length(value) - 1); }' \
+		$'if ( x == 2 && value == vvalue && $1 ~ /[[:space:]]*init_requests_count/) { answ=$2 }' \
+		$'if (answ > 0) { exit 0 }' \
+	$'}' \
+	$'END { printf "%d", answ }'
+}
+
+check_lvmpolld_init_rq_count() {
+	local ret=$(awk -v vvalue="$2" -v vkey=${3:-lvname} "$(awk_parse_init_count_in_lvmpolld_dump)" lvmpolld_dump.txt)
+	test $ret -eq $1 || {
+		echo "check_lvmpolld_init_rq_count failed. Expected $1, got $ret"
+		return 1
+	}
+}
+
 wait_pvmove_lv_ready() {
 	# given sleep .1 this is about 60 secs of waiting
 	local retries=${2:-300}
-	while : ; do
-		test $retries -le 0 && die "Waiting for pvmove LV to get activated has timed out"
-		dmsetup info -c -o tables_loaded $1 > out 2>/dev/null|| true;
-		not grep Live out >/dev/null || break
-		sleep .1
-		retries=$((retries-1))
-	done
+
+	if [ -e LOCAL_LVMPOLLD ]; then
+		local lvid
+		while : ; do
+			test $retries -le 0 && die "Waiting for lvmpolld timed out"
+			test -n "$lvid" || {
+				lvid=$(get lv_field ${1//-/\/} vg_uuid,lv_uuid -a 2>/dev/null)
+				lvid=${lvid//\ /}
+				lvid=${lvid//-/}
+			}
+			test -z "$lvid" || {
+				lvmpolld_dump > lvmpolld_dump.txt
+				! check_lvmpolld_init_rq_count 1 $lvid lvid || break;
+			}
+			sleep .1
+			retries=$((retries-1))
+		done
+	else
+		while : ; do
+			test $retries -le 0 && die "Waiting for pvmove LV to get activated has timed out"
+			dmsetup info -c -o tables_loaded $1 > out 2>/dev/null|| true;
+			not grep Live out >/dev/null || break
+			sleep .1
+			retries=$((retries-1))
+		done
+	fi
 }
 
 # return total memory size in kB units
