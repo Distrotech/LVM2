@@ -881,14 +881,14 @@ xx(pvmove,
    interval_ARG, name_ARG, noudevsync_ARG, test_ARG)
 
 xx(lvpoll,
-   "Resume poll operation on logical volume",
+   "Continue already initiated poll operation on a logical volume",
    0,
    "\t[--abort]\n"
-   "\t[-p|--poll-operation\n"
+   "\t[-p|--polloperation\n"
    "\t[-d|--debug]\n "
    "\t[-h|-?|--help]\n"
    "\t[-i|--interval seconds]\n"
-   "\t[-m|--handle-missing-pvs]\n"
+   "\t[-m|--handlemissingpvs]\n"
    "\t[-t|--test]\n "
    "\t[-v|--verbose]\n "
    "\t[--version]\n",
