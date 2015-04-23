@@ -12,7 +12,6 @@
 
 . lib/inittest
 
-# okozina:???
 test -e LOCAL_LVMPOLLD && skip
 
 check_lv_field_modules_()

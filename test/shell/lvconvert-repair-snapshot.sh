@@ -11,7 +11,6 @@
 
 . lib/inittest
 
-# okozina:???
 test -e LOCAL_LVMPOLLD && skip
 
 aux prepare_vg 5

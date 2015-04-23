@@ -13,8 +13,6 @@
 
 . lib/inittest
 
-test -e LOCAL_LVMPOLLD && skip
-
 aux prepare_pvs 4
 aux pvcreate --metadatacopies 0 "$dev1"
 vgcreate $vg $(cat DEVICES)

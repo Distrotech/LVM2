@@ -11,7 +11,6 @@
 
 . lib/inittest
 
-# raids should not interact w/ lvmpolld I suppose
 test -e LOCAL_LVMPOLLD && skip
 
 aux have_raid 1 3 0 || skip

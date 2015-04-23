@@ -13,7 +13,6 @@ test_description='Test vgmerge operation'
 
 . lib/inittest
 
-# okozina:???
 test -e LOCAL_LVMPOLLD && skip
 
 aux prepare_pvs 4 64

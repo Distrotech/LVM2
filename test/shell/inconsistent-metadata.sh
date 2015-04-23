@@ -11,7 +11,6 @@
 
 . lib/inittest
 
-# no mirror conversion
 test -e LOCAL_LVMPOLLD && skip
 
 aux prepare_vg 3 12

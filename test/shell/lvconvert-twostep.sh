@@ -11,9 +11,6 @@
 
 . lib/inittest
 
-# okozina:???
-test -e LOCAL_LVMPOLLD && skip
-
 aux prepare_vg 4
 
 lvcreate -aey --type mirror -m 1 --mirrorlog disk --ignoremonitoring -L 1 -n mirror $vg

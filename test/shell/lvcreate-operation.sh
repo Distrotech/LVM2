@@ -13,7 +13,6 @@
 
 . lib/inittest
 
-# okozina:???
 test -e LOCAL_LVMPOLLD && skip
 
 cleanup_lvs() {

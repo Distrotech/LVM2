@@ -1,4 +1,4 @@
-g!/bin/sh
+#!/bin/sh
 # Copyright (C) 2008 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,

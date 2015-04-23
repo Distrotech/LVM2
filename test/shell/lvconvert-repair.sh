@@ -11,9 +11,6 @@
 
 . lib/inittest
 
-# okozina:???
-test -e LOCAL_LVMPOLLD && skip
-
 recreate_vg_()
 {
 	vgremove -ff $vg

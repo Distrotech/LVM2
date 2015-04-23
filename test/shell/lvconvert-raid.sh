@@ -14,7 +14,6 @@ export LVM_TEST_LVMETAD_DEBUG_OPTS=${LVM_TEST_LVMETAD_DEBUG_OPTS-}
 
 . lib/inittest
 
-# okozina:??? (mirror type referenced)
 test -e LOCAL_LVMPOLLD && skip
 
 get_image_pvs() {

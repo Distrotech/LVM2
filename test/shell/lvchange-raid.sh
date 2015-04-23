@@ -11,9 +11,6 @@
 
 . lib/inittest
 
-# okozina:???
-test -e LOCAL_LVMPOLLD && skip
-
 # Writemostly has been in every version since the begining
 # Device refresh in 1.5.1 upstream and 1.3.4 < x < 1.4.0 in RHEL6
 # Sync action    in 1.5.0 upstream and 1.3.3 < x < 1.4.0 in RHEL6

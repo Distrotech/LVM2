@@ -14,7 +14,6 @@
 
 . lib/inittest
 
-# okozina:???
 test -e LOCAL_LVMPOLLD && skip
 
 which mkfs.ext2 || skip

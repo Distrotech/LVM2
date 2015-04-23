@@ -15,7 +15,6 @@
 
 . lib/inittest
 
-# no mirror conversion or snapshot merge
 test -e LOCAL_LVMPOLLD && skip
 
 aux prepare_devs 5
