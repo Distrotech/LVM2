@@ -884,11 +884,11 @@ xx(lvpoll,
    "Continue already initiated poll operation on a logical volume",
    0,
    "\t[--abort]\n"
-   "\t[-p|--polloperation\n"
+   "\t[--handlemissingpvs]\n"
+   "\t[--polloperation\n"
    "\t[-d|--debug]\n "
    "\t[-h|-?|--help]\n"
    "\t[-i|--interval seconds]\n"
-   "\t[-m|--handlemissingpvs]\n"
    "\t[-t|--test]\n "
    "\t[-v|--verbose]\n "
    "\t[--version]\n",
