@@ -27,7 +27,7 @@
 #include "lv.h"
 #include "lvm-percent.h"
 
-#define MAX_STRIPES 128U
+#define MAX_STRIPES 251U
 #define SECTOR_SHIFT 9L
 #define SECTOR_SIZE ( 1L << SECTOR_SHIFT )
 #define STRIPE_SIZE_MIN ( (unsigned) lvm_getpagesize() >> SECTOR_SHIFT)	/* PAGESIZE in sectors */

@@ -456,16 +456,16 @@ static int _read_params(struct cmd_context *cmd, int argc, char **argv,
 		return 0;
 	}
 
+#if 0
 	if ((arg_count(cmd, stripes_long_ARG) || arg_count(cmd, stripesize_ARG)) &&
-#if 1
 	    (!_mirror_or_raid_type_requested(cmd, type_str) ||
-#endif
 	     arg_count(cmd, repair_ARG) ||
 	     arg_count(cmd, thinpool_ARG))) {
 		log_error("--stripes or --stripesize argument is only valid "
 			  "with --mirrors/--type mirror/--type raid*, --repair and --thinpool");
 		return 0;
 	}
+#endif
 
 	if (arg_count(cmd, cache_ARG))
 		lp->cache = 1;
