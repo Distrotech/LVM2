@@ -2313,7 +2313,9 @@ int add_areas_line(struct dev_manager *dm, struct lv_segment *seg,
 
 			if (!(dlid = build_dm_uuid(dm->mem, seg_lv(seg, s), NULL)))
 				return_0;
-			if (!dm_tree_node_add_target_area(node, NULL, dlid, extent_size * seg_le(seg, s)))
+			/* HM FIXME: adjust size for data_offset and dev_sectors */
+			if (!dm_tree_node_add_target_area(node, NULL, dlid,
+							  extent_size * (seg_le(seg, s) - seg_reshape_le(seg, s))))
 				return_0;
 		} else if (seg_type(seg, s) == AREA_LV) {
 			if (!(dlid = build_dm_uuid(dm->mem, seg_lv(seg, s), NULL)))

@@ -2523,12 +2523,12 @@ PFLA("old_dev_count=%u new_dev_count=%u", old_dev_count, new_dev_count);
 		return 0;
 	}
 
-	if (seg_is_any_raid5(seg)) {
- 		if (old_dev_count == 3) {
-			if (new_stripes < 1)
-				too_few = 1;
-		} else if (new_stripes < 2)
+	/* raid5 with 3 image component pairs (i.e. 2 stripes): allow for raid5 reshape to 2 devices, i.e. raid1 layout */
+	if (seg_is_raid4(seg) || seg_is_any_raid5(seg)) {
+		if (new_stripes < 1)
 			too_few = 1;
+
+	/* any other raid4/5/6 device count: check for 2 stripes minimum */
 	} else if (new_stripes < 2)
 		too_few = 1;
 
@@ -2811,7 +2811,8 @@ static int _raid_level_down(struct logical_volume *lv,
 			return_0;
 	}
 
-	return _raid_takeover(lv, 0, segtype, allocate_pvs, "raid4/5 set %s/%s has to have 2 disks and be degraded.");
+	return _raid_takeover(lv, 0, segtype, allocate_pvs,
+			      "raid4/5 set %s/%s has to have 1 stripe. Use \"lvconvert --stripes 1 ...\"");
 }
 
 /*
@@ -3131,12 +3132,13 @@ PFL();
 
 PFL();
 	/* Requested segtype */
-	if (!segtype_is_striped(new_segtype) &&
+	if (!segtype_is_linear(new_segtype) &&
+	    !segtype_is_striped(new_segtype) &&
 	    !segtype_is_mirror(new_segtype) &&
 	    !segtype_is_raid(new_segtype))
 		goto err;
 
-PFL();
+PFLA("new_stripes=%u", new_stripes);
 	/* @lv has to be active locally */
 	if (vg_is_clustered(lv->vg) && !lv_is_active_exclusive_locally(lv)) {
 		log_error("%s/%s must be active exclusive locally to"
@@ -3152,6 +3154,13 @@ PFL();
 
 	if (!archive(lv->vg))
 		return_0;
+
+	/* linear <-> RAID1 */
+	if (seg_is_linear(seg) && segtype_is_raid1(new_segtype))
+		return lv_raid_change_image_count(lv, 2, allocate_pvs);
+
+	if (seg_is_raid1(seg) && segtype_is_linear(new_segtype))
+		return lv_raid_change_image_count(lv, 1, allocate_pvs);
 
 	/* Mirror -> RAID1 conversion */
 	if (seg_is_mirror(seg) && segtype_is_raid1(new_segtype))

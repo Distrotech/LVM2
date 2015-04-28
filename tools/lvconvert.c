@@ -1831,6 +1831,7 @@ static int _is_valid_raid_conversion(const struct segment_type *from_segtype,
 	if (from_segtype == to_segtype)
 		return 1;
 
+printf("%s %u from_segtype=%s to_segtype=%s\n", __func__, __LINE__, from_segtype->name, to_segtype->name);
 	/* From striped to mirror or vice-versa */
 	if (segtype_is_striped(from_segtype) &&
 	    segtype_is_mirror(to_segtype))
@@ -1849,13 +1850,13 @@ static int _is_valid_raid_conversion(const struct segment_type *from_segtype,
 	    segtype_is_striped(to_segtype))
 		return 1;
 
-	/* From striped to raid1 or vice-versa */
-	if (segtype_is_striped(from_segtype) &&
+	/* From linear to raid1 or vice-versa */
+	if (segtype_is_linear(from_segtype) &&
 	    segtype_is_raid1(to_segtype))
 		return 1;
 
 	if (segtype_is_raid1(from_segtype) &&
-	    segtype_is_striped(to_segtype))
+	    segtype_is_linear(to_segtype))
 		return 1;
 
 	/* From mirror to raid1 */
@@ -1967,7 +1968,7 @@ printf("image_count=%u\n", image_count);
 				     image_count, lp->pvh);
 
 printf("lp-Segtyoe=%s\n", lp->segtype->name);
-	/* HM FIXME: lv_raid_reshape to cope with changing raid1 image counts too? */
+	/* HM FIXME: lv_raid_convert() to cope with changing raid1 image counts too? */
 	if (!segtype_is_mirror(lp->segtype) &&
 	    (seg_is_linear(seg) || seg_is_raid(seg)) &&
 	    arg_count(cmd, mirrors_ARG)) {

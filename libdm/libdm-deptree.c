@@ -216,7 +216,7 @@ struct load_segment {
 	struct dm_tree_node *replicator;/* Replicator-dev */
 	uint64_t rdevice_index;		/* Replicator-dev */
 
-	int delta_disks;		/* raid */
+	int delta_disks;		/* raid reshape number of disks */
 	uint64_t rebuilds;		/* raid */
 	uint64_t writemostly;		/* raid */
 	uint32_t writebehind;		/* raid */
