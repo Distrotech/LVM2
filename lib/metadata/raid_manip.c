@@ -2509,6 +2509,7 @@ static int _convert_reshape(struct logical_volume *lv,
 {
 	int update_and_reload = 1;
 	int reset_flags = 0;
+	int too_few = 0;
 	struct lv_segment *seg = first_seg(lv);
 	unsigned old_dev_count = seg->area_count;
 	unsigned new_dev_count = new_stripes + seg->segtype->parity_devs;
@@ -2522,7 +2523,16 @@ PFLA("old_dev_count=%u new_dev_count=%u", old_dev_count, new_dev_count);
 		return 0;
 	}
 
-	if (new_stripes < 2) {
+	if (seg_is_any_raid5(seg)) {
+ 		if (old_dev_count == 3) {
+			if (new_stripes < 1)
+				too_few = 1;
+		} else if (new_stripes < 2)
+			too_few = 1;
+	} else if (new_stripes < 2)
+		too_few = 1;
+
+	if (too_few) {
 		log_error("Too few stripes requested");
 		return 0;
 	}
