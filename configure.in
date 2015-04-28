@@ -1094,7 +1094,7 @@ if test "$BUILD_LVMPOLLD" = yes; then
 
 	AC_ARG_WITH(lvmpolld-pidfile,
 		    AC_HELP_STRING([--with-lvmpolld-pidfile=PATH],
-				   [lvmpolld pidfile [[PID_DIR/lvmpolld.pid]]]),
+				   [lvmpolld pidfile [PID_DIR/lvmpolld.pid]]),
 		    LVMPOLLD_PIDFILE=$withval,
 		    LVMPOLLD_PIDFILE="$DEFAULT_PID_DIR/lvmpolld.pid")
 	AC_DEFINE_UNQUOTED(LVMPOLLD_PIDFILE, ["$LVMPOLLD_PIDFILE"],
