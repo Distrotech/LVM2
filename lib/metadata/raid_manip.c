@@ -1055,10 +1055,6 @@ static int _reset_flags_passed_to_kernel(struct logical_volume *lv)
  * absolute @new_count using @pvs to allocate from
  *
  */
-static int _raid_extract_images(struct logical_volume *lv, uint32_t new_count,
-			        struct dm_list *target_pvs, int shift,
-			        struct dm_list *extracted_meta_lvs,
-			        struct dm_list *extracted_data_lvs);
 static int _raid_add_images(struct logical_volume *lv,
 			    const struct segment_type *segtype,
 			    uint32_t new_count, struct dm_list *pvs)
@@ -1074,7 +1070,7 @@ static int _raid_add_images(struct logical_volume *lv,
 
 PFLA("seg->meta_areas=%p", seg->meta_areas);
 	segtype = segtype ?: seg->segtype;
-PFLA("segtype->name=%s seg->segtype->name=%s, seg->area_count=%u count=%u", segtype->name, seg->segtype->name, seg->area_count, count);
+PFLA("segtype->name=%s seg->segtype->name=%s, seg->area_count=%u new_count=%u old_count=%u count=%u", segtype->name, seg->segtype->name, seg->area_count, new_count, old_count, count);
 
 	if (!(linear = seg_is_linear(seg)) &&
 	    !seg_is_raid(seg)) {
@@ -1105,14 +1101,16 @@ PFL();
 		 * the new raid1 set, no need to mark each sub-lv
 		 *
 		 * -> reset rebuild flag
+		 *
+		 * Need to add an rmeta device to the
+		 * given linear device as well
 		 */
 		lv_flags = 0;
+		add_all_rmeta = 1;
 
 		/* Allocate an rmeta device to pair with the linear image */
 		if (!_alloc_rmeta_for_linear(lv, &meta_lvs))
 			return 0;
-
-		add_all_rmeta = 1;
 
 	/*
 	 * In case this is a conversion from raid0 to raid4/5/6,
@@ -1120,16 +1118,16 @@ PFL();
 	 * presumably they don't exist already.
 	 */
 	} else if (!seg->meta_areas) {
+		add_all_rmeta = 1;
+
 		if (!_alloc_rmeta_devs_for_lv(lv, &meta_lvs))
 			return 0;
-
-		add_all_rmeta = 1;
 	}
 
 
 PFLA("seg->segtype->flags=%X lv_flags=%lX", seg->segtype->flags, lv_flags);
 	/* Allocate the additional meta and data lvs requested */
-	if (!_alloc_image_components(lv, reshape_disks ? 2 : 1, pvs, count, &meta_lvs, &data_lvs))
+	if (!_alloc_image_components(lv, 1, pvs, count, &meta_lvs, &data_lvs))
 		return_0;
 PFL();
 	/*
@@ -1159,6 +1157,7 @@ PFL();
 	 */
 
 	/* Grow areas arrays for metadata and data devs  */
+	log_debug_metadata("Reallocating areas arrays");
 	if (!_realloc_meta_and_data_seg_areas(lv, seg, new_count)) {
 		log_error("Relocation of areas arrays failed.");
 		return 0;
@@ -1170,14 +1169,21 @@ PFL();
 	 * Set segment areas for metadata sub_lvs adding
 	 * an extra meta area when converting from linear
 	 */
+	log_debug_metadata("Adding new metadata LVs");
 	if (!_add_sublvs_to_lv(lv, 0, 0, &meta_lvs, add_all_rmeta ? 0 : old_count))
 		goto fail;
 
 	/* Set segment areas for data sub_lvs */
+	log_debug_metadata("Adding new data LVs");
 	if (!_add_sublvs_to_lv(lv, 0, lv_flags, &data_lvs, old_count))
 		goto fail;
 
-	/* Reshape adding image component pairs -> set delta disks plus flag on new image LVs */
+	/*
+	 * Reshape adding image component pairs:
+	 *
+	 * - reset rebuild flag on new image LVs
+	 * - set delta disks plus flag on new image LVs
+	 */
 	if (reshape_disks) {
 PFL();
 		for (s = old_count; s < new_count; s++) {
@@ -1477,6 +1483,14 @@ static int _raid_remove_images(struct logical_volume *lv,
 	unsigned old_count = seg->area_count;
 	struct dm_list removal_list;
 	struct lv_list *lvl;
+
+	/* HM FIXME: might allow to remove out-of-sync dedicated parity/Q syndrome devices */
+	if (seg_is_striped_raid(seg) &&
+	    (lv->status & LV_NOTSYNCED)) {
+		log_error("Can't remove image(s) from out-of-sync striped RAID LV:"
+			  " use 'lvchange --resync' first.");
+		return 0;
+	}
 
 PFLA("segtype=%s new_count=%u", segtype->name, new_count);
 	dm_list_init(&removal_list);
@@ -2535,7 +2549,7 @@ PFL();
 			break;
 		case 2:
 			log_error("Device count is incorrrect. "
-				  "Forgotten \"lvconvert --stripes %d %s/%s\" to remove %s images after reshape?",
+				  "Forgotten \"lvconvert --stripes %d %s/%s\" to remove %u images after reshape?",
 				  devs_synced - seg->segtype->parity_devs, lv->vg->name, lv->name,
 				  old_dev_count - devs_synced);
 			return 0;
@@ -2714,6 +2728,9 @@ PFL();
 		if (seg->area_count == 2) {
 PFL();
 			seg->segtype = segtype;
+			if (!seg->stripe_size)
+				/* raid1 does not preset stripe size */
+				seg->stripe_size = 64 * 2;
 
 PFL();
 			if (!lv_update_and_reload_origin(lv))

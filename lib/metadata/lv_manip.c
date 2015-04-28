@@ -1736,7 +1736,7 @@ PFLA("alloc_count=%u parity_count=%u metadata_area_count=%u", alloc_count, parit
 	 * is calculated from.  So, we must pass in the total count to get
 	 * a correct area_multiple.
 	 */
-	ah->area_multiple = extend ? _calc_area_multiple(segtype, area_count + parity_count, stripes) : area_count;
+	ah->area_multiple = _calc_area_multiple(segtype, area_count + segtype->parity_devs, stripes);
 
 	ah->area_multiple_check = extend ? 1 : 0;
 
