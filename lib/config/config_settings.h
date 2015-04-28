@@ -925,7 +925,7 @@ cfg(global_use_lvmpolld_CFG, "use_lvmpolld", global_CFG_SECTION, 0, CFG_TYPE_BOO
 	"forked off an initiating lvm command) or not. When set to 1 and native systemd\n"
 	"service is installed in the system lvm starts using lvmpolld. lvmpolld gets\n"
 	"auto-activated by systemd when a message lands on the respective lvmpolld socket.\n"
-	"All commands that would require polling of in-progress operation are therefor\n"
+	"All commands that would require polling of in-progress operation are therefore\n"
 	"spawned in lvmpolld's service cgroup.\n"
 	"When set to 0 lvm falls back to classical polling.\n")
 
