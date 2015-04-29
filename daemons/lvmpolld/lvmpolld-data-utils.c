@@ -64,7 +64,7 @@ static char *_construct_lvm_system_dir_env(const char *sysdir)
 	return env;
 }
 
-static inline const char *_get_lvid(const char *lvmpolld_id, const char *sysdir)
+static const char *_get_lvid(const char *lvmpolld_id, const char *sysdir)
 {
 	return lvmpolld_id ? (lvmpolld_id + (sysdir ? strlen(sysdir) : 0)) : NULL;
 }
