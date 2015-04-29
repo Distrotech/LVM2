@@ -30,7 +30,7 @@ the possibility of unsolicited termination of background process by external fac
 lvmpolld is used by LVM only if it is enabled in \fBlvm.conf\fP(5) by specifying the
 \fBglobal/use_lvmpolld\fP setting. If this is not defined in the LVM configuration
 explicitly then default setting is used instead (see the output of
-\fBlvm dumpconfig \-\-type default global/use_lvmpolld\fP command).
+\fBlvmconfig \-\-type default global/use_lvmpolld\fP command).
 .SH OPTIONS
 
 To run the daemon in a test environment both the pidfile_path and the
@@ -44,7 +44,7 @@ Show help information.
 .TP
 .IR \fB\-l " {" all | wire | debug }
 Select the type of log messages to generate.
-Messages are logged by syslog.  
+Messages are logged by syslog.
 Additionally, when \-f is given they are also sent to standard error.
 There are two classes of messages: wire and debug. Selecting 'all' supplies both
 and is equivalent to a comma-separated list \-l wire,debug.
