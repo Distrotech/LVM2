@@ -78,7 +78,7 @@ Display the version of lvmpolld daemon.
 .B LVM_LVMPOLLD_PIDFILE
 Path for the pid file.
 .TP
-.B LVM_LVMPOLLD_SOCKET 
+.B LVM_LVMPOLLD_SOCKET
 Path for the socket file.
 
 .SH SEE ALSO
