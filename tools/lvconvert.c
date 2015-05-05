@@ -1847,7 +1847,7 @@ printf("%s %u from_segtype=%s to_segtype=%s\n", __func__, __LINE__, from_segtype
 		return 1;
 
 	if (segtype_is_raid(from_segtype) &&
-	    segtype_is_striped(to_segtype))
+	    (segtype_is_linear(to_segtype) || segtype_is_striped(to_segtype)))
 		return 1;
 
 	/* From linear to raid1 or vice-versa */
@@ -1968,18 +1968,9 @@ printf("image_count=%u\n", image_count);
 				     image_count, lp->pvh);
 
 printf("lp-Segtyoe=%s\n", lp->segtype->name);
-	/* HM FIXME: lv_raid_convert() to cope with changing raid1 image counts too? */
-	if (!segtype_is_mirror(lp->segtype) &&
-	    (seg_is_linear(seg) || seg_is_raid(seg)) &&
-	    arg_count(cmd, mirrors_ARG)) {
-		if (seg_is_linear(seg))
-			seg->region_size = lp->region_size;
-
-		return lv_raid_change_image_count(lv, image_count, lp->pvh);
-	}
-
-	if ((seg_is_striped(seg) || seg_is_mirrored(seg) || lv_is_raid(lv)) &&
+	if ((seg_is_linear(seg) || seg_is_striped(seg) || seg_is_mirrored(seg) || lv_is_raid(lv)) &&
 	    (arg_count(cmd, type_ARG) ||
+	     image_count ||
 	     arg_count(cmd, stripes_ARG) ||
 	     arg_count(cmd, stripes_long_ARG) ||
 	     arg_count(cmd, stripesize_ARG))) {
@@ -1990,7 +1981,7 @@ printf("%s %u stripes=%u stripe_size=%u\n", __func__, __LINE__, stripes, stripe_
 		if (seg_is_striped(seg))
 			seg->region_size = lp->region_size;
 
-		return lv_raid_convert(lv, lp->segtype, lp->yes, lp->force, stripes, stripe_size, lp->pvh);
+		return lv_raid_convert(lv, lp->segtype, lp->yes, lp->force, image_count, stripes, stripe_size, lp->pvh);
 	}
 
 	if (arg_count(cmd, replace_ARG))

@@ -334,7 +334,7 @@ struct lv_segment_area {
 		struct {
 			struct logical_volume *lv;
 			uint32_t le;
-			uint32_t reshape_le; /* HM FIXME: amount of reshape LEs */
+			uint32_t reshape_le;
 		} lv;
 	} u;
 };
@@ -720,7 +720,7 @@ int lv_extend(struct logical_volume *lv,
 	      const struct segment_type *segtype,
 	      uint32_t stripes, uint32_t stripe_size,
 	      uint32_t mirrors, uint32_t region_size,
-	      uint32_t extents,
+	      uint32_t extents, int extend_upfront,
 	      struct dm_list *allocatable_pvs, alloc_policy_t alloc,
 	      int approx_alloc);
 
@@ -1095,6 +1095,7 @@ int lv_raid_merge(struct logical_volume *lv);
 int lv_raid_convert(struct logical_volume *lv,
 		    const struct segment_type *new_segtype,
 		    int yes, int force,
+		    const unsigned image_count,
 		    const unsigned stripes,
 		    const unsigned new_stripe_size,
 		    struct dm_list *allocate_pvs);

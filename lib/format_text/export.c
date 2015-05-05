@@ -512,6 +512,8 @@ static int _print_pvs(struct formatter *f, struct volume_group *vg)
 static int _print_segment(struct formatter *f, struct volume_group *vg,
 			  int count, struct lv_segment *seg)
 {
+	uint32_t s, reshape_les = 0;
+
 	outf(f, "segment%u {", count);
 	_inc_indent(f);
 
@@ -519,6 +521,12 @@ static int _print_segment(struct formatter *f, struct volume_group *vg,
 	outsize(f, (uint64_t) seg->len * vg->extent_size,
 		"extent_count = %u", seg->len);
 
+	for (s = 0; s < seg->area_count; s++)
+		reshape_les += seg_reshape_le(seg, s);
+
+	if (reshape_les)
+		outsize(f, (uint64_t) reshape_les * vg->extent_size,
+			"reshape_extents = %u", reshape_les);
 	outnl(f);
 	outf(f, "type = \"%s\"", seg->segtype->name);
 

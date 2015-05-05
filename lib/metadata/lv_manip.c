@@ -956,6 +956,7 @@ dm_percent_t copy_percent(const struct logical_volume *lv)
 struct lv_segment *alloc_lv_segment(const struct segment_type *segtype,
 				    struct logical_volume *lv,
 				    uint32_t le, uint32_t len,
+				    // uint32_t reshape_len,
 				    uint64_t status,
 				    uint32_t stripe_size,
 				    struct logical_volume *log_lv,
@@ -1759,7 +1760,8 @@ PFLA("area_count=%u metadata_area_count=%u total_extents=%u", area_count, metada
 			 * We need 'log_len' extents for each
 			 * RAID device's metadata_area
 			 */
-			total_extents += ah->log_len * (ah->area_multiple > 1 ? area_count : 1);
+			total_extents += ah->log_len * (ah->area_multiple > 1 ?
+							area_count / (segtype_is_raid10(segtype) ? mirrors : 1) : 1);
 PFLA("existing_extents=%u new_extents=%u ah->log_len=%u total_extents=%u", existing_extents, new_extents, ah->log_len, total_extents);
 		} else {
 			ah->log_area_count = 0;
@@ -2054,6 +2056,7 @@ static int _alloc_parallel_area(struct alloc_handle *ah, uint32_t max_to_allocat
 	 * log, then some areas too small for the log.
 	 */
 	len = area_len;
+PFLA("len=%u", len);
 	for (s = 0; s < total_area_count; s++) {
 		if (s == (ah->area_count + ah->parity_count)) {
 			ix_log_skip = ix_log_offset - ah->area_count;
@@ -3818,7 +3821,7 @@ int lv_extend(struct logical_volume *lv,
 	      const struct segment_type *segtype,
 	      uint32_t stripes, uint32_t stripe_size,
 	      uint32_t mirrors, uint32_t region_size,
-	      uint32_t extents,
+	      uint32_t extents, int extend_upfront,
 	      struct dm_list *allocatable_pvs, alloc_policy_t alloc,
 	      int approx_alloc)
 {
@@ -4453,7 +4456,7 @@ static int _lvresize_poolmetadata(struct cmd_context *cmd, struct volume_group *
 		       mseg->stripe_size,
 		       seg_mirrors,
 		       mseg->region_size,
-		       lp->poolmetadataextents - lv->le_count,
+		       lp->poolmetadataextents - lv->le_count, 0 /* extend at end */,
 		       pvh, alloc, 0))
 		return_0;
 
@@ -5096,7 +5099,7 @@ static struct logical_volume *_lvresize_volume(struct cmd_context *cmd,
 		   !lv_extend(lv, lp->segtype,
 			      lp->stripes, lp->stripe_size,
 			      lp->mirrors, first_seg(lv)->region_size,
-			      lp->extents - lv->le_count,
+			      lp->extents - lv->le_count, 0 /* extend at end */,
 			      pvh, alloc, lp->approx_alloc))
 		return_NULL;
 
@@ -6186,18 +6189,19 @@ int remove_layer_from_lv(struct logical_volume *lv,
 
 	log_very_verbose("Removing layer %s for %s", layer_lv->name, lv->name);
 PFL();
-
 	if (!(parent_seg = get_only_segment_using_this_lv(layer_lv))) {
 		log_error("Failed to find layer %s in %s",
 			  layer_lv->name, lv->name);
 		return 0;
 	}
+PFL();
 	parent_lv = parent_seg->lv;
 	if (parent_lv != lv) {
 		log_error(INTERNAL_ERROR "Wrong layer %s in %s",
 			  layer_lv->name, lv->name);
 		return 0;
 	}
+PFL();
 
 	/*
 	 * Before removal, the layer should be cleaned up,
@@ -6209,6 +6213,7 @@ PFL();
 	    layer_lv != seg_lv(parent_seg, 0) ||
 	    parent_lv->le_count != layer_lv->le_count)
 		return_0;
+PFL();
 
 	if (!lv_empty(parent_lv))
 		return_0;
@@ -6662,7 +6667,7 @@ static struct logical_volume *_create_virtual_origin(struct cmd_context *cmd,
 				   ALLOC_INHERIT, vg)))
 		return_NULL;
 
-	if (!lv_extend(lv, segtype, 1, 0, 1, 0, voriginextents,
+	if (!lv_extend(lv, segtype, 1, 0, 1, 0, voriginextents, 0 /* extend at end */,
 		       NULL, ALLOC_INHERIT, 0))
 		return_NULL;
 
@@ -7142,7 +7147,7 @@ PFLA("region_size=%u", lp->region_size);
 		       lp->stripes, lp->stripe_size,
 		       lp->mirrors,
 		       seg_is_pool(lp) ? lp->pool_metadata_extents : lp->region_size,
-		       seg_is_thin_volume(lp) ? lp->virtual_extents : lp->extents,
+		       seg_is_thin_volume(lp) ? lp->virtual_extents : lp->extents, 0 /* extend at end */,
 		       lp->pvh, lp->alloc, lp->approx_alloc))
 		return_NULL;
 

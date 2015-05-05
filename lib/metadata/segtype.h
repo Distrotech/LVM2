@@ -157,6 +157,7 @@ struct segment_type *init_unknown_segtype(struct cmd_context *cmd,
 int init_raid_segtypes(struct cmd_context *cmd, struct segtype_library *seglib);
 #endif
 
+#define SEG_TYPE_NAME_LINEAR		"linear"
 #define SEG_TYPE_NAME_STRIPED		"striped"
 
 #define SEG_TYPE_NAME_RAID0		"raid0"
