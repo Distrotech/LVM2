@@ -50,6 +50,9 @@ struct logical_volume {
 	struct dm_list tags;
 	struct dm_list segs_using_this_lv;
 
+	struct dm_list indirect_segs_using_this_lv;
+	struct dm_list removed_ancestor_lv_names;
+
 	uint64_t timestamp;
 	const char *hostname;
 };

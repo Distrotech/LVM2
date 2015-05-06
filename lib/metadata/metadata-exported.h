@@ -430,6 +430,7 @@ struct lv_segment {
 	uint32_t chunk_size;	/* For snapshots/thin_pool.  In sectors. */
 				/* For thin_pool, 128..2097152. */
 	struct logical_volume *origin;	/* snap and thin */
+	struct logical_volume *indirect_origin;
 	struct logical_volume *merge_lv; /* thin, merge descendent lv into this ancestor */
 	struct logical_volume *cow;
 	struct dm_list origin_list;
@@ -803,6 +804,9 @@ int vg_remove_pool_metadata_spare(struct volume_group *vg);
 int attach_thin_external_origin(struct lv_segment *seg,
 				struct logical_volume *external_lv);
 int detach_thin_external_origin(struct lv_segment *seg);
+int attach_thin_indirect_origin(struct lv_segment *seg,
+				struct logical_volume *indirect_origin);
+int detach_thin_indirect_origin(struct lv_segment *seg);
 int attach_pool_metadata_lv(struct lv_segment *pool_seg,
                             struct logical_volume *pool_metadata_lv);
 int detach_pool_metadata_lv(struct lv_segment *pool_seg,

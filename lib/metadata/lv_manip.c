@@ -837,6 +837,57 @@ int remove_seg_from_segs_using_this_lv(struct logical_volume *lv,
 	return 0;
 }
 
+int add_seg_to_indirect_segs_using_this_lv(struct logical_volume *lv,
+					   struct lv_segment *seg)
+{
+	struct seg_list *sl;
+
+	dm_list_iterate_items(sl, &lv->indirect_segs_using_this_lv) {
+		if (sl->seg == seg) {
+			sl->count++;
+			return 1;
+		}
+	}
+
+	log_very_verbose("Adding %s:%" PRIu32 "as an indirect user of %s",
+			 seg->lv->name, seg->le, lv->name);
+
+	if (!(sl = dm_pool_zalloc(lv->vg->vgmem, sizeof(*sl)))) {
+		log_error("Failed to allocate segment list");
+		return 0;
+	}
+
+	sl->count = 1;
+	sl->seg = seg;
+	dm_list_add(&lv->indirect_segs_using_this_lv, &sl->list);
+
+	return 1;
+}
+
+int remove_seg_from_indirect_segs_using_this_lv(struct logical_volume *lv,
+						struct lv_segment *seg)
+{
+	struct seg_list *sl;
+
+	dm_list_iterate_items(sl, &lv->indirect_segs_using_this_lv) {
+		if (sl->seg != seg)
+			continue;
+		if (sl->count > 1)
+			sl->count--;
+		else {
+			log_very_verbose("%s:%" PRIu32 " is no longer an "
+					 "indirect user of %s", seg->lv->name,
+					 seg->le, lv->name);
+			dm_list_del(&sl->list);
+		}
+		return 1;
+	}
+
+	log_error(INTERNAL_ERROR "Segment %s:%u is not an indirect user of %s.",
+		  seg->lv->name, seg->le, lv->name);
+	return 0;
+}
+
 /*
  * This is a function specialized for the common case where there is
  * only one segment which uses the LV.
@@ -5342,6 +5393,8 @@ struct logical_volume *alloc_lv(struct dm_pool *mem)
 	dm_list_init(&lv->segments);
 	dm_list_init(&lv->tags);
 	dm_list_init(&lv->segs_using_this_lv);
+	dm_list_init(&lv->indirect_segs_using_this_lv);
+	dm_list_init(&lv->removed_ancestor_lv_names);
 	dm_list_init(&lv->rsites);
 
 	return lv;

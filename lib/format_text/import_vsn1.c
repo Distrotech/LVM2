@@ -638,6 +638,13 @@ static int _read_lvnames(struct format_instance *fid __attribute__((unused)),
 		return 0;
 	}
 
+	if (dm_config_get_list(lvn, "removed_ancestor_lv_names", &cv) &&
+	    !(_read_str_list(mem, &lv->removed_ancestor_lv_names, cv))) {
+		log_error("Couldn't read removed ancestor names for logical "
+			  "volume %s/%s.", vg->name, lv->name);
+		return 0;
+	}
+
 	if (!dm_hash_insert(lv_hash, lv->name, lv))
 		return_0;
 

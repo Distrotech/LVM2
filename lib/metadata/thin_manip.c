@@ -121,6 +121,35 @@ int detach_thin_external_origin(struct lv_segment *seg)
 	return 1;
 }
 
+int attach_thin_indirect_origin(struct lv_segment *seg,
+				struct logical_volume *indirect_origin)
+{
+	if (seg->indirect_origin) {
+		log_error(INTERNAL_ERROR "LV \"%s\" already has indirect origin.",
+			  seg->lv->name);
+		return 0;
+	}
+
+	seg->indirect_origin = indirect_origin;
+
+	if (indirect_origin && !add_seg_to_indirect_segs_using_this_lv(indirect_origin, seg))
+		return_0;
+
+	return 1;
+}
+
+int detach_thin_indirect_origin(struct lv_segment *seg)
+{
+	if (seg->indirect_origin) {
+		if (!remove_seg_from_indirect_segs_using_this_lv(seg->indirect_origin, seg))
+			return_0;
+
+		seg->indirect_origin = NULL;
+	}
+
+	return 1;
+}
+
 int lv_is_merging_thin_snapshot(const struct logical_volume *lv)
 {
 	struct lv_segment *seg = first_seg(lv);
