@@ -109,7 +109,7 @@ lvmpolld_lv_t *pdlv_create(lvmpolld_state_t *ls, const char *id,
 		.lvname = full_lvname,
 		.lvm_system_dir_env = lvm_system_dir_env,
 		.sinterval = dm_strdup(sinterval), /* copy */
-		.pdtimeout = pdtimeout ?: PDTIMEOUT_DEF,
+		.pdtimeout = pdtimeout < MIN_POLLING_TIMEOUT ? MIN_POLLING_TIMEOUT : pdtimeout,
 		.cmd_state = { .retcode = -1, .signal = 0 },
 		.pdst = pdst,
 		.init_rq_count = 1

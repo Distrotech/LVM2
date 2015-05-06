@@ -250,12 +250,15 @@ static int poll_for_output(lvmpolld_lv_t *pdlv, lvmpolld_thread_data_t *data)
 			timeout++;
 
 			WARN(pdlv->ls, "%s: %s (PID %d) %s", PD_LOG_PREFIX,
-			     "polling for output of lvm cmd", pdlv->cmd_pid, "has timed out");
+			     "polling for output of the lvm cmd", pdlv->cmd_pid,
+			     "has timed out");
 
 			if (timeout > MAX_TIMEOUT) {
-				ERROR(pdlv->ls, "%s: %s (PID %d)", PD_LOG_PREFIX,
-				      "Exceeded maximum number of allowed timeouts for lvm cmd",
-				      pdlv->cmd_pid);
+				ERROR(pdlv->ls, "%s: %s (PID %d) (no output for %d seconds)",
+				      PD_LOG_PREFIX,
+				      "LVM2 cmd is unresponsive too long",
+				      pdlv->cmd_pid,
+				      timeout * pdlv_get_timeout(pdlv));
 				goto out;
 			}
 
@@ -555,7 +558,7 @@ static lvmpolld_lv_t *construct_pdlv(request req, lvmpolld_state_t *ls,
 	unsigned handle_missing_pvs = daemon_request_int(req, LVMPD_PARM_HANDLE_MISSING_PVS, 0);
 
 	pdlv = pdlv_create(ls, id, vgname, lvname, sysdir, type,
-			   interval, 2 * uinterval, pdst);
+			   interval, uinterval, pdst);
 
 	if (!pdlv) {
 		ERROR(ls, "%s: %s", PD_LOG_PREFIX, "failed to create internal LV data structure.");
@@ -668,7 +671,7 @@ static response poll_init(client_handle h, lvmpolld_state_t *ls, request req, en
 		pdlv->init_rq_count++; /* safe. protected by store lock */
 	} else {
 		pdlv = construct_pdlv(req, ls, pdst, interval, id, vgname,
-				      lvname, sysdir, type, abort, uinterval);
+				      lvname, sysdir, type, abort, 2 * uinterval);
 		if (!pdlv) {
 			pdst_unlock(pdst);
 			dm_free(id);

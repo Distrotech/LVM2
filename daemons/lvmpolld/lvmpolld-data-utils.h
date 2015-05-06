@@ -25,7 +25,7 @@ typedef struct lvmpolld_state lvmpolld_state_t;
 typedef void (*lvmpolld_parse_output_fn_t) (lvmpolld_lv_t *pdlv, const char *line);
 
 /* TODO: replace with configuration option */
-#define PDTIMEOUT_DEF 60
+#define MIN_POLLING_TIMEOUT 60
 
 enum poll_type {
 	PVMOVE = 0,
