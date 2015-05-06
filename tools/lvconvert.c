@@ -1967,7 +1967,7 @@ printf("image_count=%u\n", image_count);
 		return lv_raid_split(lv, lp->lv_split_name,
 				     image_count, lp->pvh);
 
-printf("lp-Segtyoe=%s\n", lp->segtype->name);
+printf("lp->segtype=%s\n", lp->segtype->name);
 	if ((seg_is_linear(seg) || seg_is_striped(seg) || seg_is_mirrored(seg) || lv_is_raid(lv)) &&
 	    (arg_count(cmd, type_ARG) ||
 	     image_count ||

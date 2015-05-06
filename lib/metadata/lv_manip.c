@@ -1286,7 +1286,8 @@ static uint32_t _area_len(struct lv_segment *seg, uint32_t extents, uint32_t *ar
 	if (seg_is_striped(seg) || seg_is_striped_raid(seg)) {
 		uint32_t data_devs = seg->area_count - seg->segtype->parity_devs;
 
-		if (seg_is_raid10(seg)) {
+		if (seg_is_raid10(seg) &&
+		    data_devs > 1) {
 			if (data_devs % 2) {
 				log_error("raid10 data devices not divisible by 2");
 				return 0;
