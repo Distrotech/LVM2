@@ -686,6 +686,9 @@ static int _print_lv(struct formatter *f, struct logical_volume *lv)
 	if (!_out_list(f, &lv->tags, "tags"))
 		return_0;
 
+	if (!_out_list(f, &lv->removed_ancestor_lv_names, "removed_ancestor_lv_names"))
+		return_0;
+
 	if (lv->timestamp) {
 		ts = (time_t)lv->timestamp;
 		strncpy(buffer, "# ", sizeof(buffer));

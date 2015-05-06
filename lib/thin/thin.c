@@ -463,7 +463,8 @@ static int _thin_text_import(struct lv_segment *seg,
 			     struct dm_hash_table *pv_hash __attribute__((unused)))
 {
 	const char *lv_name;
-	struct logical_volume *pool_lv, *origin = NULL, *external_lv = NULL, *merge_lv = NULL;
+	struct logical_volume *pool_lv, *origin = NULL, *indirect_origin = NULL,
+			      *external_lv = NULL, *merge_lv = NULL;
 
 	if (!dm_config_get_str(sn, "thin_pool", &lv_name))
 		return SEG_LOG_ERROR("Thin pool must be a string in");
@@ -480,6 +481,14 @@ static int _thin_text_import(struct lv_segment *seg,
 
 		if (!(origin = find_lv(seg->lv->vg, lv_name)))
 			return SEG_LOG_ERROR("Unknown origin %s in", lv_name);
+	}
+
+	if (dm_config_has_node(sn, "indirect_origin")) {
+		if (!dm_config_get_str(sn, "indirect_origin", &lv_name))
+			return SEG_LOG_ERROR("Indirect origin must be a string in");
+
+		if (!(indirect_origin = find_lv(seg->lv->vg, lv_name)))
+			return SEG_LOG_ERROR("Unknown indirect origin %s in", lv_name);
 	}
 
 	if (dm_config_has_node(sn, "merge")) {
@@ -510,6 +519,9 @@ static int _thin_text_import(struct lv_segment *seg,
 	if (!attach_thin_external_origin(seg, external_lv))
 		return_0;
 
+	if (!attach_thin_indirect_origin(seg, indirect_origin))
+		return_0;
+
 	return 1;
 }
 
@@ -519,6 +531,8 @@ static int _thin_text_export(const struct lv_segment *seg, struct formatter *f)
 	outf(f, "transaction_id = %" PRIu64, seg->transaction_id);
 	outf(f, "device_id = %d", seg->device_id);
 
+	if (seg->indirect_origin)
+		outf(f, "indirect_origin = \"%s\"", seg->indirect_origin->name);
 	if (seg->external_lv)
 		outf(f, "external_origin = \"%s\"", seg->external_lv->name);
 	if (seg->origin)
