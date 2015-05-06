@@ -17,8 +17,6 @@
 
 #include "lvmpolld-data-utils.h"
 
-#define MIN_ARGV_SIZE  8
-
 const char **cmdargv_ctr(const lvmpolld_lv_t *pdlv, const char *lvm_binary, unsigned abort, unsigned handle_missing_pvs);
 const char **cmdenvp_ctr(const lvmpolld_lv_t *pdlv);
 

@@ -21,6 +21,8 @@
 /* extract this info from autoconf/automake files */
 #define LVPOLL_CMD "lvpoll"
 
+#define MIN_ARGV_SIZE  8
+
 extern char **environ;
 
 static const char *const const polling_ops[] = { [PVMOVE] = LVMPD_REQ_PVMOVE,
@@ -33,12 +35,12 @@ const char *polling_op(enum poll_type type)
 	return type < POLL_TYPE_MAX ? polling_ops[type] : "<undefined>";
 }
 
-static int add_to_cmd_arr(const char ***cmdargv, const char *str, unsigned *index, unsigned renameme)
+static int add_to_cmd_arr(const char ***cmdargv, const char *str, unsigned *index)
 {
 	const char **newargv = *cmdargv;
 
-	if (*index && !(*index % renameme)) {
-		newargv = dm_realloc(*cmdargv, (*index / renameme + 1) * renameme * sizeof(char *));
+	if (*index && !(*index % MIN_ARGV_SIZE)) {
+		newargv = dm_realloc(*cmdargv, (*index / MIN_ARGV_SIZE + 1) * MIN_ARGV_SIZE * sizeof(char *));
 		if (!newargv)
 			return 0;
 		*cmdargv = newargv;
@@ -58,40 +60,40 @@ const char **cmdargv_ctr(const lvmpolld_lv_t *pdlv, const char *lvm_binary, unsi
 		return NULL;
 
 	/* path to lvm2 binary */
-	if (!add_to_cmd_arr(&cmd_argv, lvm_binary, &i, MIN_ARGV_SIZE))
+	if (!add_to_cmd_arr(&cmd_argv, lvm_binary, &i))
 		goto err;
 
 	/* cmd to execute */
-	if (!add_to_cmd_arr(&cmd_argv, LVPOLL_CMD, &i, MIN_ARGV_SIZE))
+	if (!add_to_cmd_arr(&cmd_argv, LVPOLL_CMD, &i))
 		goto err;
 
 	/* transfer internal polling interval */
 	if (pdlv->sinterval &&
-	    (!add_to_cmd_arr(&cmd_argv, "--interval", &i, MIN_ARGV_SIZE) ||
-	     !add_to_cmd_arr(&cmd_argv, pdlv->sinterval, &i, MIN_ARGV_SIZE)))
+	    (!add_to_cmd_arr(&cmd_argv, "--interval", &i) ||
+	     !add_to_cmd_arr(&cmd_argv, pdlv->sinterval, &i)))
 		goto err;
 
 	/* pass abort param */
 	if (abort &&
-	    !add_to_cmd_arr(&cmd_argv, "--abort", &i, MIN_ARGV_SIZE))
+	    !add_to_cmd_arr(&cmd_argv, "--abort", &i))
 		goto err;
 
 	/* pass handle-missing-pvs. used by mirror polling operation */
 	if (handle_missing_pvs &&
-	    !add_to_cmd_arr(&cmd_argv, "--handlemissingpvs", &i, MIN_ARGV_SIZE))
+	    !add_to_cmd_arr(&cmd_argv, "--handlemissingpvs", &i))
 		goto err;
 
 	/* one of: "convert", "pvmove", "merge", "merge_thin" */
-	if (!add_to_cmd_arr(&cmd_argv, "--polloperation", &i, MIN_ARGV_SIZE) ||
-	    !add_to_cmd_arr(&cmd_argv, polling_ops[pdlv->type], &i, MIN_ARGV_SIZE))
+	if (!add_to_cmd_arr(&cmd_argv, "--polloperation", &i) ||
+	    !add_to_cmd_arr(&cmd_argv, polling_ops[pdlv->type], &i))
 		goto err;
 
 	/* vg/lv name */
-	if (!add_to_cmd_arr(&cmd_argv, pdlv->lvname, &i, MIN_ARGV_SIZE))
+	if (!add_to_cmd_arr(&cmd_argv, pdlv->lvname, &i))
 		goto err;
 
 	/* terminating NULL */
-	if (!add_to_cmd_arr(&cmd_argv, NULL, &i, MIN_ARGV_SIZE))
+	if (!add_to_cmd_arr(&cmd_argv, NULL, &i))
 		goto err;
 
 	return cmd_argv;
@@ -101,7 +103,7 @@ err:
 }
 
 /* FIXME: in fact exclude should be va list */
-static int copy_env(const char ***cmd_envp, unsigned *i, unsigned renameme, const char *exclude)
+static int copy_env(const char ***cmd_envp, unsigned *i, const char *exclude)
 {
 	const char * const* tmp = (const char * const*) environ;
 
@@ -109,7 +111,7 @@ static int copy_env(const char ***cmd_envp, unsigned *i, unsigned renameme, cons
 		return 0;
 
 	while (*tmp) {
-		if (strncmp(*tmp, exclude, strlen(exclude)) && !add_to_cmd_arr(cmd_envp, *tmp, i, renameme))
+		if (strncmp(*tmp, exclude, strlen(exclude)) && !add_to_cmd_arr(cmd_envp, *tmp, i))
 			return 0;
 		tmp++;
 	}
@@ -126,15 +128,15 @@ const char **cmdenvp_ctr(const lvmpolld_lv_t *pdlv)
 		return NULL;
 
 	/* copy whole environment from lvmpolld, exclude LVM_SYSTEM_DIR if set */
-	if (!copy_env(&cmd_envp, &i, MIN_ARGV_SIZE, "LVM_SYSTEM_DIR="))
+	if (!copy_env(&cmd_envp, &i, "LVM_SYSTEM_DIR="))
 		goto err;
 
 	/* Add per client LVM_SYSTEM_DIR variable if set */
-	if (*pdlv->lvm_system_dir_env && !add_to_cmd_arr(&cmd_envp, pdlv->lvm_system_dir_env, &i, MIN_ARGV_SIZE))
+	if (*pdlv->lvm_system_dir_env && !add_to_cmd_arr(&cmd_envp, pdlv->lvm_system_dir_env, &i))
 		goto err;
 
 	/* terminating NULL */
-	if (!add_to_cmd_arr(&cmd_envp, NULL, &i, MIN_ARGV_SIZE))
+	if (!add_to_cmd_arr(&cmd_envp, NULL, &i))
 		goto err;
 
 	return cmd_envp;
