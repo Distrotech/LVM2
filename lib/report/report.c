@@ -634,25 +634,33 @@ static int _origin_disp(struct dm_report *rh, struct dm_pool *mem,
 }
 
 static int _find_ancestors(struct _str_list_append_baton *ancestors,
-			   struct logical_volume *lv)
+			   struct logical_volume *lv, int full)
 {
 	struct logical_volume *ancestor_lv = NULL;
 	struct lv_segment *seg;
+	struct dm_str_list *strl;
 
 	if (lv_is_cow(lv)) {
 		ancestor_lv = origin_from_cow(lv);
-	} else 	if (lv_is_thin_volume(lv)) {
+	} else if (lv_is_thin_volume(lv)) {
 		seg = first_seg(lv);
 		if (seg->origin)
 			ancestor_lv = seg->origin;
 		else if (seg->external_lv)
 			ancestor_lv = seg->external_lv;
+		else if (full) {
+			dm_list_iterate_items(strl, &seg->lv->removed_ancestor_lv_names)
+				if (!_str_list_append(strl->str, ancestors))
+					return_0;
+			if (seg->indirect_origin)
+				ancestor_lv = seg->indirect_origin;
+		}
 	}
 
 	if (ancestor_lv) {
 		if (!_str_list_append(ancestor_lv->name, ancestors))
 			return_0;
-		if (!_find_ancestors(ancestors, ancestor_lv))
+		if (!_find_ancestors(ancestors, ancestor_lv, full))
 			return_0;
 	}
 
@@ -670,7 +678,7 @@ static int _lvancestors_disp(struct dm_report *rh, struct dm_pool *mem,
 	if (!(ancestors.result = str_list_create(mem)))
 		return_0;
 
-	if (!_find_ancestors(&ancestors, lv)) {
+	if (!_find_ancestors(&ancestors, lv, 0)) {
 		dm_pool_free(ancestors.mem, ancestors.result);
 		return_0;
 	}
@@ -678,19 +686,39 @@ static int _lvancestors_disp(struct dm_report *rh, struct dm_pool *mem,
 	return _field_set_string_list(rh, field, ancestors.result, private, 0);
 }
 
+static int _lvancestorsfull_disp(struct dm_report *rh, struct dm_pool *mem,
+				 struct dm_report_field *field,
+				 const void *data, void *private)
+{
+	struct logical_volume *lv = (struct logical_volume *) data;
+	struct _str_list_append_baton ancestors_full;
+
+	ancestors_full.mem = mem;
+	if (!(ancestors_full.result = str_list_create(mem)))
+		return_0;
+
+	if (!_find_ancestors(&ancestors_full, lv, 1)) {
+		dm_pool_free(ancestors_full.mem, ancestors_full.result);
+		return_0;
+	}
+
+	return _field_set_string_list(rh, field, ancestors_full.result, private, 0);
+}
+
 static int _find_descendants(struct _str_list_append_baton *descendants,
-			     struct logical_volume *lv)
+			     struct logical_volume *lv, int full)
 {
 	struct logical_volume *descendant_lv = NULL;
 	const struct seg_list *sl;
 	struct lv_segment *seg;
+	struct dm_str_list *strl;
 
 	if (lv_is_origin(lv)) {
 		dm_list_iterate_items_gen(seg, &lv->snapshot_segs, origin_list) {
 			if ((descendant_lv = seg->cow)) {
 				if (!_str_list_append(descendant_lv->name, descendants))
 					return_0;
-				if (!_find_descendants(descendants, descendant_lv))
+				if (!_find_descendants(descendants, descendant_lv, full))
 					return_0;
 			}
 		}
@@ -703,10 +731,32 @@ static int _find_descendants(struct _str_list_append_baton *descendants,
 			}
 
 			if (descendant_lv) {
+				dm_list_iterate_items(strl, &descendant_lv->removed_ancestor_lv_names)
+					if (!_str_list_append(strl->str, descendants))
+						return_0;
 				if (!_str_list_append(descendant_lv->name, descendants))
 					return_0;
-				if (!_find_descendants(descendants, descendant_lv))
+				if (!_find_descendants(descendants, descendant_lv, full))
 					return_0;
+			}
+		}
+
+		if (full) {
+			descendant_lv = NULL;
+			dm_list_iterate_items(sl, &lv->indirect_segs_using_this_lv) {
+				seg = first_seg(sl->seg->lv);
+				if (seg->indirect_origin == lv)
+					descendant_lv = sl->seg->lv;
+
+				if (descendant_lv) {
+					dm_list_iterate_items(strl, &descendant_lv->removed_ancestor_lv_names)
+						if (!_str_list_append(strl->str, descendants))
+							return_0;
+					if (!_str_list_append(descendant_lv->name, descendants))
+						return_0;
+					if (!_find_descendants(descendants, descendant_lv, full))
+						return_0;
+				}
 			}
 		}
 	}
@@ -725,12 +775,31 @@ static int _lvdescendants_disp(struct dm_report *rh, struct dm_pool *mem,
 	if (!(descendants.result = str_list_create(mem)))
 		return_0;
 
-	if (!_find_descendants(&descendants, lv)) {
+	if (!_find_descendants(&descendants, lv, 0)) {
 		dm_pool_free(descendants.mem, descendants.result);
 		return_0;
 	}
 
 	return _field_set_string_list(rh, field, descendants.result, private, 0);
+}
+
+static int _lvdescendantsfull_disp(struct dm_report *rh, struct dm_pool *mem,
+				   struct dm_report_field *field,
+				   const void *data, void *private)
+{
+	struct logical_volume *lv = (struct logical_volume *) data;
+	struct _str_list_append_baton descendants_full;
+
+	descendants_full.mem = mem;
+	if (!(descendants_full.result = str_list_create(mem)))
+		return_0;
+
+	if (!_find_descendants(&descendants_full, lv, 1)) {
+		dm_pool_free(descendants_full.mem, descendants_full.result);
+		return_0;
+	}
+
+	return _field_set_string_list(rh, field, descendants_full.result, private, 0);
 }
 
 static int _movepv_disp(struct dm_report *rh, struct dm_pool *mem __attribute__((unused)),
