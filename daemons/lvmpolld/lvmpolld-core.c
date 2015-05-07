@@ -62,12 +62,12 @@ static pthread_key_t key;
 static const char *_strerror_r(int errnum, lvmpolld_thread_data_t *data)
 {
 #ifdef _GNU_SOURCE
-	return strerror_r(errnum, data->buf, sizeof(data->buf));
+	return strerror_r(errnum, data->buf, sizeof(data->buf)); /* never returns NULL */
 #elif (_POSIX_C_SOURCE >= 200112L || _XOPEN_SOURCE >= 600)
-	return strerror_r(errnum, data->buf, sizeof(data->buf)) ? NULL : data->buf;
+	return strerror_r(errnum, data->buf, sizeof(data->buf)) ? "" : data->buf;
 #else
-#	warning "Can't decide strerror_r implementation to use. lvmpolld will not issue more specific error messages"
-	return NULL;
+#	warning "Can't decide proper strerror_r implementation. lvmpolld will not issue specific system error messages"
+	return "";
 #endif
 }
 
@@ -231,7 +231,7 @@ static int poll_for_output(lvmpolld_lv_t *pdlv, lvmpolld_thread_data_t *data)
 
 	if (!(data->fout = fdopen(data->outpipe[0], "r")) || !(data->ferr = fdopen(data->errpipe[0], "r"))) {
 		ERROR(pdlv->ls, "%s: %s: (%d) %s", PD_LOG_PREFIX, "failed to open file stream",
-		      errno, _strerror_r(errno, data) ?: "");
+		      errno, _strerror_r(errno, data));
 		goto out;
 	}
 
@@ -244,7 +244,7 @@ static int poll_for_output(lvmpolld_lv_t *pdlv, lvmpolld_thread_data_t *data)
 		if (r < 0) {
 			ERROR(pdlv->ls, "%s: %s (PID %d) failed: (%d) %s",
 			      PD_LOG_PREFIX, "poll() for LVM2 cmd", pdlv->cmd_pid,
-			      errno, _strerror_r(errno, data) ?: "");
+			      errno, _strerror_r(errno, data));
 			goto out;
 		} else if (!r) {
 			timeout++;
@@ -316,7 +316,7 @@ static int poll_for_output(lvmpolld_lv_t *pdlv, lvmpolld_thread_data_t *data)
 				ERROR(pdlv->ls, "%s: %s (PID %d) failed: (%d) %s",
 				      PD_LOG_PREFIX, "waitpid() for lvm2 cmd",
 				      pdlv->cmd_pid, errno,
-				      _strerror_r(errno, data) ?: "");
+				      _strerror_r(errno, data));
 				goto out;
 			}
 			DEBUGLOG(pdlv->ls, "%s: %s", PD_LOG_PREFIX, "child exited");
@@ -415,7 +415,7 @@ static void *fork_and_poll(void *args)
 		/* parent */
 		if (r == -1) {
 			ERROR(ls, "%s: %s: (%d) %s", PD_LOG_PREFIX, "fork failed",
-			      errno, _strerror_r(errno, data) ?: "");
+			      errno, _strerror_r(errno, data));
 			goto err;
 		}
 
@@ -426,14 +426,14 @@ static void *fork_and_poll(void *args)
 		/* failure to close write end of any pipe will result in broken polling */
 		if (close(data->outpipe[1])) {
 			ERROR(ls, "%s: %s: (%d) %s", PD_LOG_PREFIX, "failed to close write end of pipe",
-			      errno, _strerror_r(errno, data) ?: "");
+			      errno, _strerror_r(errno, data));
 			goto err;
 		}
 		data->outpipe[1] = -1;
 
 		if (close(data->errpipe[1])) {
 			ERROR(ls, "%s: %s: (%d) %s", PD_LOG_PREFIX, "failed to close write end of err pipe",
-			      errno, _strerror_r(errno, data) ?: "");
+			      errno, _strerror_r(errno, data));
 			goto err;
 		}
 		data->errpipe[1] = -1;
