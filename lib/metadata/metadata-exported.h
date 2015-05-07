@@ -334,7 +334,7 @@ struct lv_segment_area {
 		struct {
 			struct logical_volume *lv;
 			uint32_t le;
-			uint32_t reshape_le;
+			uint32_t reshape_le; /* HM FIXME: here or in LV? */
 		} lv;
 	} u;
 };

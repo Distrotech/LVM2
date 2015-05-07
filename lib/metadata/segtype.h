@@ -185,6 +185,7 @@ int init_raid_segtypes(struct cmd_context *cmd, struct segtype_library *seglib);
 
 #define segtype_is_raid0(segtype)	(!strcmp((segtype)->name, SEG_TYPE_NAME_RAID0))
 #define segtype_is_raid0_meta(segtype)	(!strcmp((segtype)->name, SEG_TYPE_NAME_RAID0_META))
+#define segtype_is_any_raid0(segtype)	(segtype_is_raid0(segtype) || segtype_is_raid0_meta(segtype))
 #define segtype_is_raid1(segtype)	(!strcmp((segtype)->name, SEG_TYPE_NAME_RAID1))
 #define segtype_is_raid10(segtype)	(!strcmp((segtype)->name, SEG_TYPE_NAME_RAID10))
 #define segtype_is_any_raid4(segtype)	(!strncmp((segtype)->name, SEG_TYPE_NAME_RAID4, 5))
@@ -207,6 +208,7 @@ int init_raid_segtypes(struct cmd_context *cmd, struct segtype_library *seglib);
 
 #define seg_is_raid0(seg)		segtype_is_raid0((seg)->segtype)
 #define seg_is_raid0_meta(seg)		segtype_is_raid0_meta((seg)->segtype)
+#define seg_is_any_raid0(seg)		segtype_is_any_raid0((seg)->segtype)
 #define seg_is_raid1(seg)		segtype_is_raid1((seg)->segtype)
 #define seg_is_raid10(seg)		segtype_is_raid10((seg)->segtype)
 #define seg_is_any_raid4(seg)		segtype_is_any_raid4((seg)->segtype)

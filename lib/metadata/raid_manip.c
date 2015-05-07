@@ -168,7 +168,7 @@ static int _raid_in_sync(struct logical_volume *lv)
 	dm_percent_t sync_percent;
 	struct lv_segment *seg = first_seg(lv);
 
-	if (seg_is_striped(seg) || seg_is_raid0(seg))
+	if (seg_is_striped(seg) || seg_is_any_raid0(seg))
 		return 1;
 
 	if (!lv_raid_percent(lv, &sync_percent)) {
@@ -1085,16 +1085,17 @@ static int _reset_flags_passed_to_kernel(struct logical_volume *lv)
 	return 1;
 }
 
+#if 0
 /*
  * Reorder the areas in the first segment of @lv to suit raid10/raid0 layout
  *
- * raid0 (123) -> raid10 (142536) order
- * raid10 (123456) -> raid0 (135) order
+ * raid0  (123456) -> raid10 (142536) order
+ * raid10 (123456) -> raid0  (135246/246135 depending on mirror selection) order
  *
  */
-/* HM FIXME: nr_copies / 2 in case of raid10 -> raid0 */
+/* HM FIXME: only need nr_copies / 2 in case of raid10 -> raid0 */
 /* HM FIXME: find memory optimized sort */
-static int _raid10_reorder_seg_areas(struct logical_volume *lv, int to_raid10)
+static int _bad_raid10_reorder_seg_areas(struct logical_volume *lv, int to_raid10)
 {
 	struct lv_segment *seg = first_seg(lv);
 	uint32_t src, dst;
@@ -1115,6 +1116,7 @@ static int _raid10_reorder_seg_areas(struct logical_volume *lv, int to_raid10)
 	}
 
 	if (to_raid10) {
+		/* Reorder raid0 -> raid10 */
 		src = seg->area_count / 2;
 		dst = 1;
 		while (dst < seg->area_count - 1) {
@@ -1133,6 +1135,7 @@ static int _raid10_reorder_seg_areas(struct logical_volume *lv, int to_raid10)
 			dst += 2;
 		}
 	} else {
+		/* Reorder raid10 -> raid0 */
 		src = 2;
 		dst = 1;
 		while (src < seg->area_count) {
@@ -1155,6 +1158,66 @@ static int _raid10_reorder_seg_areas(struct logical_volume *lv, int to_raid10)
 	dm_pool_free(lv->vg->vgmem, copies);
 
 	return 1;
+}
+#endif
+
+/* Helper: swap 2 LV segment areas @a1 and @a2 */
+static void _swap_areas(struct lv_segment_area *a1, struct lv_segment_area *a2)
+{
+	struct lv_segment_area tmp = *a1;
+
+	*a1 = *a2;
+	*a2 = tmp;
+}
+
+/*
+ * Reorder the areas in the first segment of @lv to suit raid10/raid0 layout
+ *
+ * Examples with 6 disks indexed 0..5:
+ *
+ * raid0  (012345) -> raid10 (031425) order
+ * idx     024135
+ * raid10 (012345) -> raid0  (024135/135024) order depending on mirror selection
+ * idx     031425
+ * _or_ (variations possible)
+ * idx     304152
+ *
+ */
+static void _lv_raid10_reorder_seg_areas(struct logical_volume *lv, int to_raid10)
+{
+	unsigned i;
+	struct lv_segment *seg = first_seg(lv);
+	uint32_t half_areas = seg->area_count / 2;
+	short unsigned idx[seg->area_count];
+	
+	/* Set up index array */
+	if (to_raid10)
+		for (i = 0; i < seg->area_count; i++)
+			idx[i] = i < half_areas ? i * 2 : (i - half_areas) * 2 + 1;
+	else
+#if 1
+		for (i = 0; i < seg->area_count; i++)
+			idx[i < half_areas ? i * 2 : (i - half_areas) * 2 + 1] = i;
+#else
+		/* This selection casues image name suffixes to start > 0 and needs names shifting! */
+		for (i = 0; i < seg->area_count; i++)
+			idx[i < half_areas ? i * 2 + 1 : (i - half_areas) * 2] = i;
+#endif
+for (i = 0; i < seg->area_count; i++)
+PFLA("idx[%u]=%u", i, idx[i]);
+
+	/* Sort ad swap */
+	for (i = 0; i < seg->area_count - 1; i++) {
+		unsigned j;
+		unsigned short min;
+
+		for (min = idx[i], j = i + 1; j < seg->area_count; j++)
+			if (idx[j] < min)
+				min = idx[j];
+
+		_swap_areas(seg->areas + i, seg->areas + min);
+		_swap_areas(seg->meta_areas + i, seg->meta_areas + min);
+	}
 }
 
 /*
@@ -1286,10 +1349,9 @@ PFL();
 		goto fail;
 
 	/* Reorder the areas in case this is a raid0 -> raid10 conversion */
-	if (seg_is_raid0(seg) && segtype_is_raid10(segtype)) {
+	if (seg_is_any_raid0(seg) && segtype_is_raid10(segtype)) {
 		log_debug_metadata("Redordering areas for raid0 -> raid10 takeover");
-		if (!_raid10_reorder_seg_areas(lv, 1))
-			return 0;
+		_lv_raid10_reorder_seg_areas(lv, 1);
 	}
 
 	/*
@@ -1613,10 +1675,9 @@ PFLA("segtype=%s new_count=%u", segtype->name, new_count);
 	dm_list_init(&removal_list);
 
 	/* Reorder the areas in case this is a raid10 -> raid0 conversion */
-	if (seg_is_raid10(seg) && segtype_is_raid0(segtype)) {
-		log_debug_metadata("Redordering areas for raid0 -> raid10 takeover");
-		if (!_raid10_reorder_seg_areas(lv, 0))
-			return 0;
+	if (seg_is_raid10(seg) && segtype_is_any_raid0(segtype)) {
+		log_debug_metadata("Reordering areas for raid0 -> raid10 takeover");
+		_lv_raid10_reorder_seg_areas(lv, 0);
 	}
 
 	/* Extract all image and any metadata lvs past new_count */
@@ -1633,26 +1694,25 @@ PFLA("segtype=%s new_count=%u", segtype->name, new_count);
 	 * In case this is a conversion to raid0,
 	 * remove the metadata image LVs.
 	 */
-	if (raid0 || segtype_is_raid0_meta(segtype)) {
-		if (raid0) {
-			uint32_t s;
-			struct lv_list *lvl_array;
+	if (raid0 && seg->meta_areas) {
+		uint32_t s;
+		struct lv_list *lvl_array;
 
-			if (!(lvl_array = dm_pool_alloc(lv->vg->vgmem, sizeof(*lvl_array) * new_count)))
-				return_0;
+		if (!(lvl_array = dm_pool_alloc(lv->vg->vgmem, sizeof(*lvl_array) * new_count)))
+			return_0;
 
-			for (s = 0; s < new_count; s++) {
-				if (!_extract_image_component(seg, RAID_META, s, &lvl_array[s].lv))
-					return 0;
+		for (s = 0; s < new_count; s++) {
+			if (!_extract_image_component(seg, RAID_META, s, &lvl_array[s].lv))
+				return 0;
 
-				dm_list_add(&removal_list, &lvl_array[s].list);
-			}
-
-			seg->meta_areas = NULL;
+			dm_list_add(&removal_list, &lvl_array[s].list);
 		}
 
-		seg->region_size = 0;
+		seg->meta_areas = NULL;
 	}
+
+	if (segtype_is_any_raid0(segtype))
+		seg->region_size = 0;
 
 	/* Reshape adding image component pairs -> change size accordingly */
 	if (reshape_disks) {
@@ -1818,7 +1878,6 @@ PFLA("segtype=%s old_count=%u new_count=%u", segtype->name, old_count, new_count
 	/* Check for maximum supported raid devices */
 	if (!_check_maximum_devices(new_count))
 		return 0;
-PFL();
 	/*
 	 * LV must be either in-active or exclusively active
 	 */
@@ -1829,7 +1888,6 @@ PFL();
 			  " perform this operation.", lv->vg->name, lv->name);
 		return 0;
 	}
-PFL();
 
 	return (old_count > new_count ? _raid_remove_images : _raid_add_images)(lv, segtype, new_count, pvs);
 }
@@ -2629,7 +2687,7 @@ static int _convert_raid0_to_striped(struct logical_volume *lv,
 	dm_list_init(&removal_lvs);
 
 	/* Caller should ensure, but... */
-	if (!seg_is_raid0(seg) ||
+	if (!seg_is_any_raid0(seg) ||
 	    !segtype_is_striped(new_segtype))
 		return 0;
 
@@ -2732,6 +2790,13 @@ PFLA("old_dev_count=%u new_dev_count=%u", old_dev_count, new_dev_count);
 	    old_dev_count == new_dev_count &&
 	    seg->stripe_size == new_stripe_size) {
 		log_error("Nothing to do");
+		return 0;
+	}
+
+	if (segtype_is_any_raid0(new_segtype) &&
+	    (old_dev_count != new_dev_count || seg->stripe_size != new_stripe_size)) {
+		log_error("Can't reshape raid0");
+		log_error("You may want to convert to raid4/5/6 first");
 		return 0;
 	}
 
@@ -3251,7 +3316,7 @@ PFLA("stripes=%u stripe_size=%u seg->stripe_size=%u", stripes, stripe_size, seg-
 	}
 
 	if (seg->stripe_size != stripe_size) {
-		if (seg_is_striped(seg) || seg_is_raid0(seg)) {
+		if (seg_is_striped(seg) || seg_is_any_raid0(seg)) {
 			log_error("Cannot change stripe size on \"%s\"", lv->name);
 			return_0;
 		}
@@ -3334,9 +3399,26 @@ PFLA("seg->segtype=%s new_segtype->name=%s", seg->segtype->name, new_segtype->na
 /******* END: raid <-> raid conversion *******/
 
 /* Return "linear" for striped @segtype instead of "striped" */
-static const char *_get_segtype_name(struct segment_type *segtype, unsigned new_image_count)
+static const char *_get_segtype_name(const struct segment_type *segtype, unsigned new_image_count)
 {
 	return (segtype_is_striped(segtype) && new_image_count == 1) ? "linear" : segtype->name;
+}
+
+/*
+ * Report current number of redundant disks for @total_images and @segtype 
+ */
+static void _seg_get_redundancy(struct segment_type *segtype, unsigned total_images, unsigned *nr)
+{
+	if (segtype_is_raid10(segtype))
+		*nr = 1;
+	else if (segtype_is_raid1(segtype))
+		*nr = total_images - 1;
+	else if (segtype_is_any_raid5(segtype))
+		*nr = 1;
+	else if (segtype_is_any_raid6(segtype))
+		*nr = 2;
+	else
+		*nr = 0;
 }
 
 /*
@@ -3412,28 +3494,9 @@ PFLA("new_image_count=%u new_stripes=%u", new_image_count, new_stripes);
 		return 0;
 	}
 
-	/* HM FIXME: facot out into function */
-	if (seg_is_raid10(seg))
-		cur_redundancy = 1;
-	else if (seg_is_raid1(seg))
-		cur_redundancy = seg->area_count - 1;
-	else if (seg_is_any_raid5(seg))
-		cur_redundancy = 1;
-	else if (seg_is_any_raid6(seg))
-		cur_redundancy = 2;
-	else
-		cur_redundancy = 0;
-
-	if (segtype_is_raid10(new_segtype))
-		new_redundancy = 1;
-	else if (segtype_is_raid1(new_segtype))
-		new_redundancy = new_image_count - 1;
-	else if (segtype_is_any_raid5(new_segtype))
-		new_redundancy = 1;
-	else if (segtype_is_any_raid6(new_segtype))
-		new_redundancy = 2;
-	else
-		new_redundancy = 0;
+	/* Get number of redundant disk for current and new segtype */
+	_seg_get_redundancy(seg->segtype, seg->area_count, &cur_redundancy);
+	_seg_get_redundancy(new_segtype, new_image_count, &new_redundancy);
 
 
 	if (seg_is_raid1(seg) && new_image_count == 1)
@@ -3535,23 +3598,20 @@ PFLA("cur_redundancy=%u new_redundancy=%u", cur_redundancy, new_redundancy);
 	/*
 	 * RAID0 <-> RAID10 comversion
 	 *
-	 * Only 2 mirrors supported!
+	 * MD RAID10 is a stripe on top of stripes number of 2-way mirrors
 	 */
-	/* HM FIXME: CODEME: */
 	/* HM FIXME: adjust_segtype() needed at all? */
-	if ((seg_is_raid0(seg) || seg_is_raid0_meta(seg)) &&
-	    segtype_is_raid10(new_segtype))
+	if (seg_is_any_raid0(seg) && segtype_is_raid10(new_segtype))
 		return _lv_raid_change_image_count(lv, new_segtype, lv_raid_image_count(lv) * 2, allocate_pvs);
 
-	if (seg_is_raid10(seg) &&
-	    (segtype_is_raid0(new_segtype) || segtype_is_raid0_meta(new_segtype)))
+	if (seg_is_raid10(seg) && segtype_is_any_raid0(new_segtype))
 		return _lv_raid_change_image_count(lv, new_segtype, lv_raid_image_count(lv) / 2, allocate_pvs);
 
 PFLA("segtype_is_linear(new_segtype)=%d", segtype_is_linear(new_segtype));
 	/* Striped -> RAID0 conversion */
 	if (seg_is_striped(seg) && segtype_is_striped_raid(new_segtype)) {
 		/* Only allow _convert_striped_to_raid0() to update and reload metadata if the final level is raid0* */
-		int update_and_reload = (segtype_is_raid0(new_segtype) || segtype_is_raid0_meta(new_segtype));
+		int update_and_reload = segtype_is_any_raid0(new_segtype);
 
 PFLA("update_and_reload=%u", update_and_reload);
 		r = _convert_striped_to_raid0(lv,
@@ -3566,7 +3626,7 @@ PFLA("r=%d", r);
 	/* RAID0 <-> striped conversion */
 	} else if (segtype_is_linear(new_segtype) ||
 		   segtype_is_striped(new_segtype)) {
-		if (seg_is_raid0(seg) || seg_is_raid0_meta(seg))
+		if (seg_is_any_raid0(seg))
 			return _convert_raid0_to_striped(lv, striped_segtype);
 
 		/* Memorize the final "striped" segment type */
@@ -3741,7 +3801,7 @@ int lv_raid_replace(struct logical_volume *lv,
 	dm_list_init(&new_data_lvs);
 
 	/* Replacement for raid0 would request data loss */
-	if (seg_is_raid0(raid_seg) || seg_is_raid0_meta(raid_seg)) {
+	if (seg_is_any_raid0(raid_seg)) {
 		log_error("Replacement of devices in %s/%s %s LV prohibited.",
 			  lv->vg->name, lv->name, raid_seg->segtype->name);
 		return 0;
@@ -4035,7 +4095,7 @@ static int _partial_raid_lv_is_redundant(const struct logical_volume *lv)
 			failed_components++;
 	}
 
-	if (failed_components && seg_is_raid0(raid_seg)) {
+	if (failed_components && seg_is_any_raid0(raid_seg)) {
 		log_verbose("No components of raid LV %s may fail",
 			    display_lvname(lv));
 		return 0;
