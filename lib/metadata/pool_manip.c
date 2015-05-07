@@ -26,6 +26,7 @@
 #include "dev-type.h"
 #include "display.h"
 #include "toolcontext.h"
+#include "str_list.h"
 
 int attach_pool_metadata_lv(struct lv_segment *pool_seg,
 			    struct logical_volume *metadata_lv)
@@ -123,9 +124,28 @@ int attach_pool_lv(struct lv_segment *seg,
 	return 1;
 }
 
+static int _copy_removed_ancestor_lv_names(struct logical_volume *lv_from,
+					   struct logical_volume *lv_to)
+{
+	struct dm_str_list *sl_from, *sl_to;
+	const char *lv_name;
+
+	dm_list_iterate_items(sl_from, &lv_from->removed_ancestor_lv_names) {
+		if (!(sl_to = dm_pool_alloc(lv_to->vg->vgmem, sizeof(*sl_to))) ||
+		    !(lv_name = dm_pool_strdup(lv_to->vg->vgmem, sl_from->str)))
+			return_0;
+
+		sl_to->str = lv_name;
+		dm_list_add(&lv_to->removed_ancestor_lv_names, &sl_to->list);
+	}
+
+	return 1;
+}
+
 int detach_pool_lv(struct lv_segment *seg)
 {
 	struct lv_thin_message *tmsg, *tmp;
+	struct logical_volume *origin;
 	struct seg_list *sl, *tsl;
 	int no_update = 0;
 
@@ -188,8 +208,12 @@ int detach_pool_lv(struct lv_segment *seg)
 	if (!remove_seg_from_segs_using_this_lv(seg->pool_lv, seg))
 		return_0;
 
-	if (seg->origin &&
-	    !remove_seg_from_segs_using_this_lv(seg->origin, seg))
+	if ((origin = seg->origin) &&
+	    !remove_seg_from_segs_using_this_lv(origin, seg))
+		return_0;
+
+	if ((origin = seg->indirect_origin) &&
+	    !remove_seg_from_indirect_segs_using_this_lv(origin, seg))
 		return_0;
 
 	/* If thin origin, remove it from related thin snapshots */
@@ -204,13 +228,53 @@ int detach_pool_lv(struct lv_segment *seg)
 
 		if (!remove_seg_from_segs_using_this_lv(seg->lv, sl->seg))
 			return_0;
+
 		/* Thin snapshot is now regular thin volume */
 		sl->seg->origin = NULL;
+
+		if (((origin = seg->origin) || (origin = seg->indirect_origin)) &&
+		    !attach_thin_indirect_origin(sl->seg, origin))
+			return_0;
+
+		if (!_copy_removed_ancestor_lv_names(seg->lv, sl->seg->lv))
+			return_0;
+
+		if (!str_list_add(sl->seg->lv->vg->vgmem,
+				  &sl->seg->lv->removed_ancestor_lv_names,
+				  seg->lv->name))
+			return_0;
+	}
+
+	/*
+	 * Still track indirect origin-snapshot dependencies after
+	 * removing a snapshot in the middle of thin snapshot chain.
+	 */
+	dm_list_iterate_items_safe(sl, tsl, &seg->lv->indirect_segs_using_this_lv) {
+		if (!seg_is_thin_volume(sl->seg) ||
+		    (seg->lv != sl->seg->indirect_origin))
+			continue;
+
+		if (!remove_seg_from_indirect_segs_using_this_lv(seg->lv, sl->seg))
+			return_0;
+
+		sl->seg->indirect_origin = NULL;
+
+		if (((origin = seg->origin) || (origin = seg->indirect_origin)) &&
+		    !attach_thin_indirect_origin(sl->seg, origin))
+			return_0;
+
+		if (!_copy_removed_ancestor_lv_names(seg->lv, sl->seg->lv))
+			return_0;
+
+		if (!str_list_add(seg->lv->vg->vgmem, &sl->seg->lv->removed_ancestor_lv_names,
+				  seg->lv->name))
+			return_0;
 	}
 
 	seg->lv->status &= ~THIN_VOLUME;
 	seg->pool_lv = NULL;
 	seg->origin = NULL;
+	seg->indirect_origin = NULL;
 
 	return 1;
 }
