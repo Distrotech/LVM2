@@ -100,11 +100,13 @@ struct op_def {
 #define FLD_CMP_LT		0x01000000
 #define FLD_CMP_REGEX		0x02000000
 #define FLD_CMP_NUMBER		0x04000000
+#define FLD_CMP_TIME		0x08000000
 /*
- * #define FLD_CMP_STRING 0x08000000
- * We could defined FLD_CMP_STRING here for completeness here,
+ * #define FLD_CMP_STRING 0x10000000
+ * We could define FLD_CMP_STRING here for completeness here,
  * but it's not needed - we can check operator compatibility with
- * field type by using FLD_CMP_REGEX and FLD_CMP_NUMBER flags only.
+ * field type by using FLD_CMP_REGEX, FLD_CMP_NUMBER and
+ * FLD_CMP_TIME flags only.
  */
 
 /*
@@ -115,12 +117,16 @@ struct op_def {
 static struct op_def _op_cmp[] = {
 	{ "=~", FLD_CMP_REGEX, "Matching regular expression. [regex]" },
 	{ "!~", FLD_CMP_REGEX|FLD_CMP_NOT, "Not matching regular expression. [regex]" },
-	{ "=", FLD_CMP_EQUAL, "Equal to. [number, size, percent, string, string list]" },
-	{ "!=", FLD_CMP_NOT|FLD_CMP_EQUAL, "Not equal to. [number, size, percent, string, string_list]" },
-	{ ">=", FLD_CMP_NUMBER|FLD_CMP_GT|FLD_CMP_EQUAL, "Greater than or equal to. [number, size, percent]" },
-	{ ">", FLD_CMP_NUMBER|FLD_CMP_GT, "Greater than. [number, size, percent]" },
-	{ "<=", FLD_CMP_NUMBER|FLD_CMP_LT|FLD_CMP_EQUAL, "Less than or equal to. [number, size, percent]" },
-	{ "<", FLD_CMP_NUMBER|FLD_CMP_LT, "Less than. [number, size, percent]" },
+	{ "=", FLD_CMP_EQUAL, "Equal to. [number, size, percent, string, string list, time]" },
+	{ "!=", FLD_CMP_NOT|FLD_CMP_EQUAL, "Not equal to. [number, size, percent, string, string_list, time]" },
+	{ ">=", FLD_CMP_NUMBER|FLD_CMP_TIME|FLD_CMP_GT|FLD_CMP_EQUAL, "Greater than or equal to. [number, size, percent, time]" },
+	{ ">", FLD_CMP_NUMBER|FLD_CMP_TIME|FLD_CMP_GT, "Greater than. [number, size, percent, time]" },
+	{ "<=", FLD_CMP_NUMBER|FLD_CMP_TIME|FLD_CMP_LT|FLD_CMP_EQUAL, "Less than or equal to. [number, size, percent, time]" },
+	{ "<", FLD_CMP_NUMBER|FLD_CMP_TIME|FLD_CMP_LT, "Less than. [number, size, percent, time]" },
+	{ "since", FLD_CMP_TIME|FLD_CMP_GT|FLD_CMP_EQUAL, "Since specified time (same as '>='). [time]" },
+	{ "after", FLD_CMP_TIME|FLD_CMP_GT, "After specific time (same as '>'). [time]"},
+	{ "until", FLD_CMP_TIME|FLD_CMP_LT|FLD_CMP_EQUAL, "Until specified time (same as '<='). [time]"},
+	{ "before", FLD_CMP_TIME|FLD_CMP_LT, "Before specified time (same as '<'). [time]"},
 	{ NULL, 0, NULL }
 };
 
@@ -168,6 +174,7 @@ struct field_selection {
 	union {
 		const char *s;
 		uint64_t i;
+		time_t t;
 		double d;
 		struct dm_regex *r;
 		struct selection_str_list *l;
@@ -651,6 +658,7 @@ static const char *_get_field_type_name(unsigned field_type)
 		case DM_REPORT_FIELD_TYPE_NUMBER: return "number";
 		case DM_REPORT_FIELD_TYPE_SIZE: return "size";
 		case DM_REPORT_FIELD_TYPE_PERCENT: return "percent";
+		case DM_REPORT_FIELD_TYPE_TIME: return "time";
 		case DM_REPORT_FIELD_TYPE_STRING_LIST: return "string list";
 		default: return "unknown";
 	}
@@ -1284,6 +1292,9 @@ static int _do_check_value_is_reserved(unsigned type, const void *reserved_value
 		case DM_REPORT_FIELD_TYPE_STRING_LIST:
 			/* FIXME Add comparison for string list */
 			break;
+		case DM_REPORT_FIELD_TYPE_TIME:
+			/* FIXME Add comparison for time */
+			break;
 	}
 
 	return 0;
@@ -1374,6 +1385,31 @@ static int _cmp_field_string(struct dm_report *rh __attribute__((unused)),
 		default:
 			log_error(INTERNAL_ERROR "_cmp_field_string: unsupported string "
 				  "comparison type for selection field %s", field_id);
+	}
+
+	return 0;
+}
+
+static int _cmp_field_time(struct dm_report *rh,
+			   uint32_t field_num, const char *field_id,
+			   time_t a, time_t b, uint32_t flags)
+{
+	switch(flags & FLD_CMP_MASK) {
+		case FLD_CMP_EQUAL:
+			return a == b;
+		case FLD_CMP_NOT|FLD_CMP_EQUAL:
+			return a != b;
+		case FLD_CMP_TIME|FLD_CMP_GT:
+			return _check_value_is_reserved(rh, field_num, DM_REPORT_FIELD_TYPE_TIME, &a, &b) ? 0 : a > b;
+		case FLD_CMP_TIME|FLD_CMP_GT|FLD_CMP_EQUAL:
+			return _check_value_is_reserved(rh, field_num, DM_REPORT_FIELD_TYPE_TIME, &a, &b) ? 0 : a >= b;
+		case FLD_CMP_TIME|FLD_CMP_LT:
+			return _check_value_is_reserved(rh, field_num, DM_REPORT_FIELD_TYPE_TIME, &a, &b) ? 0 : a < b;
+		case FLD_CMP_TIME|FLD_CMP_LT|FLD_CMP_EQUAL:
+			return _check_value_is_reserved(rh, field_num, DM_REPORT_FIELD_TYPE_TIME, &a, &b) ? 0 : a <= b;
+		default:
+			log_error(INTERNAL_ERROR "_cmp_field_time: unsupported time "
+				  "comparison type for field %s", field_id);
 	}
 
 	return 0;
@@ -1538,6 +1574,9 @@ static int _compare_selection_field(struct dm_report *rh,
 			case DM_REPORT_FIELD_TYPE_STRING_LIST:
 				r = _cmp_field_string_list(rh, f->props->field_num, field_id, (const struct str_list_sort_value *) f->sort_value,
 							   fs->v.l, fs->flags);
+				break;
+			case DM_REPORT_FIELD_TYPE_TIME:
+				r = _cmp_field_time(rh, f->props->field_num, field_id, *(const time_t *) f->sort_value, fs->v.t, fs->flags);
 				break;
 			default:
 				log_error(INTERNAL_ERROR "_compare_selection_field: unknown field type for field %s", field_id);
@@ -2293,6 +2332,12 @@ bad:
 	return s;
 }
 
+static const char *_tok_value_time(const char *s, const char **begin,
+				   const char **end, time_t *time)
+{
+	return s;
+}
+
 /*
  * Input:
  *   ft              - field type for which the value is parsed
@@ -2317,6 +2362,7 @@ static const char *_tok_value(struct dm_report *rh,
 	int expected_type = ft->flags & DM_REPORT_FIELD_TYPE_MASK;
 	struct selection_str_list **str_list;
 	uint64_t *factor;
+	time_t *time;
 	const char *tmp;
 	char c;
 
@@ -2395,6 +2441,28 @@ static const char *_tok_value(struct dm_report *rh,
 			}
 
 			*flags |= expected_type;
+			/*
+			 * FLD_CMP_NUMBER shares operators with FLD_CMP_TIME,
+			 * but we have NUMBER here, so remove FLD_CMP_TIME.
+			 */
+			*flags &= ~FLD_CMP_TIME;
+			break;
+
+		case DM_REPORT_FIELD_TYPE_TIME:
+			time = (time_t *) custom;
+			if (!(s = _tok_value_time(s, begin, end, time))) {
+				log_error("Failed to parse time value "
+					  "for selection field %s.", ft->id);
+				return NULL;
+			}
+
+			*flags |= DM_REPORT_FIELD_TYPE_TIME;
+			/*
+			 * FLD_CMP_TIME shares operators with FLD_CMP_NUMBER,
+			 * but we have TIME here, so remove FLD_CMP_NUMBER.
+			 */
+			*flags &= ~FLD_CMP_NUMBER;
+			break;
 	}
 
 	return s;
@@ -2501,7 +2569,7 @@ static struct field_selection *_create_field_selection(struct dm_report *rh,
 			goto error;
 		}
 	} else {
-		/* STRING, NUMBER, SIZE or STRING_LIST */
+		/* STRING, NUMBER, SIZE, PERCENT, STRING_LIST, TIME */
 		if (!(s = dm_pool_alloc(rh->selection->mem, len + 1))) {
 			log_error("dm_report: dm_pool_alloc failed to store "
 				  "value for selection field %s", field_id);
@@ -2580,6 +2648,13 @@ static struct field_selection *_create_field_selection(struct dm_report *rh,
 				fs->v.l = *(struct selection_str_list **)custom;
 				if (_check_value_is_reserved(rh, field_num, DM_REPORT_FIELD_TYPE_STRING_LIST, fs->v.l, NULL)) {
 					log_error("String list value found in selection is reserved.");
+					goto error;
+				}
+				break;
+			case DM_REPORT_FIELD_TYPE_TIME:
+				fs->v.t = *((time_t *)custom);
+				if (_check_value_is_reserved(rh, field_num, DM_REPORT_FIELD_TYPE_TIME, &fs->v.t, NULL)) {
+					log_error("Time value found in selection is reserved.");
 					goto error;
 				}
 				break;
@@ -2674,7 +2749,7 @@ out_reserved_values:
 	log_warn("  Comparison operators:");
 	t = _op_cmp;
 	for (; t->string; t++)
-		log_warn("    %4s  - %s", t->string, t->desc);
+		log_warn("    %6s  - %s", t->string, t->desc);
 	log_warn(" ");
 	log_warn("  Logical and grouping operators:");
 	t = _op_log;
@@ -2720,6 +2795,7 @@ static struct selection_node *_parse_selection(struct dm_report *rh,
 	struct selection_str_list *str_list;
 	const struct dm_report_reserved_value *reserved;
 	uint64_t factor;
+	time_t time;
 	void *custom = NULL;
 	char *tmp;
 	char c;
@@ -2769,29 +2845,45 @@ static struct selection_node *_parse_selection(struct dm_report *rh,
 		goto bad;
 	}
 
-	/* some operators can compare only numeric fields (NUMBER, SIZE or PERCENT) */
-	if ((flags & FLD_CMP_NUMBER) &&
-	    (ft->flags != DM_REPORT_FIELD_TYPE_NUMBER) &&
-	    (ft->flags != DM_REPORT_FIELD_TYPE_SIZE) &&
-	    (ft->flags != DM_REPORT_FIELD_TYPE_PERCENT)) {
-		_display_selection_help(rh);
-		log_error("Operator can be used only with number, size or percent fields: %s", ws);
-		goto bad;
-	}
-
 	/* comparison value */
 	if (flags & FLD_CMP_REGEX) {
+		/*
+		 * regex value
+		 */
 		if (!(last = _tok_value_regex(rh, ft, last, &vs, &ve, &flags, &reserved)))
 			goto_bad;
 	} else {
-		if (ft->flags == DM_REPORT_FIELD_TYPE_SIZE ||
-		    ft->flags == DM_REPORT_FIELD_TYPE_NUMBER ||
-		    ft->flags == DM_REPORT_FIELD_TYPE_PERCENT)
+		/*
+		 * number, size, percent, time, string, string_list value
+		 */
+		if (flags & FLD_CMP_NUMBER) {
+			if (!(ft->flags & (DM_REPORT_FIELD_TYPE_NUMBER |
+					   DM_REPORT_FIELD_TYPE_SIZE |
+					   DM_REPORT_FIELD_TYPE_PERCENT |
+					   DM_REPORT_FIELD_TYPE_TIME))) {
+				_display_selection_help(rh);
+				log_error("Operator can be used only with number, size, time or percent fields: %s", ws);
+				goto bad;
+			}
+		} else if (flags & FLD_CMP_TIME) {
+			if (!(ft->flags & DM_REPORT_FIELD_TYPE_TIME)) {
+				_display_selection_help(rh);
+				log_error("Operator can be used only with time fields: %s", ws);
+				goto bad;
+			}
+		}
+
+		if (ft->flags & (DM_REPORT_FIELD_TYPE_NUMBER |
+				 DM_REPORT_FIELD_TYPE_SIZE |
+				 DM_REPORT_FIELD_TYPE_PERCENT))
 			custom = &factor;
-		else if (ft->flags == DM_REPORT_FIELD_TYPE_STRING_LIST)
+		else if (ft->flags & DM_REPORT_FIELD_TYPE_TIME)
+			custom = &time;
+		else if (ft->flags & DM_REPORT_FIELD_TYPE_STRING_LIST)
 			custom = &str_list;
 		else
 			custom = NULL;
+
 		if (!(last = _tok_value(rh, ft, field_num, implicit,
 					last, &vs, &ve, &flags,
 					&reserved, rh->selection->mem, custom)))
@@ -3103,7 +3195,8 @@ static int _row_compare(const void *a, const void *b)
 		sfa = (*rowa->sort_fields)[cnt];
 		sfb = (*rowb->sort_fields)[cnt];
 		if ((sfa->props->flags & DM_REPORT_FIELD_TYPE_NUMBER) ||
-		    (sfa->props->flags & DM_REPORT_FIELD_TYPE_SIZE)) {
+		    (sfa->props->flags & DM_REPORT_FIELD_TYPE_SIZE) ||
+		    (sfa->props->flags & DM_REPORT_FIELD_TYPE_TIME)) {
 			const uint64_t numa =
 			    *(const uint64_t *) sfa->sort_value;
 			const uint64_t numb =
