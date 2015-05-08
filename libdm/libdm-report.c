@@ -4271,19 +4271,19 @@ void dm_report_set_interval(struct dm_report *rh, uint64_t interval)
 	rh->interval = interval;
 }
 
-void dm_report_set_interval_ms(struct dm_report *rh, uint32_t interval_ms)
+void dm_report_set_interval_ms(struct dm_report *rh, uint64_t interval_ms)
 {
 	rh->interval = interval_ms * NSEC_PER_MSEC;
 }
 
-uint32_t dm_report_get_interval(struct dm_report *rh)
+uint64_t dm_report_get_interval(struct dm_report *rh)
 {
 	return rh->interval;
 }
 
-uint32_t dm_report_get_interval_ms(struct dm_report *rh)
+uint64_t dm_report_get_interval_ms(struct dm_report *rh)
 {
-	return (uint32_t) (rh->interval / NSEC_PER_MSEC);
+	return (rh->interval / NSEC_PER_MSEC);
 }
 
 uint64_t dm_report_get_last_interval(struct dm_report *rh)
