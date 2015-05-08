@@ -207,11 +207,13 @@ static int _raid_add_target_line(struct dev_manager *dm __attribute__((unused)),
 	int delta_disks = 0;
 	uint32_t s;
 	uint64_t flags = 0;
-	uint64_t rebuilds = 0;
-	uint64_t writemostly = 0;
+	uint64_t rebuilds[4];
+	uint64_t writemostly[4];
 	struct dm_tree_node_raid_params params;
 
 	memset(&params, 0, sizeof(params));
+	memset(&rebuilds, 0, sizeof(rebuilds));
+	memset(&writemostly, 0, sizeof(writemostly));
 
 	if (!seg->area_count) {
 		log_error(INTERNAL_ERROR "_raid_add_target_line called "
@@ -242,7 +244,8 @@ PFL();
 
 PFLA("lv=%s status=%X", seg_lv(seg, s)->name, status);
 			if (status & LV_REBUILD)
-				rebuilds |= 1ULL << s;
+				rebuilds[s/64] |= 1ULL << (s%64);
+
 			if (status & LV_RESHAPE_DELTA_DISKS_PLUS) {
 				if (status & LV_RESHAPE_DELTA_DISKS_MINUS) {
 					log_error(INTERNAL_ERROR "delta disks minus when delta disks plus requested!");
@@ -260,7 +263,7 @@ PFLA("lv=%s status=%X", seg_lv(seg, s)->name, status);
 			}
 
 			if (status & LV_WRITEMOSTLY)
-				writemostly |= 1ULL << s;
+				writemostly[s/64] |= 1ULL << (s%64);
 		}
 
 		if (mirror_in_sync())
@@ -268,6 +271,13 @@ PFLA("lv=%s status=%X", seg_lv(seg, s)->name, status);
 	}
 
 	params.raid_type = lvseg_name(seg);
+
+#if 1
+for(s = 0; s < 4; s++)
+	PFLA("rebuilds[%u]=%lX", s, rebuilds[s]);
+for(s = 0; s < 4; s++)
+	PFLA("writemostly[%u]=%lX", s, writemostly[s]);
+#endif
 
 	if (seg->segtype->parity_devs) {
 		/* RAID 4/5/6 */
@@ -286,15 +296,13 @@ PFLA("lv=%s status=%X", seg_lv(seg, s)->name, status);
 		params.mirrors = seg->area_count;
 		params.stripes = 1;
 		params.writebehind = seg->writebehind;
-		params.writemostly = writemostly;
+		memcpy(params.writemostly, writemostly, sizeof(params.writemostly));
 	}
 
-	/* RAID 0 doesn't have a bitmap, thus no region_size etc. */
+	/* RAID 0 doesn't have a bitmap, thus no region_size, rebuilds etc. */
 	if (!seg_is_raid0(seg)) {
 		params.region_size = seg->region_size;
-		params.rebuilds = rebuilds;
-PFLA("params.rebuilds=%X", params.rebuilds);
-PFLA("params.writemostly=%X", params.writemostly);
+		memcpy(params.rebuilds, rebuilds, sizeof(params.rebuilds));
 		params.min_recovery_rate = seg->min_recovery_rate;
 		params.max_recovery_rate = seg->max_recovery_rate;
 		params.delta_disks = delta_disks;

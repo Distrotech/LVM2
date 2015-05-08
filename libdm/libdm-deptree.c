@@ -217,8 +217,8 @@ struct load_segment {
 	uint64_t rdevice_index;		/* Replicator-dev */
 
 	int delta_disks;		/* raid reshape number of disks */
-	uint64_t rebuilds;		/* raid */
-	uint64_t writemostly;		/* raid */
+	uint64_t rebuilds[4];		/* raid, max 256 devs */
+	uint64_t writemostly[4];	/* raid, max 256 devs*/
 	uint32_t writebehind;		/* raid */
 	uint32_t max_recovery_rate;	/* raid kB/sec/disk */
 	uint32_t min_recovery_rate;	/* raid kB/sec/disk */
@@ -2333,6 +2333,20 @@ static int _2_if_value(unsigned p)
 	return p ? 2 : 0;
 }
 
+/* Return number of bits passed in @bits assuming 2 * 64 bit size */
+static int _get_params_count(uint64_t *bits)
+{
+	int r = 0;
+	int i = 4;
+
+	while (i--) {
+		r += 2 * hweight32(bits[i] & 0xFFFFFFFF);
+		r += 2 * hweight32(bits[i] >> 32);
+	}
+
+	return r;
+}
+
 static int _raid_emit_segment_line(struct dm_task *dmt, uint32_t major,
 				   uint32_t minor, struct load_segment *seg,
 				   uint64_t *seg_start, char *params,
@@ -2357,13 +2371,9 @@ PFLA("seg->area_count=%u", seg->area_count);
 		       _2_if_value(seg->min_recovery_rate) +
 		       _2_if_value(seg->max_recovery_rate);
 
-	/* rebuilds is 64-bit */
-	param_count += 2 * hweight32(seg->rebuilds & 0xFFFFFFFF);
-	param_count += 2 * hweight32(seg->rebuilds >> 32);
-
-	/* writemostly is 64-bit */
-	param_count += 2 * hweight32(seg->writemostly & 0xFFFFFFFF);
-	param_count += 2 * hweight32(seg->writemostly >> 32);
+	/* rebuilds and writemostly are 4 * 64 bits */
+	param_count += _get_params_count(seg->rebuilds);
+	param_count += _get_params_count(seg->writemostly);
 
 	if ((seg->type == SEG_RAID1) && seg->stripe_size)
 		log_error("WARNING: Ignoring RAID1 stripe size");
@@ -2388,11 +2398,11 @@ PFLA("seg->area_count=%u", seg->area_count);
 		EMIT_PARAMS(pos, " delta_disks %d", seg->delta_disks);
 
 	for (i = 0; i < area_count; i++)
-		if (seg->rebuilds & (1ULL << i))
+		if (seg->rebuilds[i/64] & (1ULL << (i%64)))
 			EMIT_PARAMS(pos, " rebuild %u", i);
 
 	for (i = 0; i < area_count; i++)
-		if (seg->writemostly & (1ULL << i))
+		if (seg->writemostly[i/64] & (1ULL << (i%64)))
 			EMIT_PARAMS(pos, " write_mostly %u", i);
 
 	if (seg->writebehind)
@@ -3257,8 +3267,8 @@ int dm_tree_node_add_raid_target_with_params(struct dm_tree_node *node,
 	seg->stripe_size = p->stripe_size;
 	seg->area_count = 0;
 	seg->delta_disks = p->delta_disks;
-	seg->rebuilds = p->rebuilds;
-	seg->writemostly = p->writemostly;
+	memcpy(seg->rebuilds, p->rebuilds, sizeof(seg->rebuilds));
+	memcpy(seg->writemostly, p->writemostly, sizeof(seg->writemostly));
 	seg->writebehind = p->writebehind;
 	seg->min_recovery_rate = p->min_recovery_rate;
 	seg->max_recovery_rate = p->max_recovery_rate;
@@ -3272,16 +3282,17 @@ int dm_tree_node_add_raid_target(struct dm_tree_node *node,
 				 const char *raid_type,
 				 uint32_t region_size,
 				 uint32_t stripe_size,
-				 uint64_t rebuilds,
+				 uint64_t *rebuilds,
 				 uint64_t flags)
 {
 	struct dm_tree_node_raid_params params = {
 		.raid_type = raid_type,
 		.region_size = region_size,
 		.stripe_size = stripe_size,
-		.rebuilds = rebuilds,
 		.flags = flags
 	};
+
+	memcpy(params.rebuilds, rebuilds, sizeof(params.rebuilds));
 
 	return dm_tree_node_add_raid_target_with_params(node, size, &params);
 }
