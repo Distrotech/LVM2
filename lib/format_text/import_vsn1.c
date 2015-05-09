@@ -366,8 +366,9 @@ static int _read_segment(struct logical_volume *lv, const struct dm_config_node 
 	    !segtype->ops->text_import_area_count(sn_child, &area_count))
 		return_0;
 
+	/* HM FIXME: enhance alloc_lv_segment et al. to support reshape_count */
 	if (!(seg = alloc_lv_segment(segtype, lv, start_extent,
-				     extent_count, 0, 0, NULL, area_count,
+				     extent_count, reshape_count, 0, 0, NULL, area_count,
 				     extent_count, 0, 0, 0, NULL))) {
 		log_error("Segment allocation failed");
 		return 0;

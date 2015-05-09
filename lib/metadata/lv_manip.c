@@ -956,7 +956,7 @@ dm_percent_t copy_percent(const struct logical_volume *lv)
 struct lv_segment *alloc_lv_segment(const struct segment_type *segtype,
 				    struct logical_volume *lv,
 				    uint32_t le, uint32_t len,
-				    // uint32_t reshape_len,
+				    uint32_t reshape_len,
 				    uint64_t status,
 				    uint32_t stripe_size,
 				    struct logical_volume *log_lv,
@@ -1001,6 +1001,7 @@ PFLA("lv=%s seg->meta_areas=%p", lv->name, seg->meta_areas);
 	seg->stripe_size = stripe_size;
 	seg->area_count = area_count;
 	seg->area_len = area_len;
+	seg->reshape_len = reshape_len;
 	seg->chunk_size = chunk_size;
 	seg->region_size = region_size;
 	seg->extents_copied = extents_copied;
@@ -1053,7 +1054,7 @@ struct lv_segment *alloc_snapshot_seg(struct logical_volume *lv,
 	}
 
 	if (!(seg = alloc_lv_segment(segtype, lv, old_le_count,
-				     lv->le_count - old_le_count, status, 0,
+				     lv->le_count - old_le_count, 0, status, 0,
 				     NULL, 0, lv->le_count - old_le_count,
 				     0, 0, 0, NULL))) {
 		log_error("Couldn't allocate new snapshot segment.");
@@ -1235,7 +1236,6 @@ int set_lv_segment_area_lv(struct lv_segment *seg, uint32_t area_num,
 			 seg->lv->name, seg->le, area_num, lv->name, le);
 
 	if (status & RAID_META) {
-		/* FIXME: should always be allocated for RAID_META or not for "raid0"? */
 		if (seg->meta_areas) {
 PFLA("metadata LV = %s", lv->name);
 			seg->meta_areas[area_num].type = AREA_LV;
@@ -1976,7 +1976,7 @@ static int _setup_alloced_segment(struct logical_volume *lv, uint64_t status,
 PFLA("area_multiple=%u", area_multiple);
 	extents = aa[0].len * area_multiple;
 
-	if (!(seg = alloc_lv_segment(segtype, lv, lv->le_count, extents,
+	if (!(seg = alloc_lv_segment(segtype, lv, lv->le_count, extents, 0,
 				     status, stripe_size, NULL, area_count,
 				     aa[0].len, 0u, region_size, 0u, NULL))) {
 		log_error("Couldn't allocate new LV segment.");
@@ -3152,7 +3152,7 @@ int lv_add_virtual_segment(struct logical_volume *lv, uint64_t status,
 		seg->area_len += extents;
 		seg->len += extents;
 	} else {
-		if (!(seg = alloc_lv_segment(segtype, lv, lv->le_count, extents,
+		if (!(seg = alloc_lv_segment(segtype, lv, lv->le_count, extents, 0,
 					     status, 0, NULL, 0,
 					     extents, 0, 0, 0, NULL))) {
 			log_error("Couldn't allocate new %s segment.", segtype->name);
@@ -3289,7 +3289,7 @@ static struct lv_segment *_convert_seg_to_mirror(struct lv_segment *seg,
 	}
 
 	if (!(newseg = alloc_lv_segment(get_segtype_from_string(seg->lv->vg->cmd, "mirror"),
-					seg->lv, seg->le, seg->len,
+					seg->lv, seg->le, seg->len, 0,
 					seg->status, seg->stripe_size,
 					log_lv,
 					seg->area_count, seg->area_len,
@@ -3392,7 +3392,7 @@ int lv_add_segmented_mirror_image(struct alloc_handle *ah,
 		}
 
 		if (!(new_seg = alloc_lv_segment(segtype, copy_lv,
-						 seg->le, seg->len, PVMOVE, 0,
+						 seg->le, seg->len, 0, PVMOVE, 0,
 						 NULL, 1, seg->len,
 						 0, 0, 0, NULL)))
 			return_0;
@@ -3592,7 +3592,7 @@ static int _lv_insert_empty_sublvs(struct logical_volume *lv,
 	/*
 	 * First, create our top-level segment for our top-level LV
 	 */
-	if (!(mapseg = alloc_lv_segment(segtype, lv, 0, 0, lv->status,
+	if (!(mapseg = alloc_lv_segment(segtype, lv, 0, 0, 0, lv->status,
 					stripe_size, NULL,
 					devices, 0, 0, region_size, 0, NULL))) {
 		log_error("Failed to create mapping segment for %s", lv->name);
@@ -5914,20 +5914,26 @@ static int _lv_update_and_reload(struct logical_volume *lv, int origin_only)
 
 	if (!vg_write(vg))
 		return_0;
-
+PFL();
 	if (!(origin_only ? suspend_lv_origin(vg->cmd, lock_lv) : suspend_lv(vg->cmd, lock_lv))) {
+PFL();
 		log_error("Failed to lock logical volume %s.",
 			  display_lvname(lock_lv));
 		vg_revert(vg);
 	} else if (!(r = vg_commit(vg)))
+{
+PFL();
 		stack; /* !vg_commit() has implict vg_revert() */
+}
 	else
 		do_backup = 1;
 
 	log_very_verbose("Updating logical volume %s in kernel.",
 			 display_lvname(lock_lv));
+PFL();
 
 	if (!(origin_only ? resume_lv_origin(vg->cmd, lock_lv) : resume_lv(vg->cmd, lock_lv))) {
+PFL();
 		log_error("Problem reactivating logical volume %s.",
 			  display_lvname(lock_lv));
 		r = 0;
@@ -5936,6 +5942,7 @@ static int _lv_update_and_reload(struct logical_volume *lv, int origin_only)
 	if (do_backup)
 		backup(vg);
 
+PFLA("r=%d", r);
 	return r;
 }
 
@@ -6340,7 +6347,7 @@ struct logical_volume *insert_layer_for_lv(struct cmd_context *cmd,
 		return_NULL;
 
 	/* allocate a new linear segment */
-	if (!(mapseg = alloc_lv_segment(segtype, lv_where, 0, layer_lv->le_count,
+	if (!(mapseg = alloc_lv_segment(segtype, lv_where, 0, layer_lv->le_count, 0,
 					status, 0, NULL, 1, layer_lv->le_count,
 					0, 0, 0, NULL)))
 		return_NULL;
@@ -6396,7 +6403,7 @@ static int _extend_layer_lv_for_segment(struct logical_volume *layer_lv,
 			 seg->lv->vg->name, seg->lv->name);
 
 	/* allocate a new segment */
-	if (!(mapseg = alloc_lv_segment(segtype, layer_lv, layer_lv->le_count,
+	if (!(mapseg = alloc_lv_segment(segtype, layer_lv, layer_lv->le_count, 0,
 					seg->area_len, status, 0,
 					NULL, 1, seg->area_len, 0, 0, 0, seg)))
 		return_0;

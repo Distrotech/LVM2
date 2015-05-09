@@ -20,7 +20,8 @@
 
 struct lv_segment *alloc_lv_segment(const struct segment_type *segtype,
 				    struct logical_volume *lv,
-				    uint32_t le, uint32_t len,
+				    uint32_t le,
+				    uint32_t len, uint32_t reshape_len,
 				    uint64_t status,
 				    uint32_t stripe_size,
 				    struct logical_volume *log_lv,

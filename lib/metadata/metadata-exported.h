@@ -334,7 +334,7 @@ struct lv_segment_area {
 		struct {
 			struct logical_volume *lv;
 			uint32_t le;
-			uint32_t reshape_le; /* HM FIXME: here or in LV? */
+			uint32_t reshape_le;
 		} lv;
 	} u;
 };
@@ -414,6 +414,7 @@ struct lv_segment {
 	uint32_t max_recovery_rate; /* For RAID */
 	uint32_t area_count;
 	uint32_t area_len;
+	uint32_t reshape_len;	/* RAID: Additional length for out of place reshaping adding to area_len and len */
 	uint32_t chunk_size;	/* For snapshots/thin_pool.  In sectors. */
 				/* For thin_pool, 128..2097152. */
 	struct logical_volume *origin;	/* snap and thin */
