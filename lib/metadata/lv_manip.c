@@ -3822,7 +3822,7 @@ int lv_extend(struct logical_volume *lv,
 	      const struct segment_type *segtype,
 	      uint32_t stripes, uint32_t stripe_size,
 	      uint32_t mirrors, uint32_t region_size,
-	      uint32_t extents, int extend_upfront,
+	      uint32_t extents,
 	      struct dm_list *allocatable_pvs, alloc_policy_t alloc,
 	      int approx_alloc)
 {
@@ -4457,7 +4457,7 @@ static int _lvresize_poolmetadata(struct cmd_context *cmd, struct volume_group *
 		       mseg->stripe_size,
 		       seg_mirrors,
 		       mseg->region_size,
-		       lp->poolmetadataextents - lv->le_count, 0 /* extend at end */,
+		       lp->poolmetadataextents - lv->le_count,
 		       pvh, alloc, 0))
 		return_0;
 
@@ -5100,7 +5100,7 @@ static struct logical_volume *_lvresize_volume(struct cmd_context *cmd,
 		   !lv_extend(lv, lp->segtype,
 			      lp->stripes, lp->stripe_size,
 			      lp->mirrors, first_seg(lv)->region_size,
-			      lp->extents - lv->le_count, 0 /* extend at end */,
+			      lp->extents - lv->le_count,
 			      pvh, alloc, lp->approx_alloc))
 		return_NULL;
 
@@ -6675,7 +6675,7 @@ static struct logical_volume *_create_virtual_origin(struct cmd_context *cmd,
 				   ALLOC_INHERIT, vg)))
 		return_NULL;
 
-	if (!lv_extend(lv, segtype, 1, 0, 1, 0, voriginextents, 0 /* extend at end */,
+	if (!lv_extend(lv, segtype, 1, 0, 1, 0, voriginextents,
 		       NULL, ALLOC_INHERIT, 0))
 		return_NULL;
 
@@ -7155,7 +7155,7 @@ PFLA("region_size=%u", lp->region_size);
 		       lp->stripes, lp->stripe_size,
 		       lp->mirrors,
 		       seg_is_pool(lp) ? lp->pool_metadata_extents : lp->region_size,
-		       seg_is_thin_volume(lp) ? lp->virtual_extents : lp->extents, 0 /* extend at end */,
+		       seg_is_thin_volume(lp) ? lp->virtual_extents : lp->extents,
 		       lp->pvh, lp->alloc, lp->approx_alloc))
 		return_NULL;
 

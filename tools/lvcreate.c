@@ -548,7 +548,7 @@ static int _read_mirror_and_raid_params(struct cmd_context *cmd,
 
 PFLA("mirrors=%u stripes=%u", lp->mirrors, lp->stripes);
 	if (lp->stripes < 2 &&
-	    (segtype_is_raid0(lp->segtype) || segtype_is_raid10(lp->segtype)))
+	    (segtype_is_any_raid0(lp->segtype) || segtype_is_raid10(lp->segtype)))
 		if (arg_count(cmd, stripes_ARG)) {
 			/* User supplied the bad argument */
 			log_error("Segment type 'raid(1)0' requires 2 or more stripes.");
@@ -574,7 +574,7 @@ PFLA("mirrors=%u stripes=%u", lp->mirrors, lp->stripes);
 	 */
 	if ((lp->stripes > 1) &&
 	    (seg_is_mirrored(lp) || segtype_is_raid1(lp->segtype)) &&
-	    !segtype_is_raid0(lp->segtype) &&
+	    !segtype_is_any_raid0(lp->segtype) &&
 	    !segtype_is_raid10(lp->segtype)) {
 		log_error("Stripe argument cannot be used with segment type, %s",
 			  lp->segtype->name);
@@ -1253,7 +1253,7 @@ static int _check_raid_parameters(struct volume_group *vg,
 				  lp->segtype->name);
 			return 0;
 		}
-	} else if (segtype_is_raid0(lp->segtype) ||
+	} else if (segtype_is_any_raid0(lp->segtype) ||
 		   segtype_is_raid10(lp->segtype)) {
 		if (!arg_count(cmd, stripes_ARG))
 			lp->stripes = devs / lp->mirrors;

@@ -204,7 +204,7 @@ static int _raid_add_target_line(struct dev_manager *dm __attribute__((unused)),
 				 struct dm_tree_node *node, uint64_t len,
 				 uint32_t *pvmove_mirror_count __attribute__((unused)))
 {
-	int delta_disks = 0;
+	int r, delta_disks = 0, data_offset = 0;
 	uint32_t s;
 	uint64_t flags = 0;
 	uint64_t rebuilds[4];
@@ -222,7 +222,7 @@ static int _raid_add_target_line(struct dev_manager *dm __attribute__((unused)),
 	}
 
 	/*
-	 * 64 device restriction imposed by kernel as well due to bitfield limitation in superblock.
+	 * 253 device restriction imposed by kernel due to MD and dm-raid bitfield limitation in superblock.
 	 * It is not strictly a userspace limitation.
 	 */
 	if (seg->area_count > DEFAULT_RAID_MAX_IMAGES) {
@@ -231,7 +231,7 @@ static int _raid_add_target_line(struct dev_manager *dm __attribute__((unused)),
 		return 0;
 	}
 
-	if (!(seg_is_raid0(seg) || seg_is_raid0_meta(seg))) {
+	if (!seg_is_any_raid0(seg)) {
 PFL();
 		if (!seg->region_size) {
 			log_error("Missing region size for raid segment in %s.",
@@ -266,26 +266,22 @@ PFLA("lv=%s status=%X", seg_lv(seg, s)->name, status);
 				writemostly[s/64] |= 1ULL << (s%64);
 		}
 
+		data_offset = seg->data_offset;
+
 		if (mirror_in_sync())
 			flags = DM_NOSYNC;
 	}
 
 	params.raid_type = lvseg_name(seg);
-
-#if 1
-for(s = 0; s < 4; s++)
-	PFLA("rebuilds[%u]=%lX", s, rebuilds[s]);
-for(s = 0; s < 4; s++)
-	PFLA("writemostly[%u]=%lX", s, writemostly[s]);
-#endif
-
+PFL();
 	if (seg->segtype->parity_devs) {
 		/* RAID 4/5/6 */
 		params.mirrors = 1;
 		params.stripes = seg->area_count - seg->segtype->parity_devs;
-	} else if (seg_is_raid0(seg)) {
+	} else if (seg_is_any_raid0(seg)) {
 		params.mirrors = 1;
 		params.stripes = seg->area_count;
+PFLA("mirrors=%u stripes=%u", params.mirrors, params.stripes);
 	} else if (seg_is_raid10(seg)) {
 		/* RAID 10 only supports 2 mirrors now */
 		/* FIXME: HM: is this actually a constraint still? */
@@ -300,20 +296,25 @@ for(s = 0; s < 4; s++)
 	}
 
 	/* RAID 0 doesn't have a bitmap, thus no region_size, rebuilds etc. */
-	if (!seg_is_raid0(seg)) {
+	if (!seg_is_any_raid0(seg)) {
 		params.region_size = seg->region_size;
 		memcpy(params.rebuilds, rebuilds, sizeof(params.rebuilds));
 		params.min_recovery_rate = seg->min_recovery_rate;
 		params.max_recovery_rate = seg->max_recovery_rate;
 		params.delta_disks = delta_disks;
+		params.data_offset = data_offset;
 	}
 
 	params.stripe_size = seg->stripe_size;
 	params.flags = flags;
 
+PFL();
 	if (!dm_tree_node_add_raid_target_with_params(node, len, &params))
 		return_0;
-
+PFL();
+	r = add_areas_line(dm, seg, node, 0u, seg->area_count);
+PFLA("r=%d", r);
+	return r;
 	return add_areas_line(dm, seg, node, 0u, seg->area_count);
 }
 

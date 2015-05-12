@@ -2453,7 +2453,7 @@ static int _add_target_to_dtree(struct dev_manager *dm,
 	return seg->segtype->ops->add_target_line(dm, dm->mem, dm->cmd,
 						  &dm->target_state, seg,
 						  laopts, dnode,
-						  extent_size * seg->len,
+						  extent_size * (seg->len - seg->reshape_len),
 						  &dm->pvmove_mirror_count);
 }
 
@@ -2644,7 +2644,7 @@ static int _add_segment_to_dtree(struct dev_manager *dm,
 		/* Replace target and all its used devs with error mapping */
 		log_debug_activation("Using error for pending delete %s.",
 				     seg->lv->name);
-		if (!dm_tree_node_add_error_target(dnode, (uint64_t)seg->lv->vg->extent_size * seg->len))
+		if (!dm_tree_node_add_error_target(dnode, (uint64_t)seg->lv->vg->extent_size * (seg->len - seg->reshape_len)))
 			return_0;
 	} else if (!_add_target_to_dtree(dm, dnode, seg, laopts))
 		return_0;

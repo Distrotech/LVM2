@@ -217,6 +217,7 @@ struct load_segment {
 	uint64_t rdevice_index;		/* Replicator-dev */
 
 	int delta_disks;		/* raid reshape number of disks */
+	int data_offset;		/* raid reshape data offset on disk to set */
 	uint64_t rebuilds[4];		/* raid, max 256 devs */
 	uint64_t writemostly[4];	/* raid, max 256 devs*/
 	uint32_t writebehind;		/* raid */
@@ -2139,6 +2140,7 @@ PFLA("a=%u", a++);
 		case SEG_RAID6_RS_6:
 		case SEG_RAID6_0_6:
 		case SEG_RAID6_N_6:
+PFL();
 			if (!area->dev_node) {
 				EMIT_PARAMS(*pos, " -");
 				break;
@@ -2365,7 +2367,8 @@ PFLA("seg->area_count=%u", seg->area_count);
 	if ((seg->flags & DM_NOSYNC) || (seg->flags & DM_FORCESYNC))
 		param_count++;
 
-	param_count += _2_if_value(seg->delta_disks) +
+	param_count += _2_if_value(seg->data_offset) +
+		       _2_if_value(seg->delta_disks) +
 		       _2_if_value(seg->region_size) +
 		       _2_if_value(seg->writebehind) +
 		       _2_if_value(seg->min_recovery_rate) +
@@ -2396,6 +2399,9 @@ PFLA("seg->area_count=%u", seg->area_count);
 
 	if (seg->delta_disks)
 		EMIT_PARAMS(pos, " delta_disks %d", seg->delta_disks);
+
+	if (seg->data_offset)
+		EMIT_PARAMS(pos, " data_offset %d", seg->delta_disks);
 
 	for (i = 0; i < area_count; i++)
 		if (seg->rebuilds[i/64] & (1ULL << (i%64)))
@@ -2608,6 +2614,7 @@ static int _emit_segment_line(struct dm_task *dmt, uint32_t major,
 	case SEG_RAID6_RS_6:
 	case SEG_RAID6_0_6:
 	case SEG_RAID6_N_6:
+PFL();
 		target_type_is_raid = 1;
 		r = _raid_emit_segment_line(dmt, major, minor, seg, seg_start,
 					    params, paramsize);
@@ -3255,18 +3262,22 @@ int dm_tree_node_add_raid_target_with_params(struct dm_tree_node *node,
 	unsigned i;
 	struct load_segment *seg = NULL;
 
+PFLA("p->raid_type=%s", p->raid_type);
 	for (i = 0; i < DM_ARRAY_SIZE(_dm_segtypes) && !seg; ++i)
 		if (!strcmp(p->raid_type, _dm_segtypes[i].target))
 			if (!(seg = _add_segment(node,
 						 _dm_segtypes[i].type, size)))
 				return_0;
+PFL();
 	if (!seg)
 		return_0;
 
+PFL();
 	seg->region_size = p->region_size;
 	seg->stripe_size = p->stripe_size;
 	seg->area_count = 0;
 	seg->delta_disks = p->delta_disks;
+	seg->data_offset = p->data_offset;
 	memcpy(seg->rebuilds, p->rebuilds, sizeof(seg->rebuilds));
 	memcpy(seg->writemostly, p->writemostly, sizeof(seg->writemostly));
 	seg->writebehind = p->writebehind;
@@ -3297,27 +3308,44 @@ int dm_tree_node_add_raid_target(struct dm_tree_node *node,
 	return dm_tree_node_add_raid_target_with_params(node, size, &params);
 }
 
+/* Count number o paramaters in @params delimited by single spaces */
+static unsigned _get_nr_params(const char *p)
+{
+	unsigned r = 0;
+
+	/* Count number of parameters */
+	if (p && strlen(p))
+		for (r = 1; p = strchr(p, ' '); p++, r++); /* nr_params = nr_spaces + 1 */
+
+	return r;
+}
+
 /*
  * Various RAID status versions include:
  * Versions < 1.5.0 (4 fields):
  *   <raid_type> <#devs> <health_str> <sync_ratio>
  * Versions 1.5.0+  (6 fields):
  *   <raid_type> <#devs> <health_str> <sync_ratio> <sync_action> <mismatch_cnt>
+ * Versions 1.8.0+  (8 fields):
+ *   <raid_type> <#devs> <health_str> <sync_ratio> <sync_action> <mismatch_cnt> <data_offset> <dev_sectors>
  */
 int dm_get_status_raid(struct dm_pool *mem, const char *params,
 		       struct dm_status_raid **status)
 {
 	int i;
+	unsigned nr_params;
 	const char *pp, *p;
 	struct dm_status_raid *s;
 
-	if (!params || !(p = strchr(params, ' '))) {
+	if ((nr_params = _get_nr_params(params)) < 4) {
 		log_error("Failed to parse invalid raid params.");
 		return 0;
 	}
-	p++;
+
+	pp = params; /* pp -> <raid_type> */
 
 	/* second field holds the device count */
+	p = strchr(pp, ' ') + 1; /* p -> <#devs> */
 	if (sscanf(p, "%d", &i) != 1)
 		return_0;
 
@@ -3330,7 +3358,7 @@ int dm_get_status_raid(struct dm_pool *mem, const char *params,
 	if (!(s->dev_health = dm_pool_zalloc(mem, i + 1)))
 		goto_bad;
 
-	if (sscanf(params, "%s %u %s %" PRIu64 "/%" PRIu64,
+	if (sscanf(pp, "%s %u %s %" PRIu64 "/%" PRIu64,
 		   s->raid_type,
 		   &s->dev_count,
 		   s->dev_health,
@@ -3349,22 +3377,41 @@ int dm_get_status_raid(struct dm_pool *mem, const char *params,
 	 * Note that 'sync_action' will be NULL (and mismatch_count
 	 * will be 0) if the kernel returns a pre-1.5.0 status.
 	 */
-	for (p = params, i = 0; i < 4; i++, p++)
-		if (!(p = strchr(p, ' ')))
-			return 1;  /* return pre-1.5.0 status */
+	if (nr_params < 6)
+		return 1;  /* return pre-1.5.0 status */
 
-	pp = p;
-	if (!(p = strchr(p, ' '))) {
-		log_error(INTERNAL_ERROR "Bad RAID status received.");
-		goto bad;
-	}
-	p++;
+	/* skip pre-1.5.0 params and point at space before <sync_action> */
+	/* pp -> <raid_type> */
+	for (p = pp, i = 0; i < 4; i++, p++)
+		p = strchr(p, ' ');
 
+	pp = p; /* pp -> <sync_action> */
+	p = strchr(pp, ' ') + 1; /* p -> <mismatch_count> */
 	if (!(s->sync_action = dm_pool_zalloc(mem, p - pp)))
 		goto_bad;
 
 	if (sscanf(pp, "%s %" PRIu64, s->sync_action, &s->mismatch_count) != 2) {
-		log_error("Failed to parse raid params: %s", params);
+		log_error("Failed to parse sync_action and mismatch_count raid params: %s", params);
+		goto bad;
+	}
+
+	/*
+	 * All pre-1.8.0 version parameters are read.  Now we check
+	 * for additional 1.8.0+ parameters.
+	 *
+	 * Note that data_offset and dev_sectors will be 0
+	 * if the kernel returns a pre-1.8.0 status.
+	 */
+	if (nr_params < 8)
+		return 1;
+
+	/* pp -> <sync_action> */
+	for (p = pp, i = 0; i < 2; i++, p++)
+		p = strchr(p, ' ');
+
+	/* p -> <data_offset> */
+	if (sscanf(p, "%" PRIu64 " %" PRIu64, &s->data_offset, &s->dev_sectors) != 2) {
+		log_error("Failed to parse data_offset and dev_sectors raid params: %s", params);
 		goto bad;
 	}
 

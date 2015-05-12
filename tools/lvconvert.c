@@ -16,7 +16,13 @@
 #include "polldaemon.h"
 #include "lv_alloc.h"
 
-// #define printf(a ...)
+#if 1
+#define PFL() printf("%s %u\n", __func__, __LINE__);
+#define PFLA(format, arg...) printf("%s %u " format "\n", __func__, __LINE__, arg);
+#else
+#define PFL()
+#define PFLA(format, arg...)
+#endif
 
 struct lvconvert_params {
 	int cache;
@@ -1831,7 +1837,7 @@ static int _is_valid_raid_conversion(const struct segment_type *from_segtype,
 	if (from_segtype == to_segtype)
 		return 1;
 
-printf("%s %u from_segtype=%s to_segtype=%s\n", __func__, __LINE__, from_segtype->name, to_segtype->name);
+PFLA("from_segtype=%s to_segtype=%s\n", from_segtype->name, to_segtype->name);
 	/* From striped to mirror or vice-versa */
 	if (segtype_is_striped(from_segtype) &&
 	    segtype_is_mirror(to_segtype))
@@ -1912,9 +1918,9 @@ static int _lvconvert_raid(struct logical_volume *lv, struct lvconvert_params *l
 	struct lv_segment *seg = first_seg(lv);
 	dm_percent_t sync_percent;
 
-printf("%s %u stripes_ARG=%u stripes_long_ARG=%u\n", __func__, __LINE__, arg_count(lv->vg->cmd, stripes_ARG), arg_count(lv->vg->cmd, stripes_long_ARG));
 	if (!arg_count(cmd, type_ARG))
 		lp->segtype = seg->segtype;
+PFLA("stripes_ARG=%u stripes_long_ARG=%u", arg_count(lv->vg->cmd, stripes_ARG), arg_count(lv->vg->cmd, stripes_long_ARG));
 
 	/* FIXME: remove constraint on mirror/raid1 */
 	/* Can only change image count for raid1 and linear */
@@ -1946,7 +1952,7 @@ printf("%s %u stripes_ARG=%u stripes_long_ARG=%u\n", __func__, __LINE__, arg_cou
 			image_count -= lp->mirrors;
 		else
 			image_count = lp->mirrors + 1;
-printf("image_count=%u\n", image_count);
+PFLA("image_count=%u\n", image_count);
 
 		track = arg_count(cmd, trackchanges_ARG);
 		if (image_count < 1 || (track && lp->mirrors != 1)) {
@@ -1967,7 +1973,7 @@ printf("image_count=%u\n", image_count);
 		return lv_raid_split(lv, lp->lv_split_name,
 				     image_count, lp->pvh);
 
-printf("lp->segtype=%s\n", lp->segtype->name);
+PFLA("lp->segtype=%s\n", lp->segtype->name);
 	if ((seg_is_linear(seg) || seg_is_striped(seg) || seg_is_mirrored(seg) || lv_is_raid(lv)) &&
 	    (arg_count(cmd, type_ARG) ||
 	     image_count ||
@@ -1976,7 +1982,7 @@ printf("lp->segtype=%s\n", lp->segtype->name);
 	     arg_count(cmd, stripesize_ARG))) {
 		unsigned stripes = (arg_count(cmd, stripes_ARG) || arg_count(cmd, stripes_long_ARG)) ? lp->stripes  : 0;
 		unsigned stripe_size = arg_count(cmd, stripesize_ARG) ? lp->stripe_size  : 0;
-printf("%s %u stripes=%u stripe_size=%u\n", __func__, __LINE__, stripes, stripe_size);
+PFLA("stripes=%u stripe_size=%u\n", stripes, stripe_size);
 
 		if (seg_is_striped(seg))
 			seg->region_size = lp->region_size;
@@ -3204,7 +3210,7 @@ static int _lvconvert_pool(struct cmd_context *cmd,
 	}
 
 	/* Allocate a new pool segment */
-	if (!(seg = alloc_lv_segment(lp->segtype, pool_lv, 0, data_lv->le_count, 9,
+	if (!(seg = alloc_lv_segment(lp->segtype, pool_lv, 0, data_lv->le_count, 0,
 				     pool_lv->status, 0, NULL, 1,
 				     data_lv->le_count, 0, 0, 0, NULL)))
 		return_0;

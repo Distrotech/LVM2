@@ -664,7 +664,7 @@ int handle_pool_metadata_spare(struct volume_group *vg, uint32_t extents,
 		       seg->stripe_size,
 		       seg_mirrors,
 		       seg->region_size,
-		       extents - lv->le_count, 0 /* extend at end */,
+		       extents - lv->le_count,
 		       pvh, lv->alloc, 0))
 		return_0;
 

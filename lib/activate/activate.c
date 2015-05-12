@@ -255,6 +255,12 @@ int lv_raid_percent(const struct logical_volume *lv, dm_percent_t *percent)
 {
 	return 0;
 }
+int lv_raid_offset_and_sectors(const struct logical_volume *lv,
+			       uint64_t *data_offset,
+			       uint64_t *dev_sectors)
+{
+	return 0;
+}
 int lv_raid_dev_health(const struct logical_volume *lv, char **dev_health)
 {
 	return 0;
@@ -862,6 +868,34 @@ int lv_mirror_percent(struct cmd_context *cmd, const struct logical_volume *lv,
 int lv_raid_percent(const struct logical_volume *lv, dm_percent_t *percent)
 {
 	return lv_mirror_percent(lv->vg->cmd, lv, 0, percent, NULL);
+}
+
+int lv_raid_offset_and_sectors(const struct logical_volume *lv,
+			       uint64_t *data_offset,
+			       uint64_t *dev_sectors)
+{
+	int r;
+	struct dev_manager *dm;
+	struct dm_status_raid *status;
+
+	if (!lv_info(lv->vg->cmd, lv, 0, NULL, 0, 0))
+		return 0;
+
+	log_debug_activation("Checking raid data offset and dev sectors for LV %s/%s",
+			     lv->vg->name, lv->name);
+
+	if (!(dm = dev_manager_create(lv->vg->cmd, lv->vg->name, 1)))
+		return_0;
+
+	if (!(r = dev_manager_raid_status(dm, lv, &status)))
+		stack;
+
+	*data_offset = status->data_offset;
+	*dev_sectors = status->dev_sectors;
+
+	dev_manager_destroy(dm);
+
+	return r;
 }
 
 int lv_raid_dev_health(const struct logical_volume *lv, char **dev_health)

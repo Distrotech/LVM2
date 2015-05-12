@@ -58,6 +58,7 @@
 #define DEFAULT_MIRROR_MAX_IMAGES 8 /* limited by kernel DM_KCOPYD_MAX_REGIONS */
 #define DEFAULT_RAID_MAX_IMAGES 253 /* limited by kernel failed devices bitfield in superblock and raid4/5/6 */
 #define DEFAULT_RAID_FAULT_POLICY "warn"
+#define DEFAULT_RAID_STRIPE_SIZE	(64 * 2)
 
 #define DEFAULT_DMEVENTD_RAID_LIB "libdevmapper-event-lvm2raid.so"
 #define DEFAULT_DMEVENTD_MIRROR_LIB "libdevmapper-event-lvm2mirror.so"

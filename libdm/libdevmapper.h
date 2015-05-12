@@ -294,6 +294,8 @@ struct dm_status_raid {
 	char *raid_type;
 	char *dev_health;
 	char *sync_action;
+	uint64_t data_offset;
+	uint64_t dev_sectors;
 };
 
 int dm_get_status_raid(struct dm_pool *mem, const char *params,
@@ -749,7 +751,8 @@ struct dm_tree_node_raid_params {
 	uint32_t region_size;
 	uint32_t stripe_size;
 
-	int delta_disks;
+	int delta_disks; /* +/- number of disks to add/remove (reshaping) */
+	int data_offset; /* data offset to set (reshaping) */
 
 	/*
 	 * 'rebuilds' and 'writemostly' are bitfields that signify
