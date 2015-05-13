@@ -2400,8 +2400,13 @@ PFLA("seg->area_count=%u", seg->area_count);
 	if (seg->delta_disks)
 		EMIT_PARAMS(pos, " delta_disks %d", seg->delta_disks);
 
+	/*
+	 * seg->data_offset is overloaded to cause emitting,
+	 * i.e. 1 defining 0 offset to save a sgment flag
+	 */
 	if (seg->data_offset)
-		EMIT_PARAMS(pos, " data_offset %d", seg->delta_disks);
+		EMIT_PARAMS(pos, " data_offset %d", 
+			    (seg->data_offset == 1) ? 0 : seg->data_offset);
 
 	for (i = 0; i < area_count; i++)
 		if (seg->rebuilds[i/64] & (1ULL << (i%64)))
@@ -3308,14 +3313,26 @@ int dm_tree_node_add_raid_target(struct dm_tree_node *node,
 	return dm_tree_node_add_raid_target_with_params(node, size, &params);
 }
 
-/* Count number o paramaters in @params delimited by single spaces */
-static unsigned _get_nr_params(const char *p)
+/* Skip @nr single space delimited fields in string @p */
+static const char *_skip_fields(const char *p, unsigned nr)
 {
-	unsigned r = 0;
+	while (p && nr-- && (p = strchr(p, ' ')))
+		p++;
+	
+	return p;
+}
 
-	/* Count number of parameters */
-	if (p && strlen(p))
-		for (r = 1; p = strchr(p, ' '); p++, r++); /* nr_params = nr_spaces + 1 */
+/*
+ * Count number of single space delimited fields in @p
+ *
+ * Number of fields is number of spaces plus one
+ */
+static unsigned _get_nr_fields(const char *p)
+{
+	unsigned r = p ? (*p ? 1 : 0) : 0; /* If p and *p  -> first paramater */
+
+	while (r && (p = _skip_fields(p, 1)))
+		r++;
 
 	return r;
 }
@@ -3333,91 +3350,89 @@ int dm_get_status_raid(struct dm_pool *mem, const char *params,
 		       struct dm_status_raid **status)
 {
 	int i;
-	unsigned nr_params;
-	const char *pp, *p;
-	struct dm_status_raid *s;
+	unsigned nr_fields;
+	const char *p, *fields = "";
+	struct dm_status_raid *s = NULL;
 
-	if ((nr_params = _get_nr_params(params)) < 4) {
-		log_error("Failed to parse invalid raid params.");
-		return 0;
-	}
+	*status = NULL;
 
-	pp = params; /* pp -> <raid_type> */
+	if ((nr_fields = _get_nr_fields(params)) < 4)
+		goto bad;
 
 	/* second field holds the device count */
-	p = strchr(pp, ' ') + 1; /* p -> <#devs> */
+	fields = "<#devs>";
+	p = _skip_fields(params, 1); /* p -> <#devs> */
 	if (sscanf(p, "%d", &i) != 1)
-		return_0;
+		goto bad;
 
+	fields = "";
 	if (!(s = dm_pool_zalloc(mem, sizeof(struct dm_status_raid))))
-		return_0;
-
-	if (!(s->raid_type = dm_pool_zalloc(mem, p - params)))
-		goto_bad; /* memory is freed went pool is destroyed */
-
-	if (!(s->dev_health = dm_pool_zalloc(mem, i + 1)))
 		goto_bad;
 
-	if (sscanf(pp, "%s %u %s %" PRIu64 "/%" PRIu64,
+	if (!(s->raid_type = dm_pool_zalloc(mem, p - params)))
+		goto_bad;
+
+	if (!(s->dev_health = dm_pool_zalloc(mem, i + 1))) /* Space for health chars */
+		goto_bad;
+
+	fields = "<raid_type>, <#devs>, <health_str> and <sync_ratio>";
+	if (sscanf(params, "%s %u %s %" PRIu64 "/%" PRIu64,
 		   s->raid_type,
 		   &s->dev_count,
 		   s->dev_health,
 		   &s->insync_regions,
-		   &s->total_regions) != 5) {
-		log_error("Failed to parse raid params: %s", params);
+		   &s->total_regions) != 5)
 		goto bad;
-	}
 
 	*status = s;
 
 	/*
 	 * All pre-1.5.0 version parameters are read.  Now we check
-	 * for additional 1.5.0+ parameters.
+	 * for additional 1.5.0+ parameters (i.e. nr_fields at least 6).
 	 *
 	 * Note that 'sync_action' will be NULL (and mismatch_count
 	 * will be 0) if the kernel returns a pre-1.5.0 status.
-	 */
-	if (nr_params < 6)
-		return 1;  /* return pre-1.5.0 status */
-
-	/* skip pre-1.5.0 params and point at space before <sync_action> */
-	/* pp -> <raid_type> */
-	for (p = pp, i = 0; i < 4; i++, p++)
-		p = strchr(p, ' ');
-
-	pp = p; /* pp -> <sync_action> */
-	p = strchr(pp, ' ') + 1; /* p -> <mismatch_count> */
-	if (!(s->sync_action = dm_pool_zalloc(mem, p - pp)))
-		goto_bad;
-
-	if (sscanf(pp, "%s %" PRIu64, s->sync_action, &s->mismatch_count) != 2) {
-		log_error("Failed to parse sync_action and mismatch_count raid params: %s", params);
-		goto bad;
-	}
-
-	/*
-	 * All pre-1.8.0 version parameters are read.  Now we check
-	 * for additional 1.8.0+ parameters.
 	 *
-	 * Note that data_offset and dev_sectors will be 0
-	 * if the kernel returns a pre-1.8.0 status.
+	 * See below for any additional 1.8.0+ parameters
 	 */
-	if (nr_params < 8)
-		return 1;
+	if (nr_fields >= 6) {
+		fields = "<sync_action> and <mismatch_count>";
+		p = _skip_fields(params, 4); /* skip pre-1.5.0 params */
+		if (!(s->sync_action = dm_pool_zalloc(mem, _skip_fields(p, 1) - p)))
+			goto_bad;
 
-	/* pp -> <sync_action> */
-	for (p = pp, i = 0; i < 2; i++, p++)
-		p = strchr(p, ' ');
+		if (sscanf(p, "%s %" PRIu64, s->sync_action, &s->mismatch_count) != 2)
+			goto bad;
 
-	/* p -> <data_offset> */
-	if (sscanf(p, "%" PRIu64 " %" PRIu64, &s->data_offset, &s->dev_sectors) != 2) {
-		log_error("Failed to parse data_offset and dev_sectors raid params: %s", params);
-		goto bad;
+		/*
+		 * All pre-1.8.0 version parameters are read.  Now we check
+		 * for additional 1.8.0+ parameters (i.e. nr_fields at least 8).
+		 *
+		 * Note that data_offset and dev_sectors will be 0
+		 * if the kernel returns a pre-1.8.0 status with
+		 * dev_sectors being 0 indicating pre-1.8.0 status
+		 * to userspace. (data_offset being 0 does not!).
+		 */
+		if (nr_fields >= 8) {
+			fields = "<data_offset> and <dev_sectors>";
+			p = _skip_fields(params, 6); /* skip pre-1.8.0 params */
+			if (sscanf(p, "%" PRIu64 " %" PRIu64, &s->data_offset, &s->dev_sectors) != 2)
+				goto bad;
+		}
 	}
 
 	return 1;
+
 bad:
-	dm_pool_free(mem, s);
+	if (s) {
+		if (s->sync_action)
+			dm_pool_free(mem, s->sync_action);
+
+		dm_pool_free(mem, s);
+		*status = NULL;
+	}
+
+	log_error("Failed to parse %s%sraid params: %s", fields, *fields ? " " : "", params);
 
 	return 0;
 }
@@ -3487,18 +3502,6 @@ int dm_tree_node_add_cache_target(struct dm_tree_node *node,
 
 
 	return 1;
-}
-
-static const char *advance_to_next_word(const char *str, int count)
-{
-	int i;
-	const char *p;
-
-	for (p = str, i = 0; i < count; i++, p++)
-		if (!(p = strchr(p, ' ')))
-			return NULL;
-
-	return p;
 }
 
 /*
@@ -3574,7 +3577,7 @@ int dm_get_status_cache(struct dm_pool *mem, const char *params,
 		goto bad;
 
 	/* Now jump to "features" section */
-	if (!(p = advance_to_next_word(params, 12)))
+	if (!(p = _skip_fields(params, 12)))
 		goto bad;
 
 	/* Read in features */
@@ -3586,7 +3589,7 @@ int dm_get_status_cache(struct dm_pool *mem, const char *params,
 		else
 			log_error("Unknown feature in status: %s", params);
 
-		if (!(p = advance_to_next_word(p, 1)))
+		if (!(p = _skip_fields(p, 1)))
 			goto bad;
 	}
 
@@ -3595,22 +3598,22 @@ int dm_get_status_cache(struct dm_pool *mem, const char *params,
 		goto bad;
 	if (s->core_argc &&
 	    (!(s->core_argv = dm_pool_zalloc(mem, sizeof(char *) * s->core_argc)) ||
-	     !(p = advance_to_next_word(p, 1)) ||
+	     !(p = _skip_fields(p, 1)) ||
 	     !(str = dm_pool_strdup(mem, p)) ||
-	     !(p = advance_to_next_word(p, s->core_argc)) ||
+	     !(p = _skip_fields(p, s->core_argc)) ||
 	     (dm_split_words(str, s->core_argc, 0, s->core_argv) != s->core_argc)))
 		goto bad;
 
 	/* Read in policy args */
 	pp = p;
-	if (!(p = advance_to_next_word(p, 1)) ||
+	if (!(p = _skip_fields(p, 1)) ||
 	    !(s->policy_name = dm_pool_zalloc(mem, (p - pp))))
 		goto bad;
 	if (sscanf(pp, "%s %d", s->policy_name, &s->policy_argc) != 2)
 		goto bad;
 	if (s->policy_argc &&
 	    (!(s->policy_argv = dm_pool_zalloc(mem, sizeof(char *) * s->policy_argc)) ||
-	     !(p = advance_to_next_word(p, 1)) ||
+	     !(p = _skip_fields(p, 1)) ||
 	     !(str = dm_pool_strdup(mem, p)) ||
 	     (dm_split_words(str, s->policy_argc, 0, s->policy_argv) != s->policy_argc)))
 		goto bad;

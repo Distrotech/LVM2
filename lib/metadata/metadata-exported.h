@@ -413,7 +413,8 @@ struct lv_segment {
 	uint32_t writebehind;   /* For RAID (RAID1 only) */
 	uint32_t min_recovery_rate; /* For RAID */
 	uint32_t max_recovery_rate; /* For RAID */
-	uint32_t data_offset; /* For RAID */
+	uint32_t data_offset; /* For RAID, data offset in sectors on each data component image
+				 overloaded by setting 1 to cause emmiting 0 offset */
 	uint32_t area_count;
 	uint32_t area_len;
 	uint32_t chunk_size;	/* For snapshots/thin_pool.  In sectors. */

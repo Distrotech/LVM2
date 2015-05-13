@@ -870,6 +870,33 @@ int lv_raid_percent(const struct logical_volume *lv, dm_percent_t *percent)
 	return lv_mirror_percent(lv->vg->cmd, lv, 0, percent, NULL);
 }
 
+int lv_raid_dev_count(const struct logical_volume *lv, uint32_t *dev_cnt)
+{
+	struct dev_manager *dm;
+	struct dm_status_raid *status;
+
+	*dev_cnt = 0;
+
+	if (!lv_info(lv->vg->cmd, lv, 0, NULL, 0, 0))
+		return 0;
+
+	log_debug_activation("Checking raid device count for LV %s/%s",
+			     lv->vg->name, lv->name);
+
+	if (!(dm = dev_manager_create(lv->vg->cmd, lv->vg->name, 1)))
+		return_0;
+
+	if (!dev_manager_raid_status(dm, lv, &status)) {
+		dev_manager_destroy(dm);
+		return_0;
+	}
+	*dev_cnt = status->dev_count;
+
+	dev_manager_destroy(dm);
+
+	return 1;
+}
+
 int lv_raid_offset_and_sectors(const struct logical_volume *lv,
 			       uint64_t *data_offset,
 			       uint64_t *dev_sectors)

@@ -3737,8 +3737,6 @@ PFLA("extending %s in %s, stripes=%u", sub_lv->name, lv->name, stripes);
 			return 0;
 		}
 
-		/* HM FIXME: TESTME: extension on existing sets */
-		/* Extend metadata LVs if any */
 		if (seg_is_raid(seg) &&
 		    seg->meta_areas &&
 		    ah->log_len &&
