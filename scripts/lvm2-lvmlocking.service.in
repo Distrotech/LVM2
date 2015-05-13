@@ -1,0 +1,27 @@
+[Unit]
+Description=Availability of lockspaces in lvmlockd
+Documentation=man:lvmlockd(8)
+After=lvm2-lvmlockd.service
+# The steps below require sanlock|dlm to be available,
+# use After dlm.service and sanlock.service?
+
+[Service]
+Type=oneshot
+
+# start lockspaces and wait for them to finish starting
+ExecStart=@sbindir@/vgchange --lock-start --lock-opt autowait
+
+# auto activate lockd LVs in the newly started VGs
+# ExecStart=@sbindir@/vgchange -aay -S 'lock_type={sanlock,dlm}'
+ExecStart=@sbindir@/vgchange -aay
+
+# deactivate lockd LVs
+# ExecStop=@sbindir@/vgchange -an -S 'lock_type={sanlock,dlm}'
+ExecStop=@sbindir@/vgchange -an
+
+# stop lockspaces and wait for them to finish stopping
+ExecStop=@sbindir@/lvmlock --stop-lockspaces --wait
+
+[Install]
+WantedBy=multi-user.target
+
