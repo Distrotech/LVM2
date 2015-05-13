@@ -16,6 +16,7 @@
 #include "polldaemon.h"
 #include "lv_alloc.h"
 #include "lvconvert_poll.h"
+#include "lvmpolld-client.h"
 
 struct lvconvert_params {
 	int cache;
@@ -2530,6 +2531,12 @@ static int _lvconvert_thin(struct cmd_context *cmd,
 		return 0;
 	}
 
+	if (is_lockd_type(lv->vg->lock_type)) {
+		log_error("Can't use lock_type %s LV as external origin.",
+			  lv->vg->lock_type);
+		return 0;
+	}
+
 	dm_list_init(&lvc.tags);
 
 	if (!pool_supports_external_origin(first_seg(pool_lv), lv))
@@ -2642,6 +2649,8 @@ static int _lvconvert_pool(struct cmd_context *cmd,
 {
 	int r = 0;
 	const char *old_name;
+	const char *lock_free_meta_name = NULL;
+	const char *lock_free_data_name = NULL;
 	struct lv_segment *seg;
 	struct volume_group *vg = pool_lv->vg;
 	struct logical_volume *data_lv;
@@ -2980,6 +2989,36 @@ static int _lvconvert_pool(struct cmd_context *cmd,
 	if (!attach_pool_data_lv(seg, data_lv))
 		return_0;
 
+	/*
+	 * A thin pool lv adopts the lock from the data lv, and the lock for
+	 * the meta lv is unlocked and freed.  A cache pool lv has no lock, and
+	 * the existing lock for both data and meta lvs are unlocked and freed.
+	 */
+	if (is_lockd_type(pool_lv->vg->lock_type)) {
+		if (lp->pool_metadata_name) {
+			char *c;
+			if ((c = strchr(lp->pool_metadata_name, '/')))
+				lock_free_meta_name = c + 1;
+			else
+				lock_free_meta_name = lp->pool_metadata_name;
+		}
+
+		if (segtype_is_cache_pool(lp->segtype)) {
+			lock_free_data_name = pool_lv->name;
+			pool_lv->lock_type = NULL;
+			pool_lv->lock_args = NULL;
+		} else  {
+			if (data_lv->lock_type)
+				pool_lv->lock_type = dm_pool_strdup(cmd->mem, data_lv->lock_type);
+			if (data_lv->lock_args)
+				pool_lv->lock_args = dm_pool_strdup(cmd->mem, data_lv->lock_args);
+		}
+		data_lv->lock_type = NULL;
+		data_lv->lock_args = NULL;
+		metadata_lv->lock_type = NULL;
+		metadata_lv->lock_args = NULL;
+	}
+
 	/* FIXME: revert renamed LVs in fail path? */
 	/* FIXME: any common code with metadata/thin_manip.c  extend_pool() ? */
 
@@ -3036,6 +3075,22 @@ out:
 					display_lvname(pool_lv),
 					(segtype_is_cache_pool(lp->segtype)) ?
 					"cache" : "thin");
+
+	if (lock_free_meta_name) {
+		if (!lockd_lv_name(cmd, pool_lv->vg, lock_free_meta_name, NULL, "un", LDLV_PERSISTENT)) {
+			log_error("Failed to unlock pool metadata LV %s/%s",
+				  pool_lv->vg->name, lock_free_meta_name);
+		}
+		lockd_free_lv(cmd, pool_lv->vg, lock_free_meta_name, NULL);
+	}
+
+	if (lock_free_data_name) {
+		if (!lockd_lv_name(cmd, pool_lv->vg, lock_free_data_name, NULL, "un", LDLV_PERSISTENT)) {
+			log_error("Failed to unlock pool data LV %s/%s",
+				  pool_lv->vg->name, lock_free_data_name);
+		}
+		lockd_free_lv(cmd, pool_lv->vg, lock_free_data_name, NULL);
+	}
 
 	return r;
 #if 0
@@ -3286,14 +3341,41 @@ static int lvconvert_single(struct cmd_context *cmd, struct lvconvert_params *lp
 	struct logical_volume *lv;
 	int ret = ECMD_FAILED;
 	int saved_ignore_suspended_devices = ignore_suspended_devices();
+	uint32_t lockd_state;
 
 	if (arg_count(cmd, repair_ARG)) {
 		init_ignore_suspended_devices(1);
 		cmd->handles_missing_pvs = 1;
 	}
 
+	/*
+	 * The VG lock will be released when the command exits.
+	 * Commands that poll the LV will reacquire the VG lock.
+	 */
+	if (!lockd_vg(cmd, lp->vg_name, "ex", 0, &lockd_state))
+		goto_out;
+
+	/*
+	 * FIXME: call vg_read directly here and pass lockd_state
+	 *
+	 * (replace all instaces of poll_get_copy_vg with vg_read,
+	 * and use a find_lv function from metadata.c in place of
+	 * poll_get_copy_lv)
+	 */
+
 	if (!(lv = get_vg_lock_and_logical_volume(cmd, lp->vg_name, lp->lv_name)))
 		goto_out;
+
+	/*
+	 * If the lv is inactive before and after the command, the
+	 * use of PERSISTENT here means the lv will remain locked as
+	 * an effect of running the lvconvert.
+	 * To unlock it, it would need to be activated+deactivated.
+	 * Or, we could identify the commands for which the lv remains
+	 * inactive, and not use PERSISTENT here for those cases.
+	 */
+	if (!lockd_lv(cmd, lv, "ex", LDLV_PERSISTENT))
+		goto_bad;
 
 	/*
 	 * lp->pvh holds the list of PVs available for allocation or removal
@@ -3377,6 +3459,32 @@ static int _lvconvert_merge_single(struct cmd_context *cmd, struct logical_volum
 	return ret;
 }
 
+/*
+ * process_each_lv locks the VG, reads the VG, calls this which starts the
+ * conversion, then unlocks the VG.  The lvpoll command will come along later
+ * and lock the VG, read the VG, check the progress, unlock the VG, sleep and
+ * repeat until done.
+ */
+
+static int _lvconvert_lvmpolld_merge_single(struct cmd_context *cmd, struct logical_volume *lv,
+					    struct processing_handle *handle)
+{
+	struct lvconvert_params *lp = (struct lvconvert_params *) handle->custom_handle;
+	int ret;
+
+	lp->lv_to_poll = lv;
+	if ((ret = _lvconvert_single(cmd, lv, lp)) != ECMD_PROCESSED)
+		stack;
+
+	if (ret == ECMD_PROCESSED && lp->need_polling) {
+		if ((ret = _poll_logical_volume(cmd, lp->lv_to_poll,
+						 lp->wait_completion)) != ECMD_PROCESSED)
+			stack;
+	}
+
+	return ret;
+}
+
 int lvconvert(struct cmd_context * cmd, int argc, char **argv)
 {
 	int ret;
@@ -3400,7 +3508,8 @@ int lvconvert(struct cmd_context * cmd, int argc, char **argv)
 
 	if (lp.merge)
 		ret = process_each_lv(cmd, argc, argv, READ_FOR_UPDATE, handle,
-				    &_lvconvert_merge_single);
+				    lvmpolld_use() ? &_lvconvert_lvmpolld_merge_single :
+				    		     &_lvconvert_merge_single);
 	else
 		ret = lvconvert_single(cmd, &lp);
 out:

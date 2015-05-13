@@ -62,10 +62,10 @@ struct volume_group *poll_get_copy_vg(struct cmd_context *cmd,
 	dev_close_all();
 
 	if (name && !strchr(name, '/'))
-		return vg_read(cmd, name, NULL, flags);
+		return vg_read(cmd, name, NULL, flags, 0);
 
 	/* 'name' is the full LV name; must extract_vgname() */
-	return vg_read(cmd, extract_vgname(cmd, name), NULL, flags);
+	return vg_read(cmd, extract_vgname(cmd, name), NULL, flags, 0);
 }
 
 struct logical_volume *poll_get_copy_lv(struct cmd_context *cmd __attribute__((unused)),
@@ -165,11 +165,17 @@ int wait_for_single_lv(struct cmd_context *cmd, struct poll_operation_id *id,
 	struct volume_group *vg;
 	struct logical_volume *lv;
 	int finished = 0;
+	uint32_t lockd_state;
 
 	/* Poll for completion */
 	while (!finished) {
 		if (parms->wait_before_testing)
 			_sleep_and_rescan_devices(parms);
+
+		if (!lockd_vg(cmd, id->vg_name, "sh", 0, &lockd_state)) {
+			log_error("ABORTING: Can't lock VG for %s.", id->display_name);
+			return 0;
+		}
 
 		/* Locks the (possibly renamed) VG again */
 		vg = parms->poll_fns->get_copy_vg(cmd, id->vg_name, NULL, READ_FOR_UPDATE);
@@ -212,6 +218,8 @@ int wait_for_single_lv(struct cmd_context *cmd, struct poll_operation_id *id,
 		}
 
 		unlock_and_release_vg(cmd, vg, vg->name);
+
+		lockd_vg(cmd, vg->name, "un", 0, &lockd_state);
 
 		/*
 		 * FIXME Sleeping after testing, while preferred, also works around
