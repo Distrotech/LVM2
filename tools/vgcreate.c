@@ -50,6 +50,9 @@ int vgcreate(struct cmd_context *cmd, int argc, char **argv)
 	if (!vgcreate_params_validate(cmd, &vp_new))
 	    return EINVALID_CMD_LINE;
 
+	if (!lockd_gl_create(cmd, "ex", vp_new.lock_type))
+		return ECMD_FAILED;
+
 	lvmcache_seed_infos_from_lvmetad(cmd);
 
 	/* Create the new VG */
@@ -71,6 +74,7 @@ int vgcreate(struct cmd_context *cmd, int argc, char **argv)
 	    !vg_set_max_pv(vg, vp_new.max_pv) ||
 	    !vg_set_alloc_policy(vg, vp_new.alloc) ||
 	    !vg_set_clustered(vg, vp_new.clustered) ||
+	    !vg_set_lock_type(vg, vp_new.lock_type) ||
 	    !vg_set_system_id(vg, vp_new.system_id) ||
 	    !vg_set_mda_copies(vg, vp_new.vgmetadatacopies))
 		goto bad_orphan;
@@ -119,6 +123,14 @@ int vgcreate(struct cmd_context *cmd, int argc, char **argv)
 	if (!vg_write(vg) || !vg_commit(vg))
 		goto_bad;
 
+	if (!lockd_init_vg(cmd, vg)) {
+		log_error("Failed to initialize lock args for lock type %s",
+			  vp_new.lock_type);
+		vg_remove_pvs(vg);
+		vg_remove_direct(vg);
+		goto_bad;
+	}
+
 	unlock_vg(cmd, VG_ORPHANS);
 	unlock_vg(cmd, vp_new.vg_name);
 
@@ -127,6 +139,10 @@ int vgcreate(struct cmd_context *cmd, int argc, char **argv)
 	log_print_unless_silent("%s%colume group \"%s\" successfully created%s%s",
 				clustered_message, *clustered_message ? 'v' : 'V', vg->name,
 				vg->system_id ? " with system ID " : "", vg->system_id ? : "");
+
+	/* Start the VG lockspace because it will likely be used right away. */
+	if (!lockd_start_vg(cmd, vg))
+		log_error("Failed to start locking");
 
 	release_vg(vg);
 	return ECMD_PROCESSED;

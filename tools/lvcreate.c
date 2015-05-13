@@ -1453,6 +1453,7 @@ int lvcreate(struct cmd_context *cmd, int argc, char **argv)
 	};
 	struct lvcreate_cmdline_params lcp = { 0 };
 	struct volume_group *vg;
+	uint32_t lockd_state;
 
 	if (!_lvcreate_params(cmd, argc, argv, &lp, &lcp)) {
 		stack;
@@ -1464,8 +1465,11 @@ int lvcreate(struct cmd_context *cmd, int argc, char **argv)
 		return EINVALID_CMD_LINE;
 	}
 
+	if (!lockd_vg(cmd, lp.vg_name, "ex", 0, &lockd_state))
+		return_ECMD_FAILED;
+
 	log_verbose("Finding volume group \"%s\"", lp.vg_name);
-	vg = vg_read_for_update(cmd, lp.vg_name, NULL, 0);
+	vg = vg_read_for_update(cmd, lp.vg_name, NULL, 0, lockd_state);
 	if (vg_read_error(vg)) {
 		release_vg(vg);
 		return_ECMD_FAILED;
@@ -1516,6 +1520,9 @@ int lvcreate(struct cmd_context *cmd, int argc, char **argv)
 			    lp.pool_name ? : "with generated name", lp.vg_name,
 			    lp.snapshot ? " as snapshot of " : "",
 			    lp.snapshot ? lp.origin_name : "", lp.segtype->name);
+
+	if (vg->lock_type && !(lp.lock_type = dm_pool_strdup(cmd->mem, vg->lock_type)))
+		goto_out;
 
 	if (!lv_create_single(vg, &lp))
 		goto_out;
