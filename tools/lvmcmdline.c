@@ -579,6 +579,20 @@ int string_arg(struct cmd_context *cmd __attribute__((unused)),
 	return 1;
 }
 
+int arg_tag_count(int argc, char **argv)
+{
+	const char *name;
+	int count = 0;
+	int i;
+
+	for (i = 0; i < argc; i++) {
+		name = argv[i];
+		if (*name == '@')
+			count++;
+	}
+	return count;
+}
+
 int tag_arg(struct cmd_context *cmd __attribute__((unused)), struct arg_values *av)
 {
 	char *pos = av->value;
@@ -757,6 +771,7 @@ void lvm_register_commands(void)
 					    yes_ARG, \
 					    quiet_ARG, config_ARG, \
 					    commandprofile_ARG, \
+					    lockgl_ARG, lockvg_ARG, locklv_ARG, \
 					    profile_ARG, -1);
 #include "commands.h"
 #undef xx
@@ -1045,6 +1060,15 @@ static int _get_settings(struct cmd_context *cmd)
 		cmd->current_settings.backup = 0;
 	}
 
+	if (arg_is_set(cmd, lockgl_ARG))
+		cmd->lock_gl_mode = arg_str_value(cmd, lockgl_ARG, NULL);
+	if (arg_is_set(cmd, lockvg_ARG))
+		cmd->lock_vg_mode = arg_str_value(cmd, lockvg_ARG, NULL);
+	if (cmd->command->flags & LOCKD_VG_SH)
+		cmd->lockd_vg_default_sh = 1;
+	if (arg_is_set(cmd, locklv_ARG))
+		cmd->lock_lv_mode = arg_str_value(cmd, locklv_ARG, NULL);
+
 	cmd->partial_activation = 0;
 	cmd->degraded_activation = 0;
 	activation_mode = find_config_tree_str(cmd, activation_mode_CFG, NULL);
@@ -1085,8 +1109,10 @@ static int _get_settings(struct cmd_context *cmd)
 	cmd->include_foreign_vgs = arg_is_set(cmd, foreign_ARG) ? 1 : 0;
 	cmd->include_active_foreign_vgs = cmd->command->flags & ENABLE_FOREIGN_VGS ? 1 : 0;
 		
-	if (!arg_count(cmd, sysinit_ARG))
+	if (!arg_count(cmd, sysinit_ARG)) {
 		lvmetad_connect_or_warn();
+		lvmlockd_connect_or_warn();
+	}
 
 	if (arg_count(cmd, nosuffix_ARG))
 		cmd->current_settings.suffix = 0;
