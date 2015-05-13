@@ -640,9 +640,9 @@ int lv_resize(struct cmd_context *cmd, struct logical_volume *lv,
  * Return a handle to VG metadata.
  */
 struct volume_group *vg_read(struct cmd_context *cmd, const char *vg_name,
-			     const char *vgid, uint32_t flags);
+			     const char *vgid, uint32_t flags, uint32_t lockd_state);
 struct volume_group *vg_read_for_update(struct cmd_context *cmd, const char *vg_name,
-			 const char *vgid, uint32_t flags);
+			 const char *vgid, uint32_t flags, uint32_t lockd_state);
 
 /* 
  * Test validity of a VG handle.
@@ -685,6 +685,7 @@ struct volume_group *vg_create(struct cmd_context *cmd, const char *vg_name);
 int vg_remove_mdas(struct volume_group *vg);
 int vg_remove_check(struct volume_group *vg);
 void vg_remove_pvs(struct volume_group *vg);
+int vg_remove_direct(struct volume_group *vg);
 int vg_remove(struct volume_group *vg);
 int vg_rename(struct cmd_context *cmd, struct volume_group *vg,
 	      const char *new_name);
@@ -737,6 +738,8 @@ int lv_empty(struct logical_volume *lv);
 
 /* Empty an LV and add error segment */
 int replace_lv_with_error_segment(struct logical_volume *lv);
+
+int lv_refresh_suspend_resume(struct cmd_context *cmd, struct logical_volume *lv);
 
 /* Entry point for all LV extent allocations */
 int lv_extend(struct logical_volume *lv,
@@ -828,7 +831,8 @@ typedef enum activation_change {
 	CHANGE_AEY = 2, /* activate exclusively */
 	CHANGE_ALY = 3, /* activate locally */
 	CHANGE_ALN = 4, /* deactivate locally */
-	CHANGE_AAY = 5  /* automatic activation */
+	CHANGE_AAY = 5, /* automatic activation */
+	CHANGE_ASY = 6  /* activate shared */
 } activation_change_t;
 
 /* Returns true, when change activates device */
@@ -865,6 +869,9 @@ struct lvcreate_params {
 	const char *lv_name; /* all */
 	const char *origin_name; /* snap */
 	const char *pool_name;   /* thin */
+
+	const char *lock_type;
+	const char *lock_args;
 
 	/* Keep args given by the user on command line */
 	/* FIXME: create some more universal solution here */
@@ -1208,6 +1215,8 @@ struct vgcreate_params {
 	int clustered; /* FIXME: put this into a 'status' variable instead? */
 	uint32_t vgmetadatacopies;
 	const char *system_id;
+	const char *lock_type;
+	const char *lock_args;
 };
 
 int validate_major_minor(const struct cmd_context *cmd,

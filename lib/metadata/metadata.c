@@ -31,6 +31,7 @@
 #include "locking.h"
 #include "archiver.h"
 #include "defaults.h"
+#include "lvmlockd.h"
 
 #include <math.h>
 #include <sys/param.h>
@@ -557,20 +558,14 @@ void vg_remove_pvs(struct volume_group *vg)
 	}
 }
 
-int vg_remove(struct volume_group *vg)
+int vg_remove_direct(struct volume_group *vg)
 {
 	struct physical_volume *pv;
 	struct pv_list *pvl;
 	int ret = 1;
 
-	if (!lock_vol(vg->cmd, VG_ORPHANS, LCK_VG_WRITE, NULL)) {
-		log_error("Can't get lock for orphan PVs");
-		return 0;
-	}
-
 	if (!vg_remove_mdas(vg)) {
 		log_error("vg_remove_mdas %s failed", vg->name);
-		unlock_vg(vg->cmd, VG_ORPHANS);
 		return 0;
 	}
 
@@ -604,6 +599,8 @@ int vg_remove(struct volume_group *vg)
 	if (!lvmetad_vg_remove(vg))
 		stack;
 
+	lockd_vg_update(vg);
+
 	if (!backup_remove(vg->cmd, vg->name))
 		stack;
 
@@ -611,6 +608,20 @@ int vg_remove(struct volume_group *vg)
 		log_print_unless_silent("Volume group \"%s\" successfully removed", vg->name);
 	else
 		log_error("Volume group \"%s\" not properly removed", vg->name);
+
+	return ret;
+}
+
+int vg_remove(struct volume_group *vg)
+{
+	int ret;
+
+	if (!lock_vol(vg->cmd, VG_ORPHANS, LCK_VG_WRITE, NULL)) {
+		log_error("Can't get lock for orphan PVs");
+		return 0;
+	}
+
+	ret = vg_remove_direct(vg);
 
 	unlock_vg(vg->cmd, VG_ORPHANS);
 	return ret;
@@ -2972,6 +2983,8 @@ int vg_commit(struct volume_group *vg)
 	if ((vg->fid->fmt->features & FMT_PRECOMMIT) && !lvmetad_vg_update(vg))
 		return_0;
 
+	lockd_vg_update(vg);
+
 	cache_updated = _vg_commit_mdas(vg);
 
 	if (cache_updated) {
@@ -4504,18 +4517,47 @@ static int _access_vg_clustered(struct cmd_context *cmd, struct volume_group *vg
 	return 1;
 }
 
-static int _access_vg_lock_type(struct cmd_context *cmd, struct volume_group *vg)
+static int _access_vg_lock_type(struct cmd_context *cmd, struct volume_group *vg,
+				uint32_t lockd_state)
 {
 	if (!is_real_vg(vg->name))
 		return 1;
 
+	if (cmd->lockd_vg_disable)
+		return 1;
+
 	/*
-	 * Until lock_type support is added, reject any VG that has a lock_type.
+	 * Local VG requires no lock from lvmlockd.
 	 */
-	if (vg->lock_type && vg->lock_type[0] && strcmp(vg->lock_type, "none")) {
-		log_error("Cannot access VG %s with unsupported lock_type %s.",
-			  vg->name, vg->lock_type);
-		return 0;
+	if (!is_lockd_type(vg->lock_type))
+		return 1;
+
+	/*
+	 * When lvmlockd is not running, only allow read access to the VG.
+	 */
+	if (!lvmlockd_active()) {
+		if (lockd_state & LDST_EX) {
+			log_error("Cannot access VG %s which requires lvmlockd for lock_type %s.",
+				  vg->name, vg->lock_type);
+			return 0;
+		} else {
+			log_warn("Reading VG %s without a lock.", vg->name);
+			return 1;
+		}
+	}
+
+	/*
+	 * The lock failed.  If the lock was ex, we cannot continue.
+	 * If the lock was sh, we can allow reading.
+	 */
+	if (lockd_state & LDST_FAIL) {
+		if (lockd_state & LDST_EX) {
+			log_error("Cannot access VG %s due to failed lock.", vg->name);
+			return 0;
+		} else {
+			log_warn("Reading VG %s without a lock.", vg->name);
+			return 1;
+		}
 	}
 
 	return 1;
@@ -4596,7 +4638,8 @@ static int _access_vg_systemid(struct cmd_context *cmd, struct volume_group *vg)
 /*
  * FIXME: move _vg_bad_status_bits() checks in here.
  */
-static int _vg_access_permitted(struct cmd_context *cmd, struct volume_group *vg, uint32_t *failure)
+static int _vg_access_permitted(struct cmd_context *cmd, struct volume_group *vg,
+				uint32_t lockd_state, uint32_t *failure)
 {
 	if (!is_real_vg(vg->name)) {
 		/* Disallow use of LVM1 orphans when a host system ID is set. */
@@ -4612,7 +4655,7 @@ static int _vg_access_permitted(struct cmd_context *cmd, struct volume_group *vg
 		return 0;
 	}
 
-	if (!_access_vg_lock_type(cmd, vg)) {
+	if (!_access_vg_lock_type(cmd, vg, lockd_state)) {
 		*failure |= FAILED_LOCK_TYPE;
 		return 0;
 	}
@@ -4638,7 +4681,8 @@ static int _vg_access_permitted(struct cmd_context *cmd, struct volume_group *vg
  */
 static struct volume_group *_vg_lock_and_read(struct cmd_context *cmd, const char *vg_name,
 			       const char *vgid, uint32_t lock_flags,
-			       uint64_t status_flags, uint32_t misc_flags)
+			       uint64_t status_flags, uint32_t misc_flags,
+			       uint32_t lockd_state)
 {
 	struct volume_group *vg = NULL;
 	int consistent = 1;
@@ -4684,7 +4728,7 @@ static struct volume_group *_vg_lock_and_read(struct cmd_context *cmd, const cha
 		goto bad;
 	}
 
-	if (!_vg_access_permitted(cmd, vg, &failure))
+	if (!_vg_access_permitted(cmd, vg, lockd_state, &failure))
 		goto bad;
 
 	/* consistent == 0 when VG is not found, but failed == FAILED_NOTFOUND */
@@ -4760,7 +4804,7 @@ bad_no_unlock:
  * *consistent = 1.
  */
 struct volume_group *vg_read(struct cmd_context *cmd, const char *vg_name,
-			     const char *vgid, uint32_t flags)
+			     const char *vgid, uint32_t flags, uint32_t lockd_state)
 {
 	uint64_t status = UINT64_C(0);
 	uint32_t lock_flags = LCK_VG_READ;
@@ -4773,7 +4817,7 @@ struct volume_group *vg_read(struct cmd_context *cmd, const char *vg_name,
 	if (flags & READ_ALLOW_EXPORTED)
 		status &= ~EXPORTED_VG;
 
-	return _vg_lock_and_read(cmd, vg_name, vgid, lock_flags, status, flags);
+	return _vg_lock_and_read(cmd, vg_name, vgid, lock_flags, status, flags, lockd_state);
 }
 
 /*
@@ -4782,9 +4826,9 @@ struct volume_group *vg_read(struct cmd_context *cmd, const char *vg_name,
  * request the new metadata to be written and committed).
  */
 struct volume_group *vg_read_for_update(struct cmd_context *cmd, const char *vg_name,
-			 const char *vgid, uint32_t flags)
+			 const char *vgid, uint32_t flags, uint32_t lockd_state)
 {
-	return vg_read(cmd, vg_name, vgid, flags | READ_FOR_UPDATE);
+	return vg_read(cmd, vg_name, vgid, flags | READ_FOR_UPDATE, lockd_state);
 }
 
 /*
