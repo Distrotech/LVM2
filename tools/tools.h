@@ -28,6 +28,7 @@
 #include "archiver.h"
 #include "lvmcache.h"
 #include "lvmetad.h"
+#include "lvmlockd.h"
 #include "lvm-version.h"
 #include "config.h"
 #include "defaults.h"
@@ -110,6 +111,8 @@ struct arg_value_group_list {
 #define ONE_VGNAME_ARG		0x00000010
 /* Command is allowed to read foreign VGs. */
 #define ENABLE_FOREIGN_VGS	0x00000020
+/* Command needs a shared lock on a VG; it only reads the VG. */
+#define LOCKD_VG_SH		0x00000040
  
 /* a register of the lvm commands */
 struct command {
@@ -173,6 +176,8 @@ unsigned grouped_arg_count(const struct arg_values *av, int a);
 unsigned grouped_arg_is_set(const struct arg_values *av, int a);
 const char *grouped_arg_str_value(const struct arg_values *av, int a, const char *def);
 int32_t grouped_arg_int_value(const struct arg_values *av, int a, const int32_t def); 
+
+int arg_tag_count(int argc, char **argv);
 
 const char *command_name(struct cmd_context *cmd);
 
