@@ -601,6 +601,9 @@ static int _lvchange_persistent(struct cmd_context *cmd,
 {
 	enum activation_change activate = CHANGE_AN;
 
+	/* The LV lock in lvmlockd should remain as it is. */
+	cmd->lockd_lv_disable = 1;
+
 	if (!get_and_validate_major_minor(cmd, lv->vg->fid->fmt,
 					  &lv->major, &lv->minor))
 		return_0;
@@ -984,6 +987,22 @@ static int _lvchange_single(struct cmd_context *cmd, struct logical_volume *lv,
 		return ECMD_FAILED;
 	}
 
+	if (!arg_count(cmd, activate_ARG) && !arg_count(cmd, refresh_ARG)) {
+		/*
+		 * If a persistent lv lock already exists from activation
+		 * (with the needed mode or higher), this will be a no-op.
+		 * Otherwise, the lv lock will be taken as non-persistent
+		 * and released when this command exits.
+		 *
+		 * TODO: use "sh" if the options imply that the lvchange
+		 * operation does not modify the LV.
+		 */
+		if (!lockd_lv(cmd, lv, "ex", 0)) {
+			stack;
+			return ECMD_FAILED;
+		}
+	}
+
 	/*
 	 * FIXME: DEFAULT_BACKGROUND_POLLING should be "unspecified".
 	 * If --poll is explicitly provided use it; otherwise polling
@@ -1256,6 +1275,17 @@ int lvchange(struct cmd_context *cmd, int argc, char **argv)
 
 	if (arg_is_set(cmd, activate_ARG))
 		cmd->include_active_foreign_vgs = 1;
+
+	/*
+	 * The default vg lock mode for lvchange is ex, but these options
+	 * are cases where lvchange does not modify the vg, so they can use
+	 * the sh lock mode.
+	 */
+	if (arg_count(cmd, activate_ARG) || arg_count(cmd, refresh_ARG))
+		cmd->lockd_vg_default_sh = 1;
+
+	if (arg_tag_count(argc, argv) && !lockd_gl(cmd, "sh", 0))
+		return_ECMD_FAILED;
 
 	return process_each_lv(cmd, argc, argv,
 			       update ? READ_FOR_UPDATE : 0, NULL,
