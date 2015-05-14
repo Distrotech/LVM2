@@ -171,16 +171,16 @@ int wait_for_single_lv(struct cmd_context *cmd, struct poll_operation_id *id,
 		if (parms->wait_before_testing)
 			_sleep_and_rescan_devices(parms);
 
-		/* Locks the (possibly renamed) VG again */
-		vg = parms->poll_fns->get_copy_vg(cmd, id->vg_name, NULL, READ_FOR_UPDATE);
+		dev_close_all();
+
+		vg = vg_read(cmd, id->vg_name, NULL, READ_FOR_UPDATE);
 		if (vg_read_error(vg)) {
 			release_vg(vg);
 			log_error("ABORTING: Can't reread VG for %s.", id->display_name);
-			/* What more could we do here? */
 			return 0;
 		}
 
-		lv = parms->poll_fns->get_copy_lv(cmd, vg, id->lv_name, id->uuid, parms->lv_type);
+		lv = find_lv(vg, id->lv_name);
 
 		if (!lv && parms->lv_type == PVMOVE) {
 			log_print_unless_silent("%s: No pvmove in progress - already finished or aborted.",
@@ -190,8 +190,19 @@ int wait_for_single_lv(struct cmd_context *cmd, struct poll_operation_id *id,
 		}
 
 		if (!lv) {
-			log_error("ABORTING: Can't find LV in %s for %s.",
-				  vg->name, id->display_name);
+			log_error("ABORTING: Can't find LV in %s for %s.", vg->name, id->display_name);
+			unlock_and_release_vg(cmd, vg, vg->name);
+			return 0;
+		}
+
+		if (id->uuid && strcmp(id->uuid, (char *)&lv->lvid)) {
+			log_error("ABORTING: LV for %s has wrong UUID.", id->display_name);
+			unlock_and_release_vg(cmd, vg, vg->name);
+			return 0;
+		}
+
+		if (parms->lv_type && !(lv->status & parms->lv_type)) {
+			log_error("ABORTING: LV for %s has wrong status.", id->display_name);
 			unlock_and_release_vg(cmd, vg, vg->name);
 			return 0;
 		}
@@ -282,8 +293,8 @@ static struct poll_id_list* poll_id_list_create(struct dm_pool *mem,
 	return idl;
 }
 
-static int _poll_vg(struct cmd_context *cmd, const char *vgname,
-		    struct volume_group *vg, struct processing_handle *handle)
+static int _vgpoll_single(struct cmd_context *cmd, const char *vgname,
+			  struct volume_group *vg, struct processing_handle *handle)
 {
 	struct daemon_parms *parms;
 	struct lv_list *lvl;
@@ -340,8 +351,14 @@ static int _poll_vg(struct cmd_context *cmd, const char *vgname,
 
 	/* perform the poll operation on LVs collected in previous cycle */
 	dm_list_iterate_items(idl, &idls) {
-		lv = parms->poll_fns->get_copy_lv(cmd, vg, idl->id->lv_name, idl->id->uuid, parms->lv_type);
-		if (lv && _check_lv_status(cmd, vg, lv, idl->id->display_name, parms, &finished) && !finished)
+		lv = find_lv(vg, idl->id->lv_name);
+		if (!lv)
+			continue;
+		if (strcmp(idl->id->uuid, (char *)&lv->lvid))
+			continue;
+		if (parms->lv_type && !(lv->status & parms->lv_type))
+			continue;
+		if (_check_lv_status(cmd, vg, lv, idl->id->display_name, parms, &finished) && !finished)
 			parms->outstanding_count++;
 	}
 
@@ -359,7 +376,7 @@ static void _poll_for_all_vgs(struct cmd_context *cmd,
 
 	while (1) {
 		parms->outstanding_count = 0;
-		process_each_vg(cmd, 0, NULL, READ_FOR_UPDATE, handle, _poll_vg);
+		process_each_vg(cmd, 0, NULL, READ_FOR_UPDATE, handle, _vgpoll_single);
 		if (!parms->outstanding_count)
 			break;
 		_nanosleep(parms->interval, 1);
@@ -378,14 +395,17 @@ static int report_progress(struct cmd_context *cmd, struct poll_operation_id *id
 	struct volume_group *vg;
 	struct logical_volume *lv;
 
-	vg = parms->poll_fns->get_copy_vg(cmd, id->vg_name, NULL, 0);
+	dev_close_all();
+
+	vg = vg_read(cmd, id->vg_name, NULL, 0);
 	if (vg_read_error(vg)) {
 		release_vg(vg);
 		log_error("Can't reread VG for %s", id->display_name);
 		return 0;
 	}
 
-	lv = parms->poll_fns->get_copy_lv(cmd, vg, id->lv_name, id->uuid, parms->lv_type);
+	lv = find_lv(vg, id->lv_name);
+
 	if (!lv && parms->lv_type == PVMOVE) {
 		log_print_unless_silent("%s: No pvmove in progress - already finished or aborted.",
 					id->display_name);
@@ -398,6 +418,18 @@ static int report_progress(struct cmd_context *cmd, struct poll_operation_id *id
 			  vg->name, id->display_name);
 		unlock_and_release_vg(cmd, vg, vg->name);
 		return 1;
+	}
+
+	if (id->uuid && strcmp(id->uuid, (char *)&lv->lvid)) {
+		log_error("LV for %s has wrong UUID.", id->display_name);
+		unlock_and_release_vg(cmd, vg, vg->name);
+		return 0;
+	}
+
+	if (parms->lv_type && !(lv->status & parms->lv_type)) {
+		log_error("LV for %s has wrong status.", id->display_name);
+		unlock_and_release_vg(cmd, vg, vg->name);
+		return 0;
 	}
 
 	if (!lv_is_active_locally(lv)) {
