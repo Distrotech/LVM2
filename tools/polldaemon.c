@@ -171,6 +171,11 @@ int wait_for_single_lv(struct cmd_context *cmd, struct poll_operation_id *id,
 		if (parms->wait_before_testing)
 			_sleep_and_rescan_devices(parms);
 
+		if (!lockd_vg(cmd, id->vg_name, "sh", 0)) {
+			log_error("ABORTING: Can't lock VG for %s.", id->display_name);
+			return 0;
+		}
+
 		/* Locks the (possibly renamed) VG again */
 		vg = parms->poll_fns->get_copy_vg(cmd, id->vg_name, NULL, READ_FOR_UPDATE);
 		if (vg_read_error(vg)) {
@@ -212,6 +217,8 @@ int wait_for_single_lv(struct cmd_context *cmd, struct poll_operation_id *id,
 		}
 
 		unlock_and_release_vg(cmd, vg, vg->name);
+
+		lockd_vg(cmd, vg->name, "un", 0);
 
 		/*
 		 * FIXME Sleeping after testing, while preferred, also works around

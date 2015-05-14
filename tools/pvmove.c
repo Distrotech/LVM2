@@ -597,6 +597,7 @@ static int _set_up_pvmove(struct cmd_context *cmd, const char *pv_name,
 	struct dm_list *lvs_changed;
 	struct physical_volume *pv;
 	struct logical_volume *lv_mirr;
+	uint32_t lockd_state;
 	unsigned flags = PVMOVE_FIRST_TIME;
 	unsigned exclusive;
 	int r = ECMD_FAILED;
@@ -628,6 +629,21 @@ static int _set_up_pvmove(struct cmd_context *cmd, const char *pv_name,
 
 	/* Read VG */
 	log_verbose("Finding volume group \"%s\"", pv_vg_name(pv));
+
+	/*
+	 * TODO: once the move is started, the pvmove command exits and
+	 * releases the VG lock, and the operation continues.  Does the
+	 * VG metadata state prevent other contradictory operations
+	 * on the VG while the pvmove is in progress, and the VG
+	 * lock is not held?
+	 *
+	 * lvpoll will periodically lock the vg, read the vg,
+	 * check the process, unlock the vg, sleep and repeat
+	 *
+	 * TODO: pass lockd_state to vg_read.
+	 */
+	if (!lockd_vg(cmd, pv_vg_name(pv), "ex", 0, &lockd_state))
+		return_ECMD_FAILED;
 
 	vg = poll_get_copy_vg(cmd, pv_vg_name(pv), NULL, READ_FOR_UPDATE);
 	if (vg_read_error(vg)) {
@@ -706,6 +722,7 @@ static int _read_poll_id_from_pvname(struct cmd_context *cmd, const char *pv_nam
 				     unsigned *in_progress)
 {
 	int ret = 0;
+	uint32_t lockd_state;
 	struct logical_volume *lv;
 	struct physical_volume *pv;
 	struct volume_group *vg;
@@ -716,6 +733,9 @@ static int _read_poll_id_from_pvname(struct cmd_context *cmd, const char *pv_nam
 	}
 
 	if (!(pv = find_pv_by_name(cmd, pv_name, 0, 0)))
+		return_0;
+
+	if (!lockd_vg(cmd, pv_vg_name(pv), "sh", 0, &lockd_state))
 		return_0;
 
 	/* need read-only access */
@@ -841,6 +861,15 @@ int pvmove(struct cmd_context *cmd, int argc, char **argv)
 		/* Drop any PE lists from PV name */
 		if (colon)
 			*colon = '\0';
+
+		/*
+		 * To do a reverse mapping from PV name to VG name, we need the
+		 * correct global mapping of PVs to VGs.
+		 */
+		if (!lockd_gl(cmd, "sh", 0)) {
+			stack;
+			return ECMD_FAILED;
+		}
 
 		if (!arg_count(cmd, abort_ARG)) {
 			if ((ret = _set_up_pvmove(cmd, pv_name, argc, argv, lvid, &vg_name, &lv_name)) != ECMD_PROCESSED) {
