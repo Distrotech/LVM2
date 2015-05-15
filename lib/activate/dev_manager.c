@@ -30,6 +30,14 @@
 #include <limits.h>
 #include <dirent.h>
 
+#if 1
+#define PFL() printf("%s %u\n", __func__, __LINE__);
+#define PFLA(format, arg...) printf("%s %u " format "\n", __func__, __LINE__, arg);
+#else
+#define PFL()
+#define PFLA(format, arg...)
+#endif
+
 #define MAX_TARGET_PARAMSIZE 50000
 #define LVM_UDEV_NOSCAN_FLAG DM_SUBSYSTEM_UDEV_FLAG0
 
@@ -228,7 +236,7 @@ static int _info_run(info_type_t type, const char *name, const char *dlid,
 			target = dm_get_next_target(dmt, target, &target_start,
 						    &target_length, &target_name, &target_params);
 			if (((uint64_t) seg_status->seg->le * extent_size == target_start) &&
-			    ((uint64_t) seg_status->seg->len * extent_size == target_length)) {
+			    ((uint64_t) (seg_status->seg->len - seg_status->seg->reshape_len) * extent_size == target_length)) {
 				params_to_process = target_params;
 				break;
 			}
@@ -2175,7 +2183,7 @@ static char *_add_error_device(struct dev_manager *dm, struct dm_tree *dtree,
 	struct lv_segment *seg_i;
 	struct dm_info info;
 	int segno = -1, i = 0;
-	uint64_t size = (uint64_t) seg->len * seg->lv->vg->extent_size;
+	uint64_t size = (uint64_t) (seg->len - seg->reshape_len) * seg->lv->vg->extent_size;
 
 	dm_list_iterate_items(seg_i, &seg->lv->segments) {
 		if (seg == seg_i)
@@ -2450,6 +2458,7 @@ static int _add_target_to_dtree(struct dev_manager *dm,
 		return 0;
 	}
 
+PFLA("%s seg->len=%u seg->reshape_len=%u", seg->lv->name ? seg->lv->name : "NOLV", seg->len, seg->reshape_len);
 	return seg->segtype->ops->add_target_line(dm, dm->mem, dm->cmd,
 						  &dm->target_state, seg,
 						  laopts, dnode,

@@ -23,6 +23,15 @@
 #include "crc.h"
 #include "lvm-signal.h"
 
+#if 1
+#define PFL() printf("%s %u\n", __func__, __LINE__);
+#define PFLA(format, arg...) printf("%s %u " format "\n", __func__, __LINE__, arg);
+#else
+#define PFL()
+#define PFLA(format, arg...)
+#endif
+
+
 #define SCAN_TIMEOUT_SECONDS	80
 #define MAX_RESCANS		10	/* Maximum number of times to scan all PVs and retry if the daemon returns a token mismatch error */
 
@@ -1009,12 +1018,14 @@ int lvmetad_pvscan_all_devs(struct cmd_context *cmd, activation_handler handler)
 	was_silent = silent_mode();
 	init_silent(1);
 
+PFL();
 	while ((dev = dev_iter_get(iter))) {
 		if (sigint_caught()) {
 			r = 0;
 			stack;
 			break;
 		}
+PFLA("dev=%s", dev->pvid);
 		if (!lvmetad_pvscan_single(cmd, dev, handler))
 			r = 0;
 	}

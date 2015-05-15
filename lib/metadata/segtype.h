@@ -191,7 +191,8 @@ int init_raid_segtypes(struct cmd_context *cmd, struct segtype_library *seglib);
 #define segtype_is_any_raid4(segtype)	(!strncmp((segtype)->name, SEG_TYPE_NAME_RAID4, 5))
 #define segtype_is_raid4(segtype)	(!strcmp((segtype)->name, SEG_TYPE_NAME_RAID4))
 #define segtype_is_any_raid5(segtype)	(!strncmp((segtype)->name, SEG_TYPE_NAME_RAID5, 5))
-#define segtype_is_raid5_ls(segtype)	(!strcmp((segtype)->name, SEG_TYPE_NAME_RAID5_LS))
+#define segtype_is_raid5_ls(segtype)	(!strcmp((segtype)->name, SEG_TYPE_NAME_RAID5) || \
+					 !strcmp((segtype)->name, SEG_TYPE_NAME_RAID5_LS))
 #define segtype_is_raid5_rs(segtype)	(!strcmp((segtype)->name, SEG_TYPE_NAME_RAID5_RS))
 #define segtype_is_raid5_la(segtype)	(!strcmp((segtype)->name, SEG_TYPE_NAME_RAID5_LA))
 #define segtype_is_raid5_ra(segtype)	(!strcmp((segtype)->name, SEG_TYPE_NAME_RAID5_RA))

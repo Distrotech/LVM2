@@ -1074,9 +1074,11 @@ static struct dm_list *_failed_pv_list(struct volume_group *vg)
 
 	dm_list_init(failed_pvs);
 
+PFLA("dm_list_size(vg->pvs)=%u", dm_list_size(&vg->pvs));
 	dm_list_iterate_items(pvl, &vg->pvs) {
 		if (!is_missing_pv(pvl->pv))
 			continue;
+PFLA("after is_missing_pv%s", "");
 
 		/*
 		 * Finally, --repair will remove empty PVs.
@@ -2023,11 +2025,48 @@ PFLA("stripes=%u stripe_size=%u\n", stripes, stripe_size);
 			init_mirror_in_sync(1);
 		}
 
+PFLA("replace=%d", replace);
 		_lvconvert_raid_repair_ask(cmd, lp, &replace);
 
+PFLA("replace=%d", replace);
 		if (replace) {
+
+
+#if 0
+{
+			int r;
+			struct pv_list *pvl;
+			struct volume_group *vg;
+
+#if 0
+			dm_list_iterate_items(pvl, &lv->vg->pvs);
+				if (pvl->pv && pvl->pv->dev)
+					lvmetad_pv_gone_by_dev(pvl->pv->dev, NULL);
+					// lvmetad_pvscan_single(cmd, pvl->pv->dev, NULL);
+#endif
+#if 1
+			r = lvmetad_pvscan_all_devs(cmd, NULL);
+			log_warn("lvmetad_pvscan_all_devs returnd %d", r);
+#if 0
+			vg = vg_read(cmd, lv->vg->name, NULL, 0);
+			log_warn("vg_read returnd %p lv->vg==vg=%d", vg, lv->vg == vg);
+			if (!vg)
+				return 0;
+
+			lv->vg = vg;
+#endif
+#else
+			r = pvscan(cmd, 0, NULL);
+			log_warn("pvscan returnd %d", r);
+#endif
+}
+#endif
+
+
 			if (!(failed_pvs = _failed_pv_list(lv->vg)))
 				return_0;
+
+PFLA("dm_list_size(failed_pvs)=%u", dm_list_size(failed_pvs));
 
 			if (!lv_raid_replace(lv, failed_pvs, lp->pvh)) {
 				log_error("Failed to replace faulty devices in"
@@ -3536,6 +3575,10 @@ static int lvconvert_single(struct cmd_context *cmd, struct lvconvert_params *lp
 	if (arg_count(cmd, repair_ARG)) {
 		init_ignore_suspended_devices(1);
 		cmd->handles_missing_pvs = 1;
+
+		/* Update PV metadata in cache too allow repair to spot recently lost PVs */
+		if (lvmetad_active())
+			lvmetad_pvscan_all_devs(cmd, NULL);
 	}
 
 	if (!(lv = get_vg_lock_and_logical_volume(cmd, lp->vg_name, lp->lv_name)))
