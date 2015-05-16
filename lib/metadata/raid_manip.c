@@ -1168,6 +1168,80 @@ static int _alloc_rmeta_for_linear(struct logical_volume *lv, struct dm_list *me
 }
 
 /*
+ * Relocate @out_of_place_les_per_disk from @data_lv begin <-> end depending on @to_end
+ *
+ * to_end == 0 -> begin -> end
+ * to_end != 0 -> end -> begin
+ */
+static int _relocate_reshape_space(struct logical_volume *lv,
+				   uint32_t out_of_place_les_per_disk, int to_end)
+{
+	uint32_t s;
+ 	struct logical_volume *data_lv;
+	struct lv_segment *seg = first_seg(lv);
+	struct lv_segment *data_seg, *new_seg;
+	uint32_t les = out_of_place_les_per_disk;
+
+	/* last -> last segment, !last -> first segment */
+	if (to_end)
+		les = data_seg->area_len - les;
+				
+	/*
+	 * Move the reshape LEs of each stripe (i.e. the data image sub lv)
+	 * in the first/last segment across to new segments of just use
+	 * them in case size fits
+	 */
+	for (s = 0; s < seg->area_count; s++) {
+		data_lv = seg_lv(seg, s);
+		data_seg = to_end ? first_seg(data_lv) : last_seg(data_lv);
+
+		if (data_seg->area_len != out_of_place_les_per_disk) {
+			if (!(new_seg = alloc_lv_segment(data_seg->segtype, data_lv,
+							 0 /* le gets adjusted later */,
+							 les, 0 /* no reshape_len on sub lvs */,
+							 data_seg->status,
+							 data_seg->stripe_size, NULL, 1 /* area */,
+							 les, data_seg->chunk_size, 0, 0, NULL)))
+			return_0;
+
+PFLA("data_seg->len=%u data_seg->area_len=%u new_seg->len=%u new_seg->area_len=%u", data_seg->len, data_seg->area_len, new_seg->len, new_seg->area_len);
+			if (!_raid_move_partial_lv_segment_area(new_seg, 0, data_seg, 0, new_seg->area_len))
+				return 0;
+
+PFLA("data_seg->len=%u data_seg->area_len=%u new_seg->len=%u new_seg->area_len=%u", data_seg->len, data_seg->area_len, new_seg->len, new_seg->area_len);
+			data_seg->len -= new_seg->area_len;
+
+			/* Insert the new segment as the first one */
+			dm_list_add_h(&data_lv->segments, &new_seg->list);
+		} else if (!to_end)
+			/* Segment at the end holding reshape space has correct length -> move upfront */
+			dm_list_move(data_lv->segments.n, &data_seg->list);
+
+		if (to_end)
+			/*
+			 * After a relocation from begin -> end, data_seg contains
+			 * the reshape space of the first data lv segment
+			 */
+			dm_list_move(&data_lv->segments, &data_seg->list);
+	}
+
+	/* Adjust starting LEs of data lv segments */;
+	for (s = 0; s < seg->area_count; s++) {
+		uint32_t le;
+		struct lv_segment *tmp;
+
+		le = 0;
+		data_lv = seg_lv(seg, s);
+		dm_list_iterate_items(tmp, &data_lv->segments) {
+			tmp->le = le;
+			le += tmp->len;
+		}
+	}
+
+	return 1;
+}
+
+/*
  * Check if we've got out of space reshape
  * capacity in @lv and allocate if necessary.
  *
@@ -1216,9 +1290,9 @@ static int _lv_alloc_reshape_space(struct logical_volume *lv,
 				   enum alloc_where where,
 				   struct dm_list *allocate_pvs)
 {
-	uint32_t le, s;
+	uint32_t s;
 	/* FIXME: les per disk dynamic to better address small extent size? at least one MiB for now... */
-	uint32_t out_of_place_les_per_disk = 2048 / lv->vg->extent_size;
+	uint32_t out_of_place_les_per_disk = 2048 / lv->vg->extent_size, reshape_len;
 	uint64_t data_offset, dev_sectors;
 	struct logical_volume *data_lv;
 	struct lv_segment *seg = first_seg(lv), *new_seg, *data_seg;
@@ -1228,7 +1302,7 @@ static int _lv_alloc_reshape_space(struct logical_volume *lv,
 
 	/* Get data_offset and dev_sectors from the kernel */
 	if (!lv_raid_offset_and_sectors(lv, &data_offset, &dev_sectors)) {
-		log_error("Can't retrieve data offset and dev size for %s/%s from kernel",
+		log_error("Can't get data offset and dev size for %s/%s from kernel",
 			  lv->vg->name, lv->name);
 		return 0;
 	}
@@ -1248,14 +1322,13 @@ PFLA("data_offset=%llu dev_sectors=%llu seg->reshape_len=%u out_of_place_les_per
 	/*
 	 * Check if we have reshape space allocated or extend the LV to have it
 	 */
-	/* No space -> extend LV */
+	reshape_len = out_of_place_les_per_disk * _data_rimages_count(seg, seg->area_count);
 	if (!seg->reshape_len &&
 	    !lv_extend(lv, seg->segtype,
-			seg->area_count,
+			_data_rimages_count(seg, seg->area_count),
 			seg->stripe_size,
 			1, seg->region_size,
-			/* # of reshape LEs to add */
-			out_of_place_les_per_disk * _data_rimages_count(seg, seg->area_count),
+			reshape_len /* # of reshape LEs to add */,
 			allocate_pvs, lv->alloc, 0))
 		return 0;
 
@@ -1267,37 +1340,12 @@ PFLA("lv->le_count=%u", lv->le_count);
 	if (where == alloc_begin && !data_offset) {
 PFLA("Moving to begin%s", "");
 		/*
-		 * Move the reshape LEs of each stripe (i.e. the data image sub lv)
-		 * in the last segment across to a new segment @new_seg
+		 * Move the reshape LEs of each stripe (i.e. the data image sub LVs)
+		 * in the last segments across to new segments inserted at the beginning
+		 * the whole segments if size fits
 		 */
-		for (s = 0; s < seg->area_count; s++) {
-			data_lv = seg_lv(seg, s);
-			data_seg = last_seg(data_lv);
-
-			if (data_seg->area_len != out_of_place_les_per_disk) {
-				if (!(new_seg = alloc_lv_segment(data_seg->segtype, data_lv,
-								 0 /* le gets adjusted later */,
-								 out_of_place_les_per_disk,
-								 0 /* no reshape_len on sub lvs */,
-								 data_seg->status,
-								 data_seg->stripe_size, NULL, 1 /* area */,
-								 out_of_place_les_per_disk,
-								 data_seg->chunk_size, 0, 0, NULL)))
-					return_0;
-
-				seg_pv(new_seg, s) = seg_pv(data_seg, s);
-PFLA("data_seg->len=%u data_seg->area_len=%u new_seg->len=%u new_seg->area_len=%u", data_seg->len, data_seg->area_len, new_seg->len, new_seg->area_len);
-				if (!_raid_move_partial_lv_segment_area(new_seg, 0, data_seg, 0, new_seg->area_len))
-					return 0;
-PFLA("data_seg->len=%u data_seg->area_len=%u new_seg->len=%u new_seg->area_len=%u", data_seg->len, data_seg->area_len, new_seg->len, new_seg->area_len);
-				data_seg->len -= new_seg->area_len;
-
-				/* Insert the new segment as the first one */
-				dm_list_add_h(&data_lv->segments, &new_seg->list);
-			} else
-				/* Segment holding reshape space has correct length -> move upfront */
-				dm_list_move(data_lv->segments.n, &data_seg->list);
-		}
+		if (!_relocate_reshape_space(lv, out_of_place_les_per_disk, 0))
+			return_0;
 	}
 
 	/*
@@ -1306,62 +1354,20 @@ PFLA("data_seg->len=%u data_seg->area_len=%u new_seg->len=%u new_seg->area_len=%
 	if (where == alloc_end && data_offset) {
 PFLA("Moving to end%s", "");
 		/*
-		 * Move the rest of the LEs of each stripe (i.e. the data image sub lv)
-		 * in the first segment across to a new segment @new_seg or move
-		 * the whole segment if size fits
+		 * Move the rest of the LEs of each stripe (i.e. the data image sub LVs)
+		 * in the first segments across to new segments or move the whole segments
+		 * if size fits
 		 */
-		for (s = 0; s < seg->area_count; s++) {
-			data_lv = seg_lv(seg, s);
-			data_seg = first_seg(data_lv);
-
-			/* HM FIXME: data_seg smaller than reshape_len! */
-			if (data_seg->area_len != out_of_place_les_per_disk) {
-				if (!(new_seg = alloc_lv_segment(data_seg->segtype, data_lv,
-								 0 /* le gets adjusted later */,
-								 data_seg->area_len - out_of_place_les_per_disk,
-								 0 /* no reshape_len on sub lvs */,
-								 data_seg->status,
-								 data_seg->stripe_size, NULL, 1 /* area */,
-								 data_seg->area_len - out_of_place_les_per_disk,
-								 data_seg->chunk_size, 0, 0, NULL)))
-					return_0;
-
-				seg_pv(new_seg, s) = seg_pv(data_seg, s);
-PFLA("data_seg->len=%u data_seg->area_len=%u new_seg->len=%u new_seg->area_len=%u", data_seg->len, data_seg->area_len, new_seg->len, new_seg->area_len);
-				if (!_raid_move_partial_lv_segment_area(new_seg, 0, data_seg, 0, new_seg->area_len))
-					return 0;
-
-				data_seg->len -= new_seg->area_len;
-PFLA("data_seg->len=%u data_seg->area_len=%u new_seg->len=%u new_seg->area_len=%u", data_seg->len, data_seg->area_len, new_seg->len, new_seg->area_len);
-				/* new_seg contains the rest of the LEs of the first data lv segment */
-				dm_list_add_h(&data_lv->segments, &new_seg->list);
-			}
-
-			/* data_seg contains the reshape space of the data lv segment */
-			dm_list_move(&data_lv->segments, &data_seg->list);
-		}
+		if (!_relocate_reshape_space(lv, out_of_place_les_per_disk, 1))
+			return_0;
 	}
-
-	seg = first_seg(lv);
 
 	/* Only on allocation, not on reshape space removal */
 	if (allocate_pvs)
 		seg->data_offset = out_of_place_les_per_disk * lv->vg->extent_size;
 
 	/* Store the allocated reshape length per LV in the only segment of the top-level RAID LV */
-	seg->reshape_len = out_of_place_les_per_disk * _data_rimages_count(seg, seg->area_count);
-
-	/* Adjust starting LE of data lv segments */;
-	for (s = 0; s < seg->area_count; s++) {
-		struct lv_segment *tmp;
-
-		le = 0;
-		data_lv = seg_lv(seg, s);
-		dm_list_iterate_items(tmp, &data_lv->segments) {
-			tmp->le = le;
-			le += tmp->len;
-		}
-	}
+	seg->reshape_len = reshape_len;
 
 #endif
 	/* Try merging segments */
@@ -1378,7 +1384,6 @@ static int _lv_free_reshape_space(struct logical_volume *lv)
 		if (!_lv_alloc_reshape_space(lv, alloc_end, NULL))
 			return 0;
 
-		seg = first_seg(lv);
 		if (!lv_reduce(lv, seg->reshape_len))
 			return 0;
 
@@ -1474,28 +1479,28 @@ static int _convert_linear_to_raid(struct logical_volume *lv)
 }
 
 /* Reset any rebuild or reshape disk flags on @lv, first segment already passed to the kernel */
-static int _reset_flags_passed_to_kernel(struct logical_volume *lv)
+static int _reset_flags_passed_to_kernel(struct logical_volume *lv, int *flag_cleared)
 {
-	int flag_cleared = 0;
 	uint32_t s;
 	struct lv_segment *seg = first_seg(lv);
 
+	*flag_cleared = 0;
 	for (s = 0; s < seg->area_count; s++) {
 		if ((seg_metalv(seg, s)->status & (LV_REBUILD|LV_RESHAPE_DELTA_DISKS_PLUS|LV_RESHAPE_DELTA_DISKS_MINUS)) ||
 		    (seg_lv(seg, s)->status & (LV_REBUILD|LV_RESHAPE_DELTA_DISKS_PLUS|LV_RESHAPE_DELTA_DISKS_MINUS))) {
 			seg_metalv(seg, s)->status &= ~(LV_REBUILD|LV_RESHAPE_DELTA_DISKS_PLUS|LV_RESHAPE_DELTA_DISKS_MINUS);
 			seg_lv(seg, s)->status &= ~(LV_REBUILD|LV_RESHAPE_DELTA_DISKS_PLUS|LV_RESHAPE_DELTA_DISKS_MINUS);
 
-			flag_cleared = 1;
+			*flag_cleared = 1;
 		}
 	}
 
 	if (seg->data_offset) {
 		seg->data_offset = 0;
-		flag_cleared = 1;
+		*flag_cleared = 1;
 	}
 
-	if (flag_cleared) {
+	if (*flag_cleared) {
 		if (!vg_write(lv->vg) || !vg_commit(lv->vg)) {
 			log_error("Failed to clear flags for %s/%s components",
 				  lv->vg->name, lv->name);
@@ -1591,7 +1596,7 @@ static int _raid_add_images(struct logical_volume *lv,
 			    uint32_t new_count, struct dm_list *pvs)
 {
 	struct lv_segment *seg = first_seg(lv);
-	int add_all_rmeta = 0, linear;
+	int add_all_rmeta = 0, linear, flag_cleared;
 	int reshape_disks = (seg_is_striped_raid(seg) && segtype && is_same_level(seg->segtype, segtype));
 	uint32_t s;
 	uint32_t old_count = lv_raid_image_count(lv);
@@ -1759,9 +1764,7 @@ PFLA("lv->le_count=%u data_rimages=%u plus_extents=%u", lv->le_count, _data_rima
 		lv->le_count += plus_extents;
 		lv->size = lv->le_count * lv->vg->extent_size;
 		seg->len += plus_extents;
-		/* HM FIXME: area_len will be longer, because of out of place reshape extents */
 		seg->area_len += plus_extents;
-
 		seg->reshape_len = seg->reshape_len / _data_rimages_count(seg, old_count) *
 						      _data_rimages_count(seg, new_count);
 PFLA("lv->le_count=%u", lv->le_count);
@@ -1783,10 +1786,10 @@ PFL();
 	 * way to the kernel, we must remove the flag(s) so that the individual
 	 * devices are not rebuilt/reshaped upon every activation.
 	 */
-	if (!_reset_flags_passed_to_kernel(lv))
+	if (!_reset_flags_passed_to_kernel(lv, &flag_cleared))
 		return 0;
 PFL();
-	return lv_update_and_reload_origin(lv);
+	return flag_cleared ? lv_update_and_reload_origin(lv) : 1;
 
 fail:
 PFL();
@@ -2030,7 +2033,6 @@ PFLA("lv->le_count=%u data_rimages=%u minus_extents=%u", lv->le_count, _data_rim
 		lv->size = lv->le_count * lv->vg->extent_size;
 		seg->len -= minus_extents;
 		seg->area_len -= minus_extents;
-
 		seg->reshape_len = seg->reshape_len / _data_rimages_count(seg, old_count) *
 						      _data_rimages_count(seg, new_count);
 PFLA("lv->le_count=%u", lv->le_count);
@@ -3066,8 +3068,7 @@ static int _raid_reshape(struct logical_volume *lv,
 		 	    struct dm_list *allocate_pvs)
 {
 	int r;
-	int update_and_reload = 1;
-	int too_few = 0;
+	int flag_cleared, update_and_reload = 1, too_few = 0;
 	uint32_t new_len;
 	struct lv_segment *seg = first_seg(lv);
 	unsigned old_dev_count = seg->area_count;
@@ -3136,7 +3137,7 @@ PFL();
 			return 0;
 
 		default:
-			log_error(INTERNAL_ERROR "Bad return=%d provided to %s.", __func__, r);
+			log_error(INTERNAL_ERROR "Bad return=%d provided to %s.", r, __func__);
 			return 0;
 		}
 
@@ -3297,16 +3298,18 @@ PFL();
 				return_0;
 		}
 
+		/* HM FIXME: allocate reshape space for layout reshape as well */
 		if (!_lv_alloc_reshape_space(lv, alloc_anywhere, allocate_pvs))
 			return 0;
 
 		first_seg(lv)->segtype = new_segtype;
+		update_and_reload = 1;
 	}
 
 PFLA("new_segtype=%s seg->area_count=%u", new_segtype->name, seg->area_count);
 
 	if (update_and_reload) {
-		if (!lv_update_and_reload_origin(lv))
+		if (!lv_update_and_reload(lv))
 			return_0;
 PFL();
 		/* HM FIXME: i don't like the flow doing this here and in _raid_add_images on addition of component images */
@@ -3315,10 +3318,11 @@ PFL();
 	 	 * the kernel, we must remove the flag so that the individual devices
 	 	 * are not reshaped upon every activation.
 	 	 */
-		if (!_reset_flags_passed_to_kernel(lv))
+		if (!_reset_flags_passed_to_kernel(lv, &flag_cleared))
 			return_0;
 
-		if (!lv_update_and_reload(lv))
+		if (flag_cleared &&
+		    !lv_update_and_reload(lv))
 			return_0;
 PFL();
 	}

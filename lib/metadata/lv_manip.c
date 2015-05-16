@@ -4674,7 +4674,7 @@ static int _lvresize_adjust_extents(struct cmd_context *cmd, struct logical_volu
 	uint32_t area_multiple;
 	uint32_t stripesize_extents;
 	uint32_t size_rest;
-	uint32_t existing_logical_extents = lv->le_count;
+	uint32_t existing_logical_extents = lv->le_count - first_seg(lv)->reshape_len;
 	uint32_t existing_physical_extents, saved_existing_physical_extents;
 	uint32_t seg_size = 0;
 	uint32_t new_extents;
@@ -5092,13 +5092,13 @@ static struct logical_volume *_lvresize_volume(struct cmd_context *cmd,
 		    display_size(cmd, (uint64_t) lp->extents * vg->extent_size));
 
 	if (lp->resize == LV_REDUCE) {
-		if (!lv_reduce(lv, lv->le_count - lp->extents))
+		if (!lv_reduce(lv, lv->le_count - first_seg(lv)->reshape_len - lp->extents))
 			return_NULL;
-	} else if ((lp->extents > lv->le_count) && /* Ensure we extend */
+	} else if ((lp->extents > lv->le_count - first_seg(lv)->reshape_len) && /* Ensure we extend */
 		   !lv_extend(lv, lp->segtype,
 			      lp->stripes, lp->stripe_size,
 			      lp->mirrors, first_seg(lv)->region_size,
-			      lp->extents - lv->le_count,
+			      lp->extents - (lv->le_count - first_seg(lv)->reshape_len),
 			      pvh, alloc, lp->approx_alloc))
 		return_NULL;
 
