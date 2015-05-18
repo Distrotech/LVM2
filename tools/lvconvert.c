@@ -1989,6 +1989,15 @@ PFLA("stripes=%u stripe_size=%u\n", stripes, stripe_size);
 		if (seg_is_striped(seg))
 			seg->region_size = lp->region_size;
 
+		/* Check for reshaping support if requested */
+		if (((seg->segtype != lp->segtype && !strncmp(seg->segtype->name, lp->segtype->name, 5)) ||
+		     (stripes && stripes != seg->area_count - seg->segtype->parity_devs) ||
+		     (stripe_size && stripe_size != seg->stripe_size)) &&
+		     !(lp->target_attr & RAID_FEATURE_RESHAPING)) {
+			log_error("RAID module does not support reshaping.");
+			return 0;
+		}
+
 		return lv_raid_convert(lv, lp->segtype, lp->yes, lp->force, image_count, stripes, stripe_size, lp->pvh);
 	}
 
@@ -3576,9 +3585,11 @@ static int lvconvert_single(struct cmd_context *cmd, struct lvconvert_params *lp
 		init_ignore_suspended_devices(1);
 		cmd->handles_missing_pvs = 1;
 
+#if 1
 		/* Update PV metadata in cache too allow repair to spot recently lost PVs */
 		if (lvmetad_active())
 			lvmetad_pvscan_all_devs(cmd, NULL);
+#endif
 	}
 
 	if (!(lv = get_vg_lock_and_logical_volume(cmd, lp->vg_name, lp->lv_name)))

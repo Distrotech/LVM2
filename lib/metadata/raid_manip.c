@@ -377,9 +377,10 @@ PFL();
 	 * as visible in the LVM metadata (which is never the case yet).
 	 */
 PFL();
+PFLA("vg_validate(vg)=%d", vg_validate(vg));
+PFL();
 	if (!vg || !vg_write(vg) || !vg_commit(vg))
 		return_0;
-
 PFL();
 	dm_list_iterate_items(lvl, lv_list)
 		if (!_clear_lv(lvl->lv))
@@ -764,7 +765,6 @@ static int _add_image_component_list(struct lv_segment *seg, int delete_from_lis
 			lvl->lv->status |= LV_REBUILD;
 		else
 			lvl->lv->status &= ~LV_REBUILD;
-
 
 		if (!set_lv_segment_area_lv(seg, s++, lvl->lv, 0 /* le */,
 					    lvl->lv->status)) {
@@ -1168,35 +1168,36 @@ static int _alloc_rmeta_for_linear(struct logical_volume *lv, struct dm_list *me
 }
 
 /*
- * Relocate @out_of_place_les_per_disk from @data_lv begin <-> end depending on @to_end
+ * Relocate @out_of_place_les_per_disk from @lv's data images  begin <-> end depending on @to_end
  *
- * to_end == 0 -> begin -> end
- * to_end != 0 -> end -> begin
+ * to_end != 0 -> begin -> end
+ * to_end == 0 -> end -> begin
  */
 static int _relocate_reshape_space(struct logical_volume *lv,
 				   uint32_t out_of_place_les_per_disk, int to_end)
 {
-	uint32_t s;
- 	struct logical_volume *data_lv;
+	uint32_t le, les, s;
+ 	struct logical_volume *dlv;
 	struct lv_segment *seg = first_seg(lv);
-	struct lv_segment *data_seg, *new_seg;
-	uint32_t les = out_of_place_les_per_disk;
+	struct lv_segment *data_seg, *new_seg, *tmp_seg;
 
-	/* last -> last segment, !last -> first segment */
-	if (to_end)
-		les = data_seg->area_len - les;
-				
 	/*
 	 * Move the reshape LEs of each stripe (i.e. the data image sub lv)
 	 * in the first/last segment across to new segments of just use
 	 * them in case size fits
 	 */
 	for (s = 0; s < seg->area_count; s++) {
-		data_lv = seg_lv(seg, s);
-		data_seg = to_end ? first_seg(data_lv) : last_seg(data_lv);
+		dlv = seg_lv(seg, s);
+		le = to_end ? 0 : dlv->le_count - out_of_place_les_per_disk;
+		data_seg = find_seg_by_le(dlv, le);
 
+		/* to_end -> last segment, !to_end -> first segment */
+		les = out_of_place_les_per_disk;
+		if (to_end)
+			les = data_seg->len - les;
+				
 		if (data_seg->area_len != out_of_place_les_per_disk) {
-			if (!(new_seg = alloc_lv_segment(data_seg->segtype, data_lv,
+			if (!(new_seg = alloc_lv_segment(data_seg->segtype, dlv,
 							 0 /* le gets adjusted later */,
 							 les, 0 /* no reshape_len on sub lvs */,
 							 data_seg->status,
@@ -1212,29 +1213,26 @@ PFLA("data_seg->len=%u data_seg->area_len=%u new_seg->len=%u new_seg->area_len=%
 			data_seg->len -= new_seg->area_len;
 
 			/* Insert the new segment as the first one */
-			dm_list_add_h(&data_lv->segments, &new_seg->list);
+			dm_list_add_h(&dlv->segments, &new_seg->list);
 		} else if (!to_end)
 			/* Segment at the end holding reshape space has correct length -> move upfront */
-			dm_list_move(data_lv->segments.n, &data_seg->list);
+			dm_list_move(dlv->segments.n, &data_seg->list);
 
 		if (to_end)
 			/*
 			 * After a relocation from begin -> end, data_seg contains
 			 * the reshape space of the first data lv segment
 			 */
-			dm_list_move(&data_lv->segments, &data_seg->list);
+			dm_list_move(&dlv->segments, &data_seg->list);
 	}
 
 	/* Adjust starting LEs of data lv segments */;
 	for (s = 0; s < seg->area_count; s++) {
-		uint32_t le;
-		struct lv_segment *tmp;
-
 		le = 0;
-		data_lv = seg_lv(seg, s);
-		dm_list_iterate_items(tmp, &data_lv->segments) {
-			tmp->le = le;
-			le += tmp->len;
+		dlv = seg_lv(seg, s);
+		dm_list_iterate_items(tmp_seg, &dlv->segments) {
+			tmp_seg->le = le;
+			le += tmp_seg->len;
 		}
 	}
 
@@ -1290,12 +1288,10 @@ static int _lv_alloc_reshape_space(struct logical_volume *lv,
 				   enum alloc_where where,
 				   struct dm_list *allocate_pvs)
 {
-	uint32_t s;
 	/* FIXME: les per disk dynamic to better address small extent size? at least one MiB for now... */
 	uint32_t out_of_place_les_per_disk = 2048 / lv->vg->extent_size, reshape_len;
 	uint64_t data_offset, dev_sectors;
-	struct logical_volume *data_lv;
-	struct lv_segment *seg = first_seg(lv), *new_seg, *data_seg;
+	struct lv_segment *seg = first_seg(lv);
 
 	if (!out_of_place_les_per_disk)
 		out_of_place_les_per_disk = 1;
@@ -1380,12 +1376,12 @@ static int _lv_free_reshape_space(struct logical_volume *lv)
 	struct lv_segment *seg = first_seg(lv);
 
 	if (seg->reshape_len) {
-		/* Got reshape space, optinally remap it to the end and lvreduce it */
+		/* Got reshape space, optionally remap it to the end and lvreduce it */
 		if (!_lv_alloc_reshape_space(lv, alloc_end, NULL))
-			return 0;
+			return_0;
 
 		if (!lv_reduce(lv, seg->reshape_len))
-			return 0;
+			return_0;
 
 		seg->reshape_len = 0;
 	}
@@ -1683,6 +1679,14 @@ PFL();
 
 		/* Need access to the new first segment after the linear -> raid1 conversion */
 		seg = first_seg(lv);
+
+		/* If we convert to raid1 via "lvconvert -mN", set segtype */
+		if (old_count != new_count &&
+		    segtype == seg->segtype &&
+		    !(segtype = get_segtype_from_string(lv->vg->cmd, SEG_TYPE_NAME_RAID1)))
+			return 0;
+
+		seg->segtype = segtype;
 	}
 PFL();
 	/* Metadata LVs must be cleared before being added to the array */
@@ -1690,6 +1694,7 @@ PFL();
 	if (!_clear_lvs(&meta_lvs))
 		goto fail;
 
+PFL();
 	/*
 	 * FIXME: It would be proper to activate the new LVs here, instead of having
 	 * them activated by the suspend.  However, this causes residual device nodes
@@ -1739,10 +1744,14 @@ PFL();
 	 * but this shows proper status chars.
 	 */
 	if (linear || (seg_is_any_raid0(seg) && old_count == 1)) {
+#if 1
 		seg_lv(seg, 0)->status &= ~LV_REBUILD;
 		
 		for (s = old_count; s < new_count; s++)
 			seg_lv(seg, s)->status |= LV_REBUILD;
+#else
+		;
+#endif
 
 	} else if (reshape_disks) {
 		uint32_t plus_extents = count * (lv->le_count / _data_rimages_count(seg, old_count));
@@ -1772,6 +1781,7 @@ PFLA("lv->le_count=%u", lv->le_count);
 
 	seg->segtype = segtype;
 
+PFL();
 	if (!lv_update_and_reload_origin(lv)) {
 		if (!_remove_image_component_list(seg, RAID_META, add_all_rmeta ? 0 : old_count, &meta_lvs) ||
 		    !_remove_image_component_list(seg, RAID_IMAGE, old_count, &data_lvs))
@@ -1982,18 +1992,12 @@ static int _raid_remove_images(struct logical_volume *lv,
 PFLA("seg->segtype=%s segtype=%s new_count=%u", seg->segtype->name, segtype->name, new_count);
 	dm_list_init(&removal_list);
 
-	if (segtype_is_linear(segtype)) { /* if (new_count == 1) { */
-		uint32_t reshape_len = last_seg(lv)->reshape_len;
-
-		/* HM FIXME: proper place to reduce by reshape_len? */
-		if (reshape_len &&
-		    !lv_reduce(lv, reshape_len / old_count)) {
-			log_error("Failed to remove RAID layer"
-			  	" after linear conversion");
-			return 0;
-		}
-
-		last_seg(lv)->reshape_len = 0;
+	/* If we convert away from raid4/5/6/10 -> remove any reshape space */
+	if (!(segtype_is_striped_raid(segtype) && !segtype_is_raid0(segtype)) &&
+	    !_lv_free_reshape_space(lv)) {
+		log_error(INTERNAL_ERROR "Failed to remove reshape space from %s/%s",
+			  lv->vg->name, lv->name);
+		return 0;
 	}
 
 	/* Reorder the areas in case this is a raid10 -> raid0 conversion */
@@ -2882,21 +2886,21 @@ PFL();
 	while (le < seg->len) {
 		area_len = ~0;
 
-		/* Find shortest smallest segment of each of the data image lvs */
+		/* Find smallest segment of each of the data image lvs */
 		for (s = 0; s < seg->area_count; s++) {
 			dlv = seg_lv(seg, s);
-			seg_from = find_seg_by_le(dlv, area_le);
-
-			l = seg_from->len - (area_le - seg_from->le);
+			seg_from = find_seg_by_le(dlv, le);
+			l = seg_from->len - le;
 			if (l < area_len)
 				area_len = l;
 PFLA("are_len=%u l=%u", area_len, l);
 		}
+		/* area_len now holds the smallest one */
 
 		/* Allocate a segment with area_count areas */
 PFLA("seg->area_count=%u seg->stripe_size=%u", seg->area_count, seg->stripe_size);
 		if (!(seg_to = alloc_lv_segment(striped_segtype, lv, le, area_len * seg->area_count,
-						seg->reshape_len,
+						0 /* seg->reshape_len */,
 						seg->status & ~RAID,
 						seg->stripe_size, NULL, seg->area_count,
 						area_len, seg->chunk_size,
@@ -2904,7 +2908,6 @@ PFLA("seg->area_count=%u seg->stripe_size=%u", seg->area_count, seg->stripe_size
 			return_0;
 
 		dm_list_add(&new_segments, &seg_to->list);
-
 		area_le += area_len;
 		le += area_len * seg->area_count;
 PFL();
@@ -3236,12 +3239,8 @@ PFL();
 				return_0;
 
 			/*
-			 * HM FIXME: check if there's enough free space for backward
-			 * 	     out-of-place reshape
-			 *
-			 * If none, add an extent per image to the end of each data image 
+			 * Allocate free data image LVs space for forward out-of-place reshape at the end
 			 */
-			/* Do it here! */
 			if (!_lv_alloc_reshape_space(lv, alloc_end, allocate_pvs))
 				return 0;
 
@@ -3298,7 +3297,9 @@ PFL();
 				return_0;
 		}
 
-		/* HM FIXME: allocate reshape space for layout reshape as well */
+		/*
+		 * Allocate free data image LVs space for forward out-of-place reshape anywhere
+		 */
 		if (!_lv_alloc_reshape_space(lv, alloc_anywhere, allocate_pvs))
 			return 0;
 

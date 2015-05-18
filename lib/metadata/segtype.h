@@ -151,7 +151,8 @@ struct segment_type *init_unknown_segtype(struct cmd_context *cmd,
 					  const char *name);
 
 #define RAID_FEATURE_RAID10			(1U << 0) /* version 1.3 */
-#define RAID_FEATURE_RAID0			(1U << 1) /* version 1.6 */
+#define RAID_FEATURE_RAID0			(1U << 1) /* version 1.7 */
+#define RAID_FEATURE_RESHAPING			(1U << 2) /* version 1.8 */
 
 #ifdef RAID_INTERNAL
 int init_raid_segtypes(struct cmd_context *cmd, struct segtype_library *seglib);
