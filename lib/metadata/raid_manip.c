@@ -1183,20 +1183,20 @@ static int _relocate_reshape_space(struct logical_volume *lv,
 
 	/*
 	 * Move the reshape LEs of each stripe (i.e. the data image sub lv)
-	 * in the first/last segment across to new segments of just use
+	 * in the first/last segments across to new segments of just use
 	 * them in case size fits
 	 */
 	for (s = 0; s < seg->area_count; s++) {
 		dlv = seg_lv(seg, s);
-		le = to_end ? 0 : dlv->le_count - out_of_place_les_per_disk;
+		les = out_of_place_les_per_disk;
+		le = to_end ? 0 : dlv->le_count - les;
 		data_seg = find_seg_by_le(dlv, le);
 
 		/* to_end -> last segment, !to_end -> first segment */
-		les = out_of_place_les_per_disk;
 		if (to_end)
 			les = data_seg->len - les;
-				
-		if (data_seg->area_len != out_of_place_les_per_disk) {
+
+		if (data_seg->len != les) {
 			if (!(new_seg = alloc_lv_segment(data_seg->segtype, dlv,
 							 0 /* le gets adjusted later */,
 							 les, 0 /* no reshape_len on sub lvs */,
@@ -1210,7 +1210,7 @@ PFLA("data_seg->len=%u data_seg->area_len=%u new_seg->len=%u new_seg->area_len=%
 				return 0;
 
 PFLA("data_seg->len=%u data_seg->area_len=%u new_seg->len=%u new_seg->area_len=%u", data_seg->len, data_seg->area_len, new_seg->len, new_seg->area_len);
-			data_seg->len -= new_seg->area_len;
+			data_seg->len -= new_seg->len;
 
 			/* Insert the new segment as the first one */
 			dm_list_add_h(&dlv->segments, &new_seg->list);
@@ -2860,37 +2860,34 @@ static int _convert_striped_to_raid0(struct logical_volume *lv,
 static int _raid0_to_striped_retrieve_segments_and_lvs(struct logical_volume *lv,
 						       struct dm_list *removal_lvs)
 {
-	uint32_t s, area_le = 0, area_len, l, le = 0;
+	uint32_t s, area_le, area_len, l, le;
 	struct lv_segment *seg = first_seg(lv), *seg_from, *seg_to;
 	struct logical_volume *mlv, *dlv;
 	struct dm_list new_segments;
 	struct lv_list *lvl_array;
 	struct segment_type *striped_segtype;
 
-	if (!(striped_segtype = get_segtype_from_string(lv->vg->cmd, "striped")))
 	if (!(striped_segtype = get_segtype_from_string(lv->vg->cmd, SEG_TYPE_NAME_STRIPED)))
 		return_0;
 
 	dm_list_init(&new_segments);
-
 PFL();
-dm_list_iterate_items(seg_from, &seg_lv(seg, 0)->segments);
-PFL();
-
 	if (!(lvl_array = dm_pool_alloc(lv->vg->vgmem, 2 * seg->area_count * sizeof(*lvl_array))))
 		return_0;
 	/*
 	 * Walk all segments of all data LVs to create the number
 	 * of segments we need and move mappings across,
 	 */
-	while (le < seg->len) {
+	le = 0;
+	area_le = 0;
+	while (le < lv->le_count) {
 		area_len = ~0;
 
-		/* Find smallest segment of each of the data image lvs */
+		/* Find smallest segment of each of the data image lvs at offset area_le */
 		for (s = 0; s < seg->area_count; s++) {
 			dlv = seg_lv(seg, s);
-			seg_from = find_seg_by_le(dlv, le);
-			l = seg_from->len - le;
+			seg_from = find_seg_by_le(dlv, area_le);
+			l = seg_from->le + seg_from->len - area_le;
 			if (l < area_len)
 				area_len = l;
 PFLA("are_len=%u l=%u", area_len, l);
@@ -2910,7 +2907,6 @@ PFLA("seg->area_count=%u seg->stripe_size=%u", seg->area_count, seg->stripe_size
 		dm_list_add(&new_segments, &seg_to->list);
 		area_le += area_len;
 		le += area_len * seg->area_count;
-PFL();
 	}
 
 	/* Loop the new segments backwards and move partial areas across from the raid0 areas */
@@ -2922,30 +2918,27 @@ PFLA("s=%u", s);
 			dlv = seg_lv(seg, s);
 PFLA("dlv->name=%s", dlv->name);
 			seg_from = find_seg_by_le(dlv, area_le);
-
-PFL();
 			if (!_raid_move_partial_lv_segment_area(seg_to, s, seg_from, 0, seg_to->area_len))
-				return 0;
+				return_0;
 		}
 	}
 PFL();
 
-	/* Loop the areas listing the image LVs and move all areas across from them to @new_segments */
+	/* Loop the areas and move the meta and data LVs across to @removal_lvs */
 	for (s = 0; s < seg->area_count; s++) {
 		/* If any metadata lvs -> remove them */
 		if (seg->meta_areas &&
 		    (mlv = lvl_array[seg->area_count + s].lv = seg_metalv(seg, s))) {
 			dm_list_add(removal_lvs, &lvl_array[seg->area_count + s].list);
 			if (!_remove_and_set_error_target(mlv, seg))
-				return 0;
+				return_0;
 		}
 
-		/* Walk the segment list and move the respective area across to the corresponding new segment */
 		dlv = lvl_array[s].lv = seg_lv(seg, s);
 		dm_list_add(removal_lvs, &lvl_array[s].list);
 
 		if (!_remove_and_set_error_target(dlv, seg))
-			return 0;
+			return_0;
 	}
 PFL();
 
@@ -2956,7 +2949,7 @@ PFL();
 	dm_list_del(&seg->list);
 	dm_list_splice(&lv->segments, &new_segments);
 
-	lv->status &= RAID;
+	lv->status &= ~RAID;
 	lv->status |= LVM_READ | LVM_WRITE;
 	lv_set_visible(lv);
 
