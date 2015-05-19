@@ -1927,7 +1927,9 @@ PFLA("stripes_ARG=%u stripes_long_ARG=%u", arg_count(lv->vg->cmd, stripes_ARG), 
 	/* FIXME: remove constraint on mirror/raid1 */
 	/* Can only change image count for raid1 and linear */
 	if (arg_count(cmd, mirrors_ARG) &&
-	    !seg_is_mirrored(seg) && !seg_is_linear(seg)) {
+	    !seg_is_linear(seg) &&
+	    !seg_is_mirrored(seg) &&
+	    !(seg_is_any_raid0(seg) && seg->area_count == 1)) {
 		log_error("'--mirrors/-m' is not compatible with %s",
 			  lvseg_name(seg));
 		return 0;

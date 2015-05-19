@@ -1196,7 +1196,8 @@ static int _relocate_reshape_space(struct logical_volume *lv,
 		if (to_end)
 			les = data_seg->len - les;
 
-		if (data_seg->len != les) {
+PFLA("data_seg->len=%u les=%u", data_seg->len, les);
+		if (data_seg->le != le) {
 			if (!(new_seg = alloc_lv_segment(data_seg->segtype, dlv,
 							 0 /* le gets adjusted later */,
 							 les, 0 /* no reshape_len on sub lvs */,
@@ -1993,18 +1994,19 @@ PFLA("seg->segtype=%s segtype=%s new_count=%u", seg->segtype->name, segtype->nam
 	dm_list_init(&removal_list);
 
 	/* If we convert away from raid4/5/6/10 -> remove any reshape space */
-	if (!(segtype_is_striped_raid(segtype) && !segtype_is_raid0(segtype)) &&
+	if ((segtype_is_linear(segtype) || segtype_is_any_raid0(segtype)) &&
 	    !_lv_free_reshape_space(lv)) {
 		log_error(INTERNAL_ERROR "Failed to remove reshape space from %s/%s",
 			  lv->vg->name, lv->name);
 		return 0;
 	}
-
+PFL();
 	/* Reorder the areas in case this is a raid10 -> raid0 conversion */
 	if (seg_is_raid10(seg) && segtype_is_any_raid0(segtype)) {
 		log_debug_metadata("Reordering areas for raid0 -> raid10 takeover");
 		_lv_raid10_reorder_seg_areas(lv, 0);
 	}
+PFL();
 
 	/* Extract all image and any metadata lvs past new_count */
 	if (!_raid_extract_images(lv, new_count, pvs, 1,
@@ -2013,21 +2015,31 @@ PFLA("seg->segtype=%s segtype=%s new_count=%u", seg->segtype->name, segtype->nam
 			  lv->vg->name, lv->name);
 		return 0;
 	}
+PFL();
+	/* Shrink areas arrays for metadata and data devs after the extration */
+	if (!_realloc_meta_and_data_seg_areas(lv, seg, new_count)) {
+		log_error("Relocation of areas arrays failed.");
+		return 0;
+	}
 
+	/* Set before any optional removal of metadata devs following immediately */
 	seg->area_count = new_count;
 
 	/*
-	 * In case this is a conversion to raid0,
+	 * In case this is a conversion to raid0 (i.e. no metadata devs),
 	 * remove the metadata image LVs.
 	 */
 	if (segtype_is_raid0(segtype) &&
 	    seg->meta_areas &&
 	    !_remove_image_component_list(seg, RAID_META, 0, &removal_list))
 		return 0;
+PFL();
 
+	/* raid0* does not have a bitmap -> no region size */
 	if (segtype_is_any_raid0(segtype))
 		seg->region_size = 0;
 
+PFL();
 	/* Reshape adding image component pairs -> change size accordingly */
 	if (reshape_disks) {
 		uint32_t minus_extents = (old_count - new_count) * (lv->le_count / _data_rimages_count(seg, old_count));
@@ -2054,12 +2066,6 @@ PFLA("lv->le_count=%u", lv->le_count);
 
 		lv->status &= ~(LV_NOTSYNCED | LV_WRITEMOSTLY);
 		first_seg(lv)->writebehind = 0;
-	}
-
-	/* Shrink areas arrays for metadata and data devs  */
-	if (!_realloc_meta_and_data_seg_areas(lv, seg, new_count)) {
-		log_error("Relocation of areas arrays failed.");
-		return 0;
 	}
 
 PFL();
@@ -3215,14 +3221,17 @@ PFL();
 
 			new_len = _data_rimages_count(seg, new_dev_count) *
 				  (seg->len / _data_rimages_count(seg, seg->area_count));
+PFLA("new_dev_count=%u _data_rimages_count(seg, new_dev_count)=%u new_len=%u", new_dev_count, _data_rimages_count(seg, new_dev_count), new_len);
 			log_warn("WARNING: Removing stripes from active%s logical volume %s/%s will shrink "
 				 "it from %u to %u extents!\n"
 				 "THIS MAY DESTROY (PARTS OF YOUR DATA!\n"
-				 "You may want to run \"lvresize -y -l+%u %s/%s\" _before_ the conversion starts!\n"
+				 "You may want to run \"lvresize -y -l%u %s/%s\" _before_ the conversion starts!\n"
 				 "If that leaves the logical volume larger than %u extents, grow the filesystem etc. as well\n",
 				 info.open_count ? " and open" : "",
 				 lv->vg->name, lv->name, seg->len, new_len,
-				 seg->len - (new_dev_count == 2 ? 0 : new_len), lv->vg->name, lv->name, new_len);
+				 seg->len * _data_rimages_count(seg, seg->area_count) / _data_rimages_count(seg, new_dev_count),
+				 lv->vg->name, lv->name, new_len);
+
 			if (!yes && yes_no_prompt("Do you really want to remove %u stripes from %s/%s? [y/n]: ",
 						  old_dev_count - new_dev_count,  lv->vg->name, lv->name) == 'n') {
 				log_error("Logical volume %s/%s NOT converted to reduce", lv->vg->name, lv->name);
@@ -3338,7 +3347,7 @@ static int _raid_takeover(struct logical_volume *lv,
 	_check_and_init_region_size(lv);
 
 PFLA("segtype=%s old_count=%u new_count=%u", segtype->name, seg->area_count, new_count);
-	/* Takeover raid4* <-> raid5* */
+	/* Takeover raid4 <-> raid5_n */
 	if (new_count == seg->area_count) {
 PFL();
 		if ((segtype_is_raid5_n(seg->segtype) && segtype_is_raid4(segtype)) ||
@@ -3349,7 +3358,6 @@ PFL();
 
 		return 0;
 	}
-
 
 	if (seg_is_any_raid5(seg) && segtype_is_raid1(segtype) && seg->area_count != 2) {
 		uint32_t remove_count = seg->area_count - 2;
@@ -3806,7 +3814,7 @@ int lv_raid_convert(struct logical_volume *lv,
 		    const unsigned new_stripe_size,
 		    struct dm_list *allocate_pvs)
 {
-	int r, y;
+	int convert, r, y;
 	unsigned cur_redundancy, new_redundancy;
 	struct lv_segment *seg = first_seg(lv);
 	const struct segment_type *final_segtype = NULL;
@@ -3838,9 +3846,15 @@ int lv_raid_convert(struct logical_volume *lv,
 	    !segtype_is_raid(new_segtype))
 		goto err;
 
+	/* Can't convert from linear to raid6 directly! */
+	if (seg_is_linear(seg) &&
+	    segtype_is_any_raid6(new_segtype))
+		goto err;
+	
+
 PFLA("new_image_count=%u new_stripes=%u new_segtype=%s", new_image_count, new_stripes, new_segtype->name);
 	new_image_count = new_image_count ?: seg->area_count;
-PFLA("new_image_count=%u new_stripes=%u", new_image_count, new_stripes);
+PFLA("new_image_count=%u new_stripes=%u seg->ara_count=%u", new_image_count, new_stripes, seg->area_count);
 
 	/* @lv has to be active locally */
 	if (vg_is_clustered(lv->vg) && !lv_is_active_exclusive_locally(lv)) {
@@ -3872,7 +3886,22 @@ PFLA("new_image_count=%u new_stripes=%u", new_image_count, new_stripes);
 	 */
 PFLA("cur_redundancy=%u new_redundancy=%u", cur_redundancy, new_redundancy);
 	y = yes;
-	if (new_redundancy > cur_redundancy)
+	if (new_redundancy == cur_redundancy) {
+		if (!new_stripes)
+			log_info("INFO: Converting active%s %s/%s %s%s%s%s will keep "
+				 "resilience of %u disk failure%s",
+				 info.open_count ? " and open" : "", lv->vg->name, lv->name,
+				 seg->segtype != new_segtype_tmp ? "from " : "",
+				 seg->segtype != new_segtype_tmp ? _get_segtype_name(seg->segtype, new_image_count) : "",
+				 seg->segtype != new_segtype_tmp ? " to " : "",
+				 seg->segtype != new_segtype_tmp ? _get_segtype_name(new_segtype_tmp, new_image_count) : "",
+				 cur_redundancy,
+				 (!cur_redundancy || cur_redundancy > 1) ? "s" : "");
+
+		else
+			y = 1;
+
+	} else if (new_redundancy > cur_redundancy)
 		log_info("INFO: Converting active%s %s/%s %s%s%s%s will extend "
 			 "resilience from %u disk failure%s to %u",
 			 info.open_count ? " and open" : "", lv->vg->name, lv->name,
@@ -3883,14 +3912,6 @@ PFLA("cur_redundancy=%u new_redundancy=%u", cur_redundancy, new_redundancy);
 			 cur_redundancy,
 			 (!cur_redundancy || cur_redundancy > 1) ? "s" : "",
 			 new_redundancy);
-
-	else if (!new_redundancy && cur_redundancy)
-		log_warn("WARNING: Converting active%s %s/%s from %s to %s will loose "
-			 "all resilience to %u disk failure%s",
-			 info.open_count ? " and open" : "", lv->vg->name, lv->name,
-			 _get_segtype_name(seg->segtype, new_image_count),
-			 _get_segtype_name(new_segtype_tmp, new_image_count),
-			 cur_redundancy, cur_redundancy > 1 ? "s" : "");
 
 	else if (new_redundancy &&
 		 new_redundancy < cur_redundancy)
@@ -3903,10 +3924,18 @@ PFLA("cur_redundancy=%u new_redundancy=%u", cur_redundancy, new_redundancy);
 			 seg->segtype != new_segtype_tmp ? _get_segtype_name(new_segtype_tmp, new_image_count) : "",
 			 cur_redundancy, new_redundancy);
 
+	else if (!new_redundancy && cur_redundancy)
+		log_warn("WARNING: Converting active%s %s/%s from %s to %s will loose "
+			 "all resilience to %u disk failure%s",
+			 info.open_count ? " and open" : "", lv->vg->name, lv->name,
+			 _get_segtype_name(seg->segtype, new_image_count),
+			 _get_segtype_name(new_segtype_tmp, new_image_count),
+			 cur_redundancy, cur_redundancy > 1 ? "s" : "");
+
 	else
 		y = 1;
 
-	if (!y && yes_no_prompt("Do you really want to convert %s/%s with type %s to %s [y/n]: ",
+	if (!y && yes_no_prompt("Do you really want to convert %s/%s with type %s to %s? [y/n]: ",
 				lv->vg->name, lv->name,
 				_get_segtype_name(seg->segtype, new_image_count),
 				_get_segtype_name(new_segtype_tmp, new_image_count)) == 'n') {
@@ -3922,26 +3951,59 @@ PFLA("cur_redundancy=%u new_redundancy=%u", cur_redundancy, new_redundancy);
 
 PFLA("seg_is_linear(seg)=%d", seg_is_linear(seg));
 	/*
-	 * Linear <-> raid0/1/4/5 conversion _or_ change image count of RAID1
+	 * Linear(raid0 <-> raid0/1/4/5 conversions _or_ change image count of raid1
 	 */
-	if ((seg_is_linear(seg) && (segtype_is_raid1(new_segtype) || new_image_count > 1)) ||
-	    (seg_is_linear(seg) && (segtype_is_raid4(new_segtype) || segtype_is_any_raid5(new_segtype))) ||
-	    (seg_is_any_raid0(seg) && !segtype_is_any_raid0(new_segtype) && seg->area_count == 1) ||
-	    (seg_is_raid1(seg) && segtype_is_linear(new_segtype)) ||
-	    (seg_is_raid1(seg) && segtype_is_raid1(new_segtype)) ||
-	    (seg_is_raid1(seg) && (segtype_is_any_raid0(new_segtype) && seg->area_count == 2)) ||
-	    ((seg_is_raid4(seg) || seg_is_any_raid5(seg)) &&
-	     (segtype_is_linear(new_segtype) || segtype_is_any_raid0(new_segtype)) &&
-	     seg->area_count == 2)) {
+	/* linear -> raid1 with N > 1 images */
+	if ((convert = seg_is_linear(seg) &&
+		       (segtype_is_raid1(new_segtype) || new_image_count > 1))) {
+		/* "lvconvert --type raid1 ..." does not set new_image_count */
+		new_image_count = new_image_count > 1 ? new_image_count : 2;
 PFL();
-		if ((seg_is_linear(seg) || seg_is_any_raid0(seg)) &&
-		    (segtype_is_raid1(new_segtype) || segtype_is_raid4(new_segtype) || segtype_is_any_raid5(new_segtype)))
+
+	/* linear -> raid4/5 with 2 images */
+	} else if ((convert = (seg_is_linear(seg) &&
+			     (segtype_is_raid4(new_segtype) || segtype_is_any_raid5(new_segtype))))) {
+		new_image_count = 2;
+PFL();
+
+	/* raid0 with _one_ image -> raid1/4/5 with 2 images */
+	} else if ((convert = (seg_is_any_raid0(seg) && seg->area_count == 1 &&
+			       ((segtype_is_raid1(new_segtype) || new_image_count > 1) ||
+				segtype_is_raid4(new_segtype) ||
+				segtype_is_any_raid5(new_segtype))))) {
+		if (seg->segtype == new_segtype && new_image_count > 1) {
+			if (!(new_segtype = get_segtype_from_string(lv->vg->cmd, SEG_TYPE_NAME_RAID1)))
+				return_0;
+PFL();
+		} else {
 			new_image_count = 2;
+PFL();
+		}
 
-		if (segtype_is_linear(new_segtype) ||
-		    segtype_is_any_raid0(new_segtype))
-			new_image_count = 1;
+	/* raid1 with N images -> linear with one image */
+	} else if ((convert = (seg_is_raid1(seg) && segtype_is_linear(new_segtype)))) {
+		new_image_count = 1;
+PFL();
 
+	/* raid1 with N images -> raid1 with M images (N != M ) */
+	} else if ((convert = (seg_is_raid1(seg) && segtype_is_raid1(new_segtype)))) {
+		/* raid1 with N images -> raid1 with M images (N != M ) */
+		new_image_count = new_image_count > 1 ? new_image_count : 2;
+PFL();
+
+	/* raid1 with N images -> raid0 with 1 image */
+	} else if ((convert = (seg_is_raid1(seg) && segtype_is_any_raid0(new_segtype)))) {
+		new_image_count = 1;
+PFL();
+
+	/* raid4/5 with 2 images -> linear/raid0 with 1 image */
+	} else if ((convert = (seg_is_raid4(seg) || seg_is_any_raid5(seg)) && seg->area_count == 2 &&
+		   (segtype_is_linear(new_segtype) || segtype_is_any_raid0(new_segtype)))) {
+		new_image_count = 1;
+PFL();
+	}
+
+	if (convert) {
 		if (new_stripes) {
 			log_error("--stripes N incompatible with raid0/1");
 			return 0;
