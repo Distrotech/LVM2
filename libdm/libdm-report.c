@@ -62,6 +62,7 @@ struct dm_report {
 
 	/* Null-terminated array of reserved values */
 	const struct dm_report_reserved_value *reserved_values;
+	struct dm_hash_table *dynamic_reserved_value_cache;
 };
 
 /*
@@ -1277,6 +1278,8 @@ void dm_report_free(struct dm_report *rh)
 {
 	if (rh->selection)
 		dm_pool_destroy(rh->selection->mem);
+	if (rh->dynamic_reserved_value_cache)
+		dm_hash_destroy(rh->dynamic_reserved_value_cache);
 	dm_pool_destroy(rh->mem);
 	dm_free(rh);
 }
@@ -2216,6 +2219,45 @@ dm_percent_t dm_make_percent(uint64_t numerator, uint64_t denominator)
 	}
 }
 
+int dm_report_reserved_cache_enable(struct dm_report *rh)
+{
+	if (rh->dynamic_reserved_value_cache)
+		return 1;
+
+	if (!(rh->dynamic_reserved_value_cache = dm_hash_create(64))) {
+		log_error("Failed to create cache for dynamic reserved values.");
+		return 0;
+	}
+
+	return 1;
+}
+
+int dm_report_reserved_cache_disable(struct dm_report *rh)
+{
+	if (rh->dynamic_reserved_value_cache) {
+		dm_hash_destroy(rh->dynamic_reserved_value_cache);
+		rh->dynamic_reserved_value_cache = NULL;
+	}
+
+	return 1;
+}
+
+int dm_report_reserved_cache_set(struct dm_report *rh, const char *name, const void *data)
+{
+	if (rh->dynamic_reserved_value_cache)
+		return dm_hash_insert(rh->dynamic_reserved_value_cache, name, (void *) data);
+
+	return 1;
+}
+
+const void *dm_report_reserved_cache_get(struct dm_report *rh, const char *name)
+{
+	if (rh->dynamic_reserved_value_cache)
+		return dm_hash_lookup(rh->dynamic_reserved_value_cache, name);
+
+	return NULL;
+}
+
 /*
  * Used to check whether the reserved_values definition passed to
  * dm_report_init_with_selection contains only supported reserved value types.
@@ -2625,6 +2667,7 @@ static const char *_tok_field_name(const char *s,
 
 static const void *_get_reserved_value(const struct dm_report_reserved_value *reserved)
 {
+
 	if (reserved->type & DM_REPORT_FIELD_TYPE_MASK)
 		return reserved->value;
 	else
@@ -3188,6 +3231,9 @@ struct dm_report *dm_report_init_with_selection(uint32_t *report_types,
 		return rh;
 	}
 	rh->reserved_values = reserved_values;
+
+	if (!dm_report_reserved_cache_enable(rh))
+		return_NULL;
 
 	if (!strcasecmp(selection, SPECIAL_FIELD_HELP_ID) ||
 	    !strcmp(selection, SPECIAL_FIELD_HELP_ALT_ID)) {

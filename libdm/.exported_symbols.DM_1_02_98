@@ -1,3 +1,7 @@
 dm_task_get_errno
 dm_report_field_string_list_decorated
 dm_report_field_string_list_unsorted_decorated
+dm_report_reserved_cache_enable
+dm_report_reserved_cache_disable
+dm_report_reserved_cache_set
+dm_report_reserved_cache_get
