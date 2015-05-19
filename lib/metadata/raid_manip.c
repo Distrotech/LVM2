@@ -2073,6 +2073,8 @@ PFLA("lv->le_count=%u data_rimages=%u minus_extents=%u", lv->le_count, _data_rim
 		seg->area_len -= minus_extents;
 		seg->reshape_len = seg->reshape_len / _data_rimages_count(seg, old_count) *
 						      _data_rimages_count(seg, new_count);
+		if (new_count == 2)
+			seg->stripe_size = 0;
 PFLA("lv->le_count=%u", lv->le_count);
 	}
 
@@ -3127,12 +3129,12 @@ PFLA("old_dev_count=%u new_dev_count=%u", old_dev_count, new_dev_count);
 		return 0;
 	}
 
-	/* raid5 with 3 image component pairs (i.e. 2 stripes): allow for raid5 reshape to 2 devices, i.e. raid1 layout */
+	/* raid4/5 with N image component pairs (i.e. N-1 stripes): allow for raid4/5 reshape to 2 devices, i.e. raid1 layout */
 	if (seg_is_raid4(seg) || seg_is_any_raid5(seg)) {
 		if (new_stripes < 1)
 			too_few = 1;
 
-	/* any other raid4/5/6 device count: check for 2 stripes minimum */
+	/* raid6 device count: check for 2 stripes minimum */
 	} else if (new_stripes < 2)
 		too_few = 1;
 
@@ -3142,41 +3144,40 @@ PFLA("old_dev_count=%u new_dev_count=%u", old_dev_count, new_dev_count);
 	}
 
 	seg->stripe_size = new_stripe_size;
+	switch ((r = _reshaped_state(lv, old_dev_count, &devs_health, &devs_in_sync))) {
+	case 1:
+		/*
+		 * old_dev_count == kernel_dev_count
+		 *
+		 * Check for device health
+		 */
+		if (devs_in_sync < devs_health) {
+			log_error("Can't reshape out of sync LV %s/%s", lv->vg->name, lv->name);
+			return 0;
+		}
+PFL()
+		/* device count and health are good -> ready to add disks */
+		break;
+
+	case 2:
+		if (devs_in_sync == new_dev_count)
+			break;
+
+		/* Possible after a shrinking reshape and forgotten device removal */
+		log_error("Device count is incorrect. "
+			  "Forgotten \"lvconvert --stripes %d %s/%s\" to remove %u images after reshape?",
+			  devs_in_sync - seg->segtype->parity_devs, lv->vg->name, lv->name,
+			  old_dev_count - devs_in_sync);
+		return 0;
+
+	default:
+		log_error(INTERNAL_ERROR "Bad return=%d provided to %s.", r, __func__);
+		return 0;
+	}
 
 	/* Handle disk addition reshaping */
 	if (old_dev_count < new_dev_count) {
 PFL();
-		switch ((r = _reshaped_state(lv, old_dev_count, &devs_health, &devs_in_sync))) {
-		case 0:
-			/* Status retrieve error (e.g. raid set not activated) -> can't proceed */
-PFL();
-			return 0;
-		case 1:
-			/*
-			 * old_dev_count == kernel_dev_count
-			 *
-			 * Check for device health
-			 */
-			if (devs_in_sync < devs_health) {
-				log_error("Can't reshape out of sync LV %s/%s", lv->vg->name, lv->name);
-				return 0;
-			}
-PFL();
-			/* device count and health are good -> ready to add disks */
-			break;
-		case 2:
-			/* Possible after a shrinking reshape and forgotten device removal */
-			log_error("Device count is incorrect. "
-				  "Forgotten \"lvconvert --stripes %d %s/%s\" to remove %u images after reshape?",
-				  devs_in_sync - seg->segtype->parity_devs, lv->vg->name, lv->name,
-				  old_dev_count - devs_in_sync);
-			return 0;
-
-		default:
-			log_error(INTERNAL_ERROR "Bad return=%d provided to %s.", r, __func__);
-			return 0;
-		}
-
 		/* Conversion to raid1 */
 		if (old_dev_count == 2)
 			new_segtype = seg->segtype;
@@ -3225,11 +3226,6 @@ PFL();
 		uint32_t s;
 
 		switch (_reshaped_state(lv, new_dev_count, &devs_health, &devs_in_sync)) {
-		case 0:
-PFL();
-			/* Status retrieve error (e.g. raid set not activated) -> can't proceed */
-			return 0;
-
 		case 3:
 			/*
 			 * Disk removal reshape step 1:
@@ -3240,14 +3236,6 @@ PFL();
 			 *
 			 */
 PFL();
-			if (_reshaped_state(lv, old_dev_count, &devs_health, &devs_in_sync) == 2) {
-				log_error("Device count is incorrect. "
-					  "Forgotten \"lvconvert --stripes %d %s/%s\" to remove %u images after reshape?",
-					  devs_in_sync - seg->segtype->parity_devs, lv->vg->name, lv->name,
-					  old_dev_count - devs_in_sync);
-				return 0;
-			}
-
 			if (!lv_info(lv->vg->cmd, lv, 0, &info, 1, 0) && driver_version(NULL, 0)) {
 				log_error("lv_info failed: aborting");
 				return 0;
@@ -3890,7 +3878,7 @@ int lv_raid_convert(struct logical_volume *lv,
 
 PFLA("new_image_count=%u new_stripes=%u new_segtype=%s", new_image_count, new_stripes, new_segtype->name);
 	new_image_count = new_image_count ?: seg->area_count;
-PFLA("new_image_count=%u new_stripes=%u seg->ara_count=%u", new_image_count, new_stripes, seg->area_count);
+PFLA("new_image_count=%u new_stripes=%u seg->area_count=%u", new_image_count, new_stripes, seg->area_count);
 
 	/* @lv has to be active locally */
 	if (vg_is_clustered(lv->vg) && !lv_is_active_exclusive_locally(lv)) {
