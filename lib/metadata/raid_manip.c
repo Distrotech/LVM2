@@ -1187,13 +1187,13 @@ static int _relocate_reshape_space(struct logical_volume *lv, int to_end)
 	struct lv_segment *data_seg;
 	struct dm_list *where;
 
-	if (!seg->reshape_len) {
+	if (!seg->reshape_len ||
+	    !(len_per_dlv = _reshape_les_per_dev(seg))) {
 		log_error(INTERNAL_ERROR "No reshape space to relocate");
 		return 0;
 	}
 
-	len_per_dlv = _reshape_les_per_dev(seg);
-
+PFLA("seg->area_count=%u", seg->area_count);
 	/*
 	 * Move the reshape LEs of each stripe (i.e. the data image sub lv)
 	 * in the first/last segments across to new segments of just use
@@ -1214,10 +1214,16 @@ static int _relocate_reshape_space(struct logical_volume *lv, int to_end)
 		}
 
 PFLA("len_per_dlv=%u le=%u end=%u", len_per_dlv, le, end);
+dm_list_iterate_items(data_seg, &dlv->segments)
+PFLA("1. dlv=%s data_seg->le=%u data_seg->len=%u pe=%u", dlv->name, data_seg->le, data_seg->len, seg_pe(data_seg, 0));
+
 
 		/* Ensure segment boundary at begin/end of reshape space */
 		if (!lv_split_segment(dlv, to_end ? end : le))
 			return_0;
+
+dm_list_iterate_items(data_seg, &dlv->segments)
+PFLA("2. dlv=%s data_seg->le=%u data_seg->len=%u pe=%u", dlv->name, data_seg->le, data_seg->len, seg_pe(data_seg, 0));
 
 		/* Find start segment */
 		data_seg = find_seg_by_le(dlv, le);
@@ -1227,11 +1233,12 @@ PFLA("len_per_dlv=%u le=%u end=%u", len_per_dlv, le, end);
 			le += data_seg->len;
 			/* select destination to move to (begin/end) */
 			where = to_end ? &dlv->segments : dlv->segments.n;
-PFLA("data_seg->le=%u data_seg->len=%u", data_seg->le, data_seg->len);
-
 			dm_list_move(where, &data_seg->list);
 			data_seg = n;
 		}
+
+dm_list_iterate_items(data_seg, &dlv->segments)
+PFLA("3. dlv=%s data_seg->le=%u data_seg->len=%u pe=%u", dlv->name, data_seg->le, data_seg->len, seg_pe(data_seg, 0));
 
 		/* Adjust starting LEs of data lv segments after move */;
 		le = 0;
@@ -1239,6 +1246,9 @@ PFLA("data_seg->le=%u data_seg->len=%u", data_seg->le, data_seg->len);
 			data_seg->le = le;
 			le += data_seg->len;
 		}
+dm_list_iterate_items(data_seg, &dlv->segments)
+PFLA("4. dlv=%s data_seg->le=%u data_seg->len=%u pe=%u", dlv->name, data_seg->le, data_seg->len, seg_pe(data_seg, 0));
+
 	}
 
 	return 1;
@@ -1374,6 +1384,8 @@ PFLA("Moving to end%s", "");
 	/* Set data offset only on allocation, not on reshape space removal */
 	if (allocate_pvs)
 		seg->data_offset = _reshape_les_per_dev(seg) * lv->vg->extent_size;
+	else
+		seg->data_offset = 0;
 
 #endif
 	/* Try merging segments */
@@ -1386,7 +1398,11 @@ static int _lv_free_reshape_space(struct logical_volume *lv)
 	struct lv_segment *seg = first_seg(lv);
 
 	if (seg->reshape_len) {
-		/* Got reshape space, optionally remap it to the end and lvreduce it */
+		/*
+		 * Got reshape space
+		 *
+		 * If at the beginning of the data LVs remap it to the end and lvreduce by it
+		 */
 		if (!_lv_alloc_reshape_space(lv, alloc_end, NULL))
 			return_0;
 
@@ -1754,14 +1770,10 @@ PFL();
 	 * but this shows proper status chars.
 	 */
 	if (linear || (seg_is_any_raid0(seg) && old_count == 1)) {
-#if 1
 		seg_lv(seg, 0)->status &= ~LV_REBUILD;
 		
 		for (s = old_count; s < new_count; s++)
 			seg_lv(seg, s)->status |= LV_REBUILD;
-#else
-		;
-#endif
 
 	} else if (reshape_disks) {
 		uint32_t plus_extents = count * (lv->le_count / _data_rimages_count(seg, old_count));
@@ -1786,6 +1798,7 @@ PFLA("lv->le_count=%u data_rimages=%u plus_extents=%u", lv->le_count, _data_rima
 		seg->area_len += plus_extents;
 		seg->reshape_len = seg->reshape_len / _data_rimages_count(seg, old_count) *
 						      _data_rimages_count(seg, new_count);
+		seg->stripe_size = seg->stripe_size ?: 64 * 2;
 PFLA("lv->le_count=%u", lv->le_count);
 	}
 
@@ -2003,7 +2016,7 @@ PFLA("seg->segtype=%s segtype=%s new_count=%u", seg->segtype->name, segtype->nam
 	dm_list_init(&removal_list);
 
 	/* If we convert away from raid4/5/6/10 -> remove any reshape space */
-	if ((segtype_is_linear(segtype) || segtype_is_any_raid0(segtype)) &&
+	if ((segtype_is_linear(segtype) || segtype_is_striped(segtype) || segtype_is_any_raid0(segtype)) &&
 	    !_lv_free_reshape_space(lv)) {
 		log_error(INTERNAL_ERROR "Failed to remove reshape space from %s/%s",
 			  lv->vg->name, lv->name);
@@ -2212,13 +2225,6 @@ PFLA("segtype=%s old_count=%u new_count=%u", segtype->name, old_count, new_count
 		log_error("%s/%s must be active exclusive locally to"
 			  " perform this operation.", lv->vg->name, lv->name);
 		return 0;
-	}
-
-	if (!(segtype_is_striped_raid(segtype) && !segtype_is_any_raid0(segtype)) &&
-	    !_lv_free_reshape_space(lv)) {
-		log_error(INTERNAL_ERROR "Failed to remove reshape space from %s/%s",
-			  lv->vg->name, lv->name);
-		return_0;
 	}
 
 	return (old_count > new_count ? _raid_remove_images : _raid_add_images)(lv, segtype, new_count, pvs);
@@ -3333,7 +3339,7 @@ PFL();
 		if (!_lv_alloc_reshape_space(lv, alloc_anywhere, allocate_pvs))
 			return 0;
 
-		first_seg(lv)->segtype = new_segtype;
+		seg->segtype = new_segtype;
 		update_and_reload = 1;
 	}
 
