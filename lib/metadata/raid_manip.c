@@ -1167,19 +1167,32 @@ static int _alloc_rmeta_for_linear(struct logical_volume *lv, struct dm_list *me
 	return 1;
 }
 
+/* Return reshape LEs per device for @seg */
+static uint32_t _reshape_les_per_dev(struct lv_segment *seg)
+{
+	return seg->reshape_len / _data_rimages_count(seg, seg->area_count);
+}
+
 /*
  * Relocate @out_of_place_les_per_disk from @lv's data images  begin <-> end depending on @to_end
  *
  * to_end != 0 -> begin -> end
  * to_end == 0 -> end -> begin
  */
-static int _relocate_reshape_space(struct logical_volume *lv,
-				   uint32_t out_of_place_les_per_disk, int to_end)
+static int _relocate_reshape_space(struct logical_volume *lv, int to_end)
 {
-	uint32_t le, les, s;
+	uint32_t le, end, s, len_per_dlv;
  	struct logical_volume *dlv;
 	struct lv_segment *seg = first_seg(lv);
-	struct lv_segment *data_seg, *new_seg, *tmp_seg;
+	struct lv_segment *data_seg;
+	struct dm_list *where;
+
+	if (!seg->reshape_len) {
+		log_error(INTERNAL_ERROR "No reshape space to relocate");
+		return 0;
+	}
+
+	len_per_dlv = _reshape_les_per_dev(seg);
 
 	/*
 	 * Move the reshape LEs of each stripe (i.e. the data image sub lv)
@@ -1188,52 +1201,43 @@ static int _relocate_reshape_space(struct logical_volume *lv,
 	 */
 	for (s = 0; s < seg->area_count; s++) {
 		dlv = seg_lv(seg, s);
-		les = out_of_place_les_per_disk;
-		le = to_end ? 0 : dlv->le_count - les;
-		data_seg = find_seg_by_le(dlv, le);
 
-		/* to_end -> last segment, !to_end -> first segment */
-		if (to_end)
-			les = data_seg->len - les;
+		/* Move to the end -> start from 0 and end with reshape LEs */
+		if (to_end) {
+			le = 0;
+			end = len_per_dlv;
 
-PFLA("data_seg->len=%u les=%u", data_seg->len, les);
-		if (data_seg->le != le) {
-			if (!(new_seg = alloc_lv_segment(data_seg->segtype, dlv,
-							 0 /* le gets adjusted later */,
-							 les, 0 /* no reshape_len on sub lvs */,
-							 data_seg->status,
-							 data_seg->stripe_size, NULL, 1 /* area */,
-							 les, data_seg->chunk_size, 0, 0, NULL)))
+		/* Move to the beginning -> from "end - reshape LEs" to end  */
+		} else {
+			le = dlv->le_count - len_per_dlv;
+			end = dlv->le_count;
+		}
+
+PFLA("len_per_dlv=%u le=%u end=%u", len_per_dlv, le, end);
+
+		/* Ensure segment boundary at begin/end of reshape space */
+		if (!lv_split_segment(dlv, to_end ? end : le))
 			return_0;
 
-PFLA("data_seg->len=%u data_seg->area_len=%u new_seg->len=%u new_seg->area_len=%u", data_seg->len, data_seg->area_len, new_seg->len, new_seg->area_len);
-			if (!_raid_move_partial_lv_segment_area(new_seg, 0, data_seg, 0, new_seg->area_len))
-				return 0;
+		/* Find start segment */
+		data_seg = find_seg_by_le(dlv, le);
+		while (le < end) {
+			struct lv_segment *n = dm_list_item(data_seg->list.n, struct lv_segment);
 
-PFLA("data_seg->len=%u data_seg->area_len=%u new_seg->len=%u new_seg->area_len=%u", data_seg->len, data_seg->area_len, new_seg->len, new_seg->area_len);
-			data_seg->len -= new_seg->len;
+			le += data_seg->len;
+			/* select destination to move to (begin/end) */
+			where = to_end ? &dlv->segments : dlv->segments.n;
+PFLA("data_seg->le=%u data_seg->len=%u", data_seg->le, data_seg->len);
 
-			/* Insert the new segment as the first one */
-			dm_list_add_h(&dlv->segments, &new_seg->list);
-		} else if (!to_end)
-			/* Segment at the end holding reshape space has correct length -> move upfront */
-			dm_list_move(dlv->segments.n, &data_seg->list);
+			dm_list_move(where, &data_seg->list);
+			data_seg = n;
+		}
 
-		if (to_end)
-			/*
-			 * After a relocation from begin -> end, data_seg contains
-			 * the reshape space of the first data lv segment
-			 */
-			dm_list_move(&dlv->segments, &data_seg->list);
-	}
-
-	/* Adjust starting LEs of data lv segments */;
-	for (s = 0; s < seg->area_count; s++) {
+		/* Adjust starting LEs of data lv segments after move */;
 		le = 0;
-		dlv = seg_lv(seg, s);
-		dm_list_iterate_items(tmp_seg, &dlv->segments) {
-			tmp_seg->le = le;
-			le += tmp_seg->len;
+		dm_list_iterate_items(data_seg, &dlv->segments) {
+			data_seg->le = le;
+			le += data_seg->len;
 		}
 	}
 
@@ -1318,16 +1322,24 @@ PFLA("data_offset=%llu dev_sectors=%llu seg->reshape_len=%u out_of_place_les_per
 
 	/*
 	 * Check if we have reshape space allocated or extend the LV to have it
+	 *
+	 * fist_seg(lv)->reshape_len (only segment of top level raid LV)
+	 * is accounting for the data rimages so that unchanged
+	 * lv_extend()/lv_reduce() can be used to allocate/free
 	 */
 	reshape_len = out_of_place_les_per_disk * _data_rimages_count(seg, seg->area_count);
-	if (!seg->reshape_len &&
-	    !lv_extend(lv, seg->segtype,
-			_data_rimages_count(seg, seg->area_count),
-			seg->stripe_size,
-			1, seg->region_size,
-			reshape_len /* # of reshape LEs to add */,
-			allocate_pvs, lv->alloc, 0))
-		return 0;
+	if (!seg->reshape_len) {
+		if (!lv_extend(lv, seg->segtype,
+				_data_rimages_count(seg, seg->area_count),
+				seg->stripe_size,
+				1, seg->region_size,
+				reshape_len /* # of reshape LEs to add */,
+				allocate_pvs, lv->alloc, 0))
+			return 0;
+
+		/* Store the allocated reshape length per LV in the only segment of the top-level RAID LV */
+		seg->reshape_len = reshape_len;
+	}
 
 PFLA("lv->le_count=%u", lv->le_count);
 
@@ -1341,7 +1353,7 @@ PFLA("Moving to begin%s", "");
 		 * in the last segments across to new segments inserted at the beginning
 		 * the whole segments if size fits
 		 */
-		if (!_relocate_reshape_space(lv, out_of_place_les_per_disk, 0))
+		if (!_relocate_reshape_space(lv, 0))
 			return_0;
 	}
 
@@ -1355,16 +1367,13 @@ PFLA("Moving to end%s", "");
 		 * in the first segments across to new segments or move the whole segments
 		 * if size fits
 		 */
-		if (!_relocate_reshape_space(lv, out_of_place_les_per_disk, 1))
+		if (!_relocate_reshape_space(lv, 1))
 			return_0;
 	}
 
-	/* Only on allocation, not on reshape space removal */
+	/* Set data offset only on allocation, not on reshape space removal */
 	if (allocate_pvs)
-		seg->data_offset = out_of_place_les_per_disk * lv->vg->extent_size;
-
-	/* Store the allocated reshape length per LV in the only segment of the top-level RAID LV */
-	seg->reshape_len = reshape_len;
+		seg->data_offset = _reshape_les_per_dev(seg) * lv->vg->extent_size;
 
 #endif
 	/* Try merging segments */
@@ -2899,6 +2908,25 @@ PFL();
 PFLA("are_len=%u l=%u", area_len, l);
 		}
 		/* area_len now holds the smallest one */
+#if 0
+		for (s = 0; s < seg->area_count; s++) {
+			dlv = seg_lv(seg, s);
+			if (!lv_split_segment(dlv, area_le)) {
+				log_error(INTERNAL_ERROR "splitting data lv segment");
+				return 0;
+			}
+		}
+
+		area_le += area_len;
+		le += area_len * seg->area_count;
+	}
+
+	for (s = 0; s < seg->area_count; s++) {
+		dlv = seg_lv(seg, s);
+		dm_list_iterate_items_safe(seg_from, &dlv->segments)
+			dm_list_move();
+	}
+#endif
 
 		/* Allocate a segment with area_count areas */
 PFLA("seg->area_count=%u seg->stripe_size=%u", seg->area_count, seg->stripe_size);
@@ -3350,8 +3378,10 @@ PFLA("segtype=%s old_count=%u new_count=%u", segtype->name, seg->area_count, new
 	/* Takeover raid4 <-> raid5_n */
 	if (new_count == seg->area_count) {
 PFL();
-		if ((segtype_is_raid5_n(seg->segtype) && segtype_is_raid4(segtype)) ||
-		    (segtype_is_raid4(seg->segtype)   && segtype_is_raid5_n(segtype))) {
+
+		if (seg->area_count == 2 ||
+		    ((segtype_is_raid5_n(seg->segtype) && segtype_is_raid4(segtype)) ||
+		     (segtype_is_raid4(seg->segtype)   && segtype_is_raid5_n(segtype)))) {
 			seg->segtype = segtype;
 			return lv_update_and_reload(lv);
 		}
@@ -3884,6 +3914,7 @@ PFLA("new_image_count=%u new_stripes=%u seg->ara_count=%u", new_image_count, new
 	/*
 	 * In case of any resilience related conversion -> ask the user unless "-y/--yes" on command line
 	 */
+	/* HM FIXME: need to reorder redundany and conversion checks to avoid bogus user messages */
 PFLA("cur_redundancy=%u new_redundancy=%u", cur_redundancy, new_redundancy);
 	y = yes;
 	if (new_redundancy == cur_redundancy) {
@@ -4001,7 +4032,9 @@ PFL();
 		   (segtype_is_linear(new_segtype) || segtype_is_any_raid0(new_segtype)))) {
 		new_image_count = 1;
 PFL();
-	}
+	} else if ((seg_is_raid4(seg) || seg_is_any_raid5(seg) || seg_is_any_raid6(seg)) &&
+		   segtype_is_linear(new_segtype))
+		goto err;
 
 	if (convert) {
 		if (new_stripes) {

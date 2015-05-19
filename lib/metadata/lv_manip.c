@@ -5429,6 +5429,8 @@ PFL();
 		spvs->le = current_le;
 		spvs->len = lv->le_count - current_le;
 
+PFLA("dm_list_size(&lv->segments)=%u", dm_list_size(&lv->segments));
+PFLA("current_le=%u seg->le=%u seg->len=%u seg->area_len=%u", current_le, seg->le, seg->len, seg->area_len);
 		if (use_pvmove_parent_lv &&
 		    !(seg = find_seg_by_le(lv, current_le))) {
 			log_error("Failed to find segment for %s extent %" PRIu32,
@@ -6401,8 +6403,8 @@ static int _extend_layer_lv_for_segment(struct logical_volume *layer_lv,
 			 seg->lv->vg->name, seg->lv->name);
 
 	/* allocate a new segment */
-	if (!(mapseg = alloc_lv_segment(segtype, layer_lv, layer_lv->le_count, 0,
-					seg->area_len, status, 0,
+	if (!(mapseg = alloc_lv_segment(segtype, layer_lv, layer_lv->le_count, seg->area_len,
+					0, status, 0,
 					NULL, 1, seg->area_len, 0, 0, 0, seg)))
 		return_0;
 
