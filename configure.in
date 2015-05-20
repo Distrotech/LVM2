@@ -1170,6 +1170,13 @@ AC_DEFINE_UNQUOTED(DEFAULT_USE_LVMLOCKD, [$DEFAULT_USE_LVMLOCKD],
 		   [Use lvmlockd by default.])
 
 ################################################################################
+dnl -- Look for sanlock and dlm libraries
+if test "$BUILD_LVMLOCKD" = yes; then
+	PKG_CHECK_MODULES(LOCKD_SANLOCK, libsanlock_client, [HAVE_LOCKD_SANLOCK=yes], $bailout)
+	PKG_CHECK_MODULES(LOCKD_DLM, libdlm, [HAVE_LOCKD_DLM=yes], $bailout)
+fi
+
+################################################################################
 
 dnl -- Enable blkid wiping functionality
 AC_MSG_CHECKING(whether to enable libblkid detection of signatures when wiping)
