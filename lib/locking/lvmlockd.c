@@ -140,6 +140,13 @@ static void _flags_str_to_lockd_flags(const char *flags_str, uint32_t *lockd_fla
  * 1 success (result/lockd_flags set)
  */
 
+/*
+ * This is an arbitrary number that we know lvmlockd
+ * will not return.  daemon_reply_int reverts to this
+ * value if it finds no result value.
+ */
+#define NO_LOCKD_RESULT -1000
+
 static int _lockd_result(daemon_reply reply, int *result, uint32_t *lockd_flags)
 {
 	int reply_result;
@@ -156,10 +163,8 @@ static int _lockd_result(daemon_reply reply, int *result, uint32_t *lockd_flags)
 		return 0;
 	}
 
-	/* -1000 is a random number that we know is not returned. */
-
-	reply_result = daemon_reply_int(reply, "op_result", -1000);
-	if (reply_result == -1000) {
+	reply_result = daemon_reply_int(reply, "op_result", NO_LOCKD_RESULT);
+	if (reply_result == NO_LOCKD_RESULT) {
 		log_error("lockd_result no op_result");
 		return 0;
 	}
