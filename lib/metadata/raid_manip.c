@@ -2016,7 +2016,10 @@ PFLA("seg->segtype=%s segtype=%s new_count=%u", seg->segtype->name, segtype->nam
 	dm_list_init(&removal_list);
 
 	/* If we convert away from raid4/5/6/10 -> remove any reshape space */
-	if ((segtype_is_linear(segtype) || segtype_is_striped(segtype) || segtype_is_any_raid0(segtype)) &&
+	if (!(segtype_is_raid10(segtype) ||
+	      segtype_is_raid4(segtype) ||
+	      segtype_is_any_raid5(segtype) ||
+	      segtype_is_any_raid6(segtype)) &&
 	    !_lv_free_reshape_space(lv)) {
 		log_error(INTERNAL_ERROR "Failed to remove reshape space from %s/%s",
 			  lv->vg->name, lv->name);
@@ -3970,9 +3973,11 @@ PFLA("cur_redundancy=%u new_redundancy=%u", cur_redundancy, new_redundancy);
 	if (sigint_caught())
 		return_0;
 
-	/* Now archive after the user could confirm */
+
+	/* Now archive after the user has confirmed */
 	if (!archive(lv->vg))
 		return_0;
+
 
 PFLA("seg_is_linear(seg)=%d", seg_is_linear(seg));
 	/*
@@ -3987,7 +3992,7 @@ PFL();
 
 	/* linear -> raid4/5 with 2 images */
 	} else if ((convert = (seg_is_linear(seg) &&
-			     (segtype_is_raid4(new_segtype) || segtype_is_any_raid5(new_segtype))))) {
+			       (segtype_is_raid4(new_segtype) || segtype_is_any_raid5(new_segtype))))) {
 		new_image_count = 2;
 PFL();
 
@@ -4020,6 +4025,24 @@ PFL();
 	} else if ((convert = (seg_is_raid1(seg) && segtype_is_any_raid0(new_segtype)))) {
 		new_image_count = 1;
 PFL();
+	} else if ((convert = ((seg_is_raid1(seg) || seg_is_raid4(seg) || seg_is_any_raid5(seg)) &&
+			       seg->area_count == 2 &&
+			       !new_stripes &&
+			       (segtype_is_raid1(new_segtype) ||
+				segtype_is_raid4(new_segtype) ||
+				segtype_is_any_raid5(new_segtype))))) {
+		if (seg->segtype == new_segtype) {
+			log_error("No change requested");
+			return 0;
+		}
+
+		if (new_image_count != 2)
+			log_warn("Ignoring ne wimage count");
+
+		new_image_count = 2;
+		seg->segtype = new_segtype;
+PFL();
+		return lv_update_and_reload(lv);
 
 	/* raid4/5 with 2 images -> linear/raid0 with 1 image */
 	} else if ((convert = (seg_is_raid4(seg) || seg_is_any_raid5(seg)) && seg->area_count == 2 &&
@@ -4031,7 +4054,7 @@ PFL();
 		goto err;
 
 	if (convert) {
-		if (new_stripes) {
+		if ((segtype_is_raid0(new_segtype) || segtype_is_raid1(new_segtype)) && new_stripes) {
 			log_error("--stripes N incompatible with raid0/1");
 			return 0;
 		}
