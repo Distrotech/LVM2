@@ -153,32 +153,113 @@ const char *lockd_running_lock_type(struct cmd_context *cmd);
 #define lvmlockd_set_socket(str)    do { } while (0)
 #define lvmlockd_disconnect()       do { } while (0)
 #define lvmlockd_connect_or_warn()  do { } while (0)
-#define lvmlockd_connected          (0)
 
-#define lockd_init_vg(cmd, vg)        (1)
-#define lockd_free_vg_before(cmd, vg) (1)
-#define lockd_free_vg_final(cmd, vg)  do { } while (0)
+static inline int lvmlockd_connected(void)
+{
+	return 0;
+}
 
-#define lockd_rename_vg_before(cmd, vg) (1)
-#define lockd_rename_vg_final(cmd, vg, success) (1)
+static inline int lvmlockd_active(void)
+{
+	return 0;
+}
 
-#define lockd_start_vg(cmd, vg) (1)
-#define lockd_stop_vg(cmd, vg)  (1)
-#define lockd_start_wait(cmd) (1)
+static inline int lockd_init_vg(struct cmd_context *cmd, struct volume_group *vg)
+{
+	return 1;
+}
 
-#define lockd_gl_create(cmd, def_mode, vg_lock_type) (1)
-#define lockd_gl(cmd, def_mode, flags) (1)
-#define lockd_vg(cmd, vg_name, def_mode, flags, lockd_state) (1)
-#define lockd_vg_update(vg) (1)
+static inline int lockd_free_vg_before(struct cmd_context *cmd, struct volume_group *vg)
+{
+	return 1;
+}
 
-#define lockd_lv_name(cmd, vg, lv_name, lock_args, def_mode, flags) (1)
-#define lockd_lv(cmd, lv, def_mode, flags) (1)
+static inline void lockd_free_vg_final(struct cmd_context *cmd, struct volume_group *vg)
+{
+	return;
+}
 
-#define lockd_init_lv(cmd, vg, lv_name, lp) (1)
-#define lockd_free_lv(cmd, vg, lv_name, lock_args) (1)
-#define lockd_init_lv_args(cmd, vg, lv_name, lock_type, lock_args) (1)
+static inline int lockd_rename_vg_before(struct cmd_context *cmd, struct volume_group *vg)
+{
+	return 1;
+}
 
-#define lockd_running_lock_type(cmd) (NULL)
+static inline int lockd_rename_vg_final(struct cmd_context *cmd, struct volume_group *vg, int success)
+{
+	return 1;
+}
+
+static inline int lockd_start_vg(struct cmd_context *cmd, struct volume_group *vg)
+{
+	return 0;
+}
+
+static inline int lockd_stop_vg(struct cmd_context *cmd, struct volume_group *vg)
+{
+	return 0;
+}
+
+static inline int lockd_start_wait(struct cmd_context *cmd)
+{
+	return 0;
+}
+
+static inline int lockd_gl_create(struct cmd_context *cmd, const char *def_mode, const char *vg_lock_type)
+{
+	return 1;
+}
+
+static inline int lockd_gl(struct cmd_context *cmd, const char *def_mode, uint32_t flags)
+{
+	return 1;
+}
+
+static inline int lockd_vg(struct cmd_context *cmd, const char *vg_name, const char *def_mode,
+	     uint32_t flags, uint32_t *lockd_state)
+{
+	return 1;
+}
+
+static inline int lockd_vg_update(struct volume_group *vg)
+{
+	return 1;
+}
+
+static inline int lockd_lv_name(struct cmd_context *cmd, struct volume_group *vg,
+		  const char *lv_name, const char *lock_args,
+		  const char *def_mode, uint32_t flags)
+{
+	return 1;
+}
+
+static inline int lockd_lv(struct cmd_context *cmd, struct logical_volume *lv,
+	     const char *def_mode, uint32_t flags)
+{
+	return 1;
+}
+
+static inline int lockd_init_lv(struct cmd_context *cmd, struct volume_group *vg,
+		  const char *lv_name, struct lvcreate_params *lp)
+{
+	return 0;
+}
+
+static inline int lockd_free_lv(struct cmd_context *cmd, struct volume_group *vg,
+		  const char *lv_name, const char *lock_args)
+{
+	return 0;
+}
+
+static inline int lockd_init_lv_args(struct cmd_context *cmd, struct volume_group *vg,
+		       const char *lv_name, const char *lock_type, const char **lock_args)
+{
+	return 0;
+}
+
+static inline const char *lockd_running_lock_type(struct cmd_context *cmd)
+{
+	return NULL;
+}
 
 #endif /* LVMLOCKD_SUPPORT */
 
