@@ -167,7 +167,6 @@ int init_raid_segtypes(struct cmd_context *cmd, struct segtype_library *seglib);
 #define SEG_TYPE_NAME_RAID10		"raid10"
 #define SEG_TYPE_NAME_RAID4		"raid4"
 #define SEG_TYPE_NAME_RAID5		"raid5"
-#define SEG_TYPE_NAME_RAID5_0		"raid5_0"
 #define SEG_TYPE_NAME_RAID5_N		"raid5_n"
 #define SEG_TYPE_NAME_RAID5_LA		"raid5_la"
 #define SEG_TYPE_NAME_RAID5_LS		"raid5_ls"
@@ -181,7 +180,6 @@ int init_raid_segtypes(struct cmd_context *cmd, struct segtype_library *seglib);
 #define SEG_TYPE_NAME_RAID6_LS_6	"raid6_ls_6"
 #define SEG_TYPE_NAME_RAID6_RA_6	"raid6_ra_6"
 #define SEG_TYPE_NAME_RAID6_RS_6	"raid6_rs_6"
-#define SEG_TYPE_NAME_RAID6_0_6		"raid6_0_6"
 #define SEG_TYPE_NAME_RAID6_N_6		"raid6_n_6"
 
 #define segtype_is_raid0(segtype)	(!strcmp((segtype)->name, SEG_TYPE_NAME_RAID0))
@@ -197,14 +195,12 @@ int init_raid_segtypes(struct cmd_context *cmd, struct segtype_library *seglib);
 #define segtype_is_raid5_rs(segtype)	(!strcmp((segtype)->name, SEG_TYPE_NAME_RAID5_RS))
 #define segtype_is_raid5_la(segtype)	(!strcmp((segtype)->name, SEG_TYPE_NAME_RAID5_LA))
 #define segtype_is_raid5_ra(segtype)	(!strcmp((segtype)->name, SEG_TYPE_NAME_RAID5_RA))
-#define segtype_is_raid5_0(segtype)	(!strcmp((segtype)->name, SEG_TYPE_NAME_RAID5_0))
 #define segtype_is_raid5_n(segtype)	(!strcmp((segtype)->name, SEG_TYPE_NAME_RAID5_N))
 #define segtype_is_any_raid6(segtype)	(!strncmp((segtype)->name, SEG_TYPE_NAME_RAID6, 5))
 #define segtype_is_raid6_ls_6(segtype)	(!strcmp((segtype)->name, SEG_TYPE_NAME_RAID6_LS_6))
 #define segtype_is_raid6_rs_6(segtype)	(!strcmp((segtype)->name, SEG_TYPE_NAME_RAID6_RS_6))
 #define segtype_is_raid6_la_6(segtype)	(!strcmp((segtype)->name, SEG_TYPE_NAME_RAID6_LA_6))
 #define segtype_is_raid6_ra_6(segtype)	(!strcmp((segtype)->name, SEG_TYPE_NAME_RAID6_RA_6))
-#define segtype_is_raid6_0_6(segtype)	(!strcmp((segtype)->name, SEG_TYPE_NAME_RAID6_0_6))
 #define segtype_is_raid6_n_6(segtype)	(!strcmp((segtype)->name, SEG_TYPE_NAME_RAID6_N_6))
 #define segtype_is_striped_raid(segtype)	(segtype_is_raid(segtype) && !segtype_is_raid1(segtype))
 
@@ -227,7 +223,6 @@ int init_raid_segtypes(struct cmd_context *cmd, struct segtype_library *seglib);
 #define seg_is_raid6_rs_6(seg)		segtype_is_raid6_rs_6((seg)->segtype)
 #define seg_is_raid6_la_6(seg)		segtype_is_raid6_la_6((seg)->segtype)
 #define seg_is_raid6_ra_6(seg)		segtype_is_raid6_ra_6((seg)->segtype)
-#define seg_is_raid6_0_6(seg)		segtype_is_raid6_0_6((seg)->segtype)
 #define seg_is_raid6_n_6(seg)		segtype_is_raid6_n_6((seg)->segtype)
 #define seg_is_striped_raid(seg)	segtype_is_striped_raid((seg)->segtype)
 

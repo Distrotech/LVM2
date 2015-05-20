@@ -1304,7 +1304,7 @@ static int _lv_alloc_reshape_space(struct logical_volume *lv,
 				   struct dm_list *allocate_pvs)
 {
 	/* Reshape LEs per disk minimum one MiB for now... */
-	uint32_t out_of_place_les_per_disk = max(2048 / (unsigned long long) lv->vg->extent_size, 1);
+	uint32_t out_of_place_les_per_disk = max(2048ULL / (unsigned long long) lv->vg->extent_size, 1ULL);
 	uint64_t data_offset, dev_sectors;
 	struct lv_segment *seg = first_seg(lv);
 
@@ -1348,19 +1348,23 @@ PFLA("data_offset=%llu dev_sectors=%llu seg->reshape_len=%u out_of_place_les_per
 		seg->reshape_len = reshape_len;
 	}
 
+	seg->data_offset = 0;
+
 	/*
 	 * Handle reshape space relocation
 	 */
 	switch (where) {
 	case alloc_begin:
 		/* Kernel says we have it at the end -> relocate it to the begin */
-		if (!data_offset && !_relocate_reshape_space(lv, 0))
+		if (!data_offset &&
+		    !_relocate_reshape_space(lv, 0))
 			return_0;
 		break;
 
 	case alloc_end:
 		/* Kernel says we have it at the beginning -> relocate it to the end */
-		if (data_offset && !_relocate_reshape_space(lv, 1))
+		if (data_offset &&
+		    !_relocate_reshape_space(lv, 1))
 			return_0;
 		break;
 
@@ -1369,11 +1373,11 @@ PFLA("data_offset=%llu dev_sectors=%llu seg->reshape_len=%u out_of_place_les_per
 		break;
 
 	default:
-		log_error(INTERNAL_ERROR, "Bogus reshape space allocation request");
+		log_error(INTERNAL_ERROR "Bogus reshape space allocation request");
 		return 0;
 	}
 
-	/* Inform kernel about the reshape lenght in sectors */
+	/* Inform kernel about the reshape length in sectors */
 	seg->data_offset = _reshape_les_per_dev(seg) * lv->vg->extent_size;
 
 	/* At least try merging segments */
@@ -1475,6 +1479,7 @@ static int _convert_linear_to_raid(struct logical_volume *lv)
 {
 	struct lv_segment *seg = first_seg(lv);
 	uint32_t region_size = seg->region_size;
+	uint32_t stripe_size = seg->stripe_size;
 
 	if (!_insert_raid_layer_for_lv(lv, "_rimage_0", 0))
 		return 0;
@@ -1483,6 +1488,7 @@ static int _convert_linear_to_raid(struct logical_volume *lv)
 	seg = first_seg(lv);
 	seg_lv(seg, 0)->status |= RAID_IMAGE | LVM_READ | LVM_WRITE;
 	seg->region_size = region_size;
+	seg->stripe_size = stripe_size;
 	_check_and_init_region_size(lv);
 
 	return 1;
@@ -1786,8 +1792,8 @@ PFLA("lv->le_count=%u data_rimages=%u plus_extents=%u", lv->le_count, _data_rima
 		seg->area_len += plus_extents;
 		seg->reshape_len = seg->reshape_len / _data_rimages_count(seg, old_count) *
 						      _data_rimages_count(seg, new_count);
-		if (old_count == 2)
-			seg->stripe_size = 64 * 2;
+		if (old_count == 2 && !seg->stripe_size)
+			seg->stripe_size = DEFAULT_STRIPESIZE;
 PFLA("lv->le_count=%u", lv->le_count);
 	}
 
@@ -2061,8 +2067,6 @@ PFLA("lv->le_count=%u data_rimages=%u minus_extents=%u", lv->le_count, _data_rim
 		seg->area_len -= minus_extents;
 		seg->reshape_len = seg->reshape_len / _data_rimages_count(seg, old_count) *
 						      _data_rimages_count(seg, new_count);
-		if (new_count == 2)
-			seg->stripe_size = 0;
 PFLA("lv->le_count=%u", lv->le_count);
 	}
 
@@ -2208,6 +2212,7 @@ PFLA("segtype=%s old_count=%u new_count=%u", segtype->name, old_count, new_count
 	/* Check for maximum supported raid devices */
 	if (!_check_maximum_devices(new_count))
 		return 0;
+
 	/*
 	 * LV must be either in-active or exclusively active
 	 */
@@ -2827,6 +2832,7 @@ static int _convert_striped_to_raid0(struct logical_volume *lv,
 
 	/* Allocate new top-level LV segment using credentials of first ne data lv for stripe_size... */
 	data_lv_seg = first_seg(dm_list_item(dm_list_first(&new_data_lvs), struct lv_list)->lv);
+	data_lv_seg->stripe_size = seg->stripe_size;
 	if (!_striped_to_raid0_alloc_raid0_segment(lv, area_count, data_lv_seg)) {
 		log_error("Failed to allocate new raid0 segement for LV %s/%s.", lv->vg->name, lv->name);
 		return_0;
@@ -3494,7 +3500,7 @@ static int _raid_level_down(struct logical_volume *lv,
 #define	ARRAY_SIZE(a) (sizeof(a) / sizeof(*a))
 struct possible_type {
 	const char *current_type;
-	const char *possible_types[14];
+	const char *possible_types[13];
 };
 static const struct segment_type *_adjust_segtype(struct logical_volume *lv,
 						  const struct segment_type *segtype,
@@ -3530,47 +3536,39 @@ static const struct segment_type *_adjust_segtype(struct logical_volume *lv,
 				      SEG_TYPE_NAME_RAID6_N_6,  NULL } },
 		{ .current_type = SEG_TYPE_NAME_RAID5,
 		  .possible_types = { SEG_TYPE_NAME_RAID1,
-				      SEG_TYPE_NAME_RAID5_0,  SEG_TYPE_NAME_RAID5_N,
+				      SEG_TYPE_NAME_RAID5_N,
 				      SEG_TYPE_NAME_RAID5_LS, SEG_TYPE_NAME_RAID5_RS,
 				      SEG_TYPE_NAME_RAID5_LA, SEG_TYPE_NAME_RAID5_RA,
 				      SEG_TYPE_NAME_RAID6_LS_6, NULL } },
 		{ .current_type = SEG_TYPE_NAME_RAID5_LS,
 		  .possible_types = { SEG_TYPE_NAME_RAID1,
-				      SEG_TYPE_NAME_RAID5,    SEG_TYPE_NAME_RAID5_0,  SEG_TYPE_NAME_RAID5_N,
+				      SEG_TYPE_NAME_RAID5,    SEG_TYPE_NAME_RAID5_N,
 							      SEG_TYPE_NAME_RAID5_RS,
 				      SEG_TYPE_NAME_RAID5_LA, SEG_TYPE_NAME_RAID5_RA,
 		                      SEG_TYPE_NAME_RAID6_LS_6, NULL } },
 		{ .current_type = SEG_TYPE_NAME_RAID5_RS,
 		  .possible_types = { SEG_TYPE_NAME_RAID1,
-		  		      SEG_TYPE_NAME_RAID5,     SEG_TYPE_NAME_RAID5_0,  SEG_TYPE_NAME_RAID5_N,
+		  		      SEG_TYPE_NAME_RAID5,     SEG_TYPE_NAME_RAID5_N,
 				      SEG_TYPE_NAME_RAID5_LS, 
 				      SEG_TYPE_NAME_RAID5_LA,  SEG_TYPE_NAME_RAID5_RA,
 		                      SEG_TYPE_NAME_RAID6_RS_6, NULL } },
 		{ .current_type = SEG_TYPE_NAME_RAID5_LA,
 		  .possible_types = { SEG_TYPE_NAME_RAID1,
-				      SEG_TYPE_NAME_RAID5,    SEG_TYPE_NAME_RAID5_0,  SEG_TYPE_NAME_RAID5_N,
+				      SEG_TYPE_NAME_RAID5,    SEG_TYPE_NAME_RAID5_N,
 				      SEG_TYPE_NAME_RAID5_LS, SEG_TYPE_NAME_RAID5_RS,
 							      SEG_TYPE_NAME_RAID5_RA,
 		                      SEG_TYPE_NAME_RAID6_LA_6, NULL } },
 		{ .current_type = SEG_TYPE_NAME_RAID5_RA,
 		  .possible_types = { SEG_TYPE_NAME_RAID1,
-				      SEG_TYPE_NAME_RAID5,    SEG_TYPE_NAME_RAID5_0,  SEG_TYPE_NAME_RAID5_N,
+				      SEG_TYPE_NAME_RAID5,    SEG_TYPE_NAME_RAID5_N,
 				      SEG_TYPE_NAME_RAID5_LS, SEG_TYPE_NAME_RAID5_RS,
 				      SEG_TYPE_NAME_RAID5_LA,
 		                      SEG_TYPE_NAME_RAID6_RA_6, NULL } },
-		{ .current_type = SEG_TYPE_NAME_RAID5_0,
-		  .possible_types = { SEG_TYPE_NAME_RAID1,
-				      SEG_TYPE_NAME_RAID4,
-				      SEG_TYPE_NAME_RAID5,     SEG_TYPE_NAME_RAID5_N,
-				      SEG_TYPE_NAME_RAID5_LS,  SEG_TYPE_NAME_RAID5_RS,
-				      SEG_TYPE_NAME_RAID5_LA,  SEG_TYPE_NAME_RAID5_RA,
-				      SEG_TYPE_NAME_RAID6_0_6, NULL } },
 		{ .current_type = SEG_TYPE_NAME_RAID5_N,
 		  .possible_types = { SEG_TYPE_NAME_LINEAR,    SEG_TYPE_NAME_STRIPED,
 				      SEG_TYPE_NAME_RAID0,     SEG_TYPE_NAME_RAID0_META,
 				      SEG_TYPE_NAME_RAID1,
-				      SEG_TYPE_NAME_RAID4,
-				      SEG_TYPE_NAME_RAID5,     SEG_TYPE_NAME_RAID5_0,
+				      SEG_TYPE_NAME_RAID4,     SEG_TYPE_NAME_RAID5,
 				      SEG_TYPE_NAME_RAID5_LS,  SEG_TYPE_NAME_RAID5_RS,
 				      SEG_TYPE_NAME_RAID5_LA,  SEG_TYPE_NAME_RAID5_RA,
 				      SEG_TYPE_NAME_RAID6_N_6, NULL } },
@@ -3832,13 +3830,19 @@ int lv_raid_convert(struct logical_volume *lv,
 	struct lv_segment *seg = first_seg(lv);
 	const struct segment_type *final_segtype = NULL;
 	const struct segment_type *new_segtype_tmp = new_segtype;
-	const struct segment_type *raid0_segtype, *striped_segtype;
+	const struct segment_type *linear_segtype, *striped_segtype, *raid0_segtype, *raid1_segtype;
 	struct lvinfo info = { 0 };
+
+	if (!(linear_segtype = get_segtype_from_string(lv->vg->cmd, SEG_TYPE_NAME_LINEAR)))
+		return_0;
 
 	if (!(striped_segtype = get_segtype_from_string(lv->vg->cmd, SEG_TYPE_NAME_STRIPED)))
 		return_0;
 
 	if (!(raid0_segtype = get_segtype_from_string(lv->vg->cmd, SEG_TYPE_NAME_RAID0)))
+		return_0;
+
+	if (!(raid1_segtype = get_segtype_from_string(lv->vg->cmd, SEG_TYPE_NAME_RAID1)))
 		return_0;
 
 	if (!new_segtype) {
@@ -3891,8 +3895,11 @@ PFLA("new_image_count=%u new_stripes=%u seg->area_count=%u", new_image_count, ne
 	_seg_get_redundancy(seg->segtype, seg->area_count, &cur_redundancy);
 	_seg_get_redundancy(new_segtype, new_image_count = new_image_count ?: lv_raid_image_count(lv), &new_redundancy);
 
-	if (seg_is_raid1(seg) && new_image_count == 1)
-	    	new_segtype_tmp = striped_segtype;
+	if (((seg_is_raid4(seg) && seg->area_count == 2) ||
+	     (seg_is_any_raid5(seg) && seg->area_count == 2) ||
+	     seg_is_raid1(seg)) &&
+	   new_image_count == 1)
+	    	new_segtype_tmp = linear_segtype;
 
 	/*
 	 * In case of any resilience related conversion -> ask the user unless "-y/--yes" on command line
@@ -3906,7 +3913,7 @@ PFLA("cur_redundancy=%u new_redundancy=%u", cur_redundancy, new_redundancy);
 				 "resilience of %u disk failure%s",
 				 info.open_count ? " and open" : "", lv->vg->name, lv->name,
 				 seg->segtype != new_segtype_tmp ? "from " : "",
-				 seg->segtype != new_segtype_tmp ? _get_segtype_name(seg->segtype, new_image_count) : "",
+				 seg->segtype != new_segtype_tmp ? _get_segtype_name(seg->segtype, seg->area_count) : "",
 				 seg->segtype != new_segtype_tmp ? " to " : "",
 				 seg->segtype != new_segtype_tmp ? _get_segtype_name(new_segtype_tmp, new_image_count) : "",
 				 cur_redundancy,
@@ -3920,7 +3927,7 @@ PFLA("cur_redundancy=%u new_redundancy=%u", cur_redundancy, new_redundancy);
 			 "resilience from %u disk failure%s to %u",
 			 info.open_count ? " and open" : "", lv->vg->name, lv->name,
 			 seg->segtype != new_segtype_tmp ? "from " : "",
-			 seg->segtype != new_segtype_tmp ? _get_segtype_name(seg->segtype, new_image_count) : "",
+			 seg->segtype != new_segtype_tmp ? _get_segtype_name(seg->segtype, seg->area_count) : "",
 			 seg->segtype != new_segtype_tmp ? " to " : "",
 			 seg->segtype != new_segtype_tmp ? _get_segtype_name(new_segtype_tmp, new_image_count) : "",
 			 cur_redundancy,
@@ -3933,7 +3940,7 @@ PFLA("cur_redundancy=%u new_redundancy=%u", cur_redundancy, new_redundancy);
 			 "resilience from %u disk failures to just %u",
 			 info.open_count ? " and open" : "", lv->vg->name, lv->name,
 			 seg->segtype != new_segtype_tmp ? "from " : "",
-			 seg->segtype != new_segtype_tmp ? _get_segtype_name(seg->segtype, new_image_count) : "",
+			 seg->segtype != new_segtype_tmp ? _get_segtype_name(seg->segtype, seg->area_count) : "",
 			 seg->segtype != new_segtype_tmp ? " to " : "",
 			 seg->segtype != new_segtype_tmp ? _get_segtype_name(new_segtype_tmp, new_image_count) : "",
 			 cur_redundancy, new_redundancy);
@@ -3942,16 +3949,19 @@ PFLA("cur_redundancy=%u new_redundancy=%u", cur_redundancy, new_redundancy);
 		log_warn("WARNING: Converting active%s %s/%s from %s to %s will loose "
 			 "all resilience to %u disk failure%s",
 			 info.open_count ? " and open" : "", lv->vg->name, lv->name,
-			 _get_segtype_name(seg->segtype, new_image_count),
+			 _get_segtype_name(seg->segtype, seg->area_count),
 			 _get_segtype_name(new_segtype_tmp, new_image_count),
 			 cur_redundancy, cur_redundancy > 1 ? "s" : "");
 
 	else
 		y = 1;
 
+	if (seg_is_linear(seg) && new_image_count == 2)
+	    	new_segtype_tmp = raid1_segtype;
+
 	if (!y && yes_no_prompt("Do you really want to convert %s/%s with type %s to %s? [y/n]: ",
 				lv->vg->name, lv->name,
-				_get_segtype_name(seg->segtype, new_image_count),
+				_get_segtype_name(seg->segtype, seg->area_count),
 				_get_segtype_name(new_segtype_tmp, new_image_count)) == 'n') {
 		log_error("Logical volume %s/%s NOT converted", lv->vg->name, lv->name);
 		return 0;
@@ -3959,11 +3969,12 @@ PFLA("cur_redundancy=%u new_redundancy=%u", cur_redundancy, new_redundancy);
 	if (sigint_caught())
 		return_0;
 
-
 	/* Now archive after the user has confirmed */
 	if (!archive(lv->vg))
 		return_0;
 
+
+	new_segtype = new_segtype_tmp;
 
 PFLA("seg_is_linear(seg)=%d", seg_is_linear(seg));
 	/*
@@ -4039,15 +4050,19 @@ PFL();
 		   segtype_is_linear(new_segtype))
 		goto err;
 
+	if (!seg->stripe_size)
+		seg->stripe_size = new_stripe_size ?: DEFAULT_STRIPESIZE;
+
 	if (convert) {
 		if ((segtype_is_raid0(new_segtype) || segtype_is_raid1(new_segtype)) && new_stripes) {
 			log_error("--stripes N incompatible with raid0/1");
 			return 0;
 		}
 
-PFLA("linear/raid1/4/5 new_image_count=%u", new_image_count);
+PFLA("linear/raid1/4/5 new_image_count=%u stripe_size=%u", new_image_count, seg->stripe_size);
 		return _lv_raid_change_image_count(lv, new_segtype, new_image_count, allocate_pvs);
 	}
+
 
 	/*
 	 * Mirror -> RAID1 conversion

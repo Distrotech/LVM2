@@ -130,7 +130,6 @@ enum _lv_type_name_enum {
 	LV_TYPE_RAID10,
 	LV_TYPE_RAID4,
 	LV_TYPE_RAID5,
-	LV_TYPE_RAID5_0,
 	LV_TYPE_RAID5_N,
 	LV_TYPE_RAID5_LA,
 	LV_TYPE_RAID5_RA,
@@ -144,7 +143,7 @@ enum _lv_type_name_enum {
 	LV_TYPE_RAID6_RA_6,
 	LV_TYPE_RAID6_LS_6,
 	LV_TYPE_RAID6_RS_6,
-	LV_TYPE_RAID6_0_6
+	LV_TYPE_RAID6_N_6,
 };
 
 static const char *_lv_type_names[] = {
@@ -183,7 +182,6 @@ static const char *_lv_type_names[] = {
 	[LV_TYPE_RAID10] =				SEG_TYPE_NAME_RAID10,
 	[LV_TYPE_RAID4] =				SEG_TYPE_NAME_RAID4,
 	[LV_TYPE_RAID5] =				SEG_TYPE_NAME_RAID5,
-	[LV_TYPE_RAID5_0] =				SEG_TYPE_NAME_RAID5_0,
 	[LV_TYPE_RAID5_N] =				SEG_TYPE_NAME_RAID5_N,
 	[LV_TYPE_RAID5_LA] =				SEG_TYPE_NAME_RAID5_LA,
 	[LV_TYPE_RAID5_RA] =				SEG_TYPE_NAME_RAID5_RA,
@@ -197,7 +195,7 @@ static const char *_lv_type_names[] = {
 	[LV_TYPE_RAID6_RA_6] =				SEG_TYPE_NAME_RAID6_RA_6,
 	[LV_TYPE_RAID6_LS_6] =				SEG_TYPE_NAME_RAID6_LS_6,
 	[LV_TYPE_RAID6_RS_6] =				SEG_TYPE_NAME_RAID6_RS_6,
-	[LV_TYPE_RAID6_0_6] =				SEG_TYPE_NAME_RAID6_0_6,
+	[LV_TYPE_RAID6_N_6] =				SEG_TYPE_NAME_RAID6_N_6,
 };
 
 static int _lv_layout_and_role_mirror(struct dm_pool *mem,
@@ -289,7 +287,7 @@ static int _lv_layout_and_role_raid(struct dm_pool *mem,
 	    !str_list_add_no_dup_check(mem, layout, _lv_type_names[LV_TYPE_RAID6]))
 		return 0;
 
-	for (t = LV_TYPE_RAID0; t <= LV_TYPE_RAID6_0_6; t++)
+	for (t = LV_TYPE_RAID0; t <= LV_TYPE_RAID6_N_6; t++)
 		if (!strcmp(segtype_name, _lv_type_names[t])) {
 			if (str_list_add_no_dup_check(mem, layout, _lv_type_names[t]))
 				break;

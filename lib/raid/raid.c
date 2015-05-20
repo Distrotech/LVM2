@@ -496,7 +496,6 @@ static const struct raid_type {
 	{ SEG_TYPE_NAME_RAID10,     0, SEG_AREAS_MIRRORED },
 	{ SEG_TYPE_NAME_RAID4,      1 },
 	{ SEG_TYPE_NAME_RAID5,      1 },
-	{ SEG_TYPE_NAME_RAID5_0,    1 },
 	{ SEG_TYPE_NAME_RAID5_N,    1 },
 	{ SEG_TYPE_NAME_RAID5_LA,   1 },
 	{ SEG_TYPE_NAME_RAID5_LS,   1 },
@@ -510,7 +509,6 @@ static const struct raid_type {
 	{ SEG_TYPE_NAME_RAID6_LS_6, 2 },
 	{ SEG_TYPE_NAME_RAID6_RA_6, 2 },
 	{ SEG_TYPE_NAME_RAID6_RS_6, 2 },
-	{ SEG_TYPE_NAME_RAID6_0_6,  2 },
 	{ SEG_TYPE_NAME_RAID6_N_6,  2 },
 };
 
