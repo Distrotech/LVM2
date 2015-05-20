@@ -2866,125 +2866,145 @@ static int _convert_striped_to_raid0(struct logical_volume *lv,
 
 /* BEGIN: raid0 -> striped conversion */
 
+/* HM Helper: walk the segment lvs of a segment @seg and find smallest area at offset @area_le */
+static uint32_t _smallest_segment_lvs_area(struct lv_segment *seg, uint32_t area_le)
+{
+	uint32_t r = ~0, s;
+
+	/* Find smallest segment of each of the data image lvs at offset area_le */
+	for (s = 0; s < seg->area_count; s++) {
+		struct lv_segment *seg1 = find_seg_by_le(seg_lv(seg, s), area_le);
+
+		r = min(r, seg1->le + seg1->len - area_le);
+	}
+
+	return r;
+}
+
+/* HM Helper: Split segments in segment LVs in all areas of @seg at offset @area_le) */
+static int _split_area_lvs_segments(struct lv_segment *seg, uint32_t area_le)
+{
+	uint32_t s;
+
+	/* Make sure that there's segments starting at area_le all data LVs */
+	if (area_le < seg_lv(seg, 0)->le_count)
+		for (s = 0; s < seg->area_count; s++)
+			if (!lv_split_segment(seg_lv(seg, s), area_le)) {
+				log_error(INTERNAL_ERROR "splitting data lv segment");
+				return_0;
+			}
+
+	return 1;
+}
+
+/* HM Helper: allocate a new striped segment and add it to list @new_segments */
+static int _alloc_new_striped_segment(struct logical_volume *lv,
+				      uint32_t le, uint32_t area_len,
+				      struct dm_list *new_segments)
+{
+	struct lv_segment *seg = first_seg(lv), *new_seg;
+	struct segment_type *striped_segtype;
+
+	if (!(striped_segtype = get_segtype_from_string(lv->vg->cmd, SEG_TYPE_NAME_STRIPED)))
+		return_0;
+
+	/* Allocate a segment with seg->area_count areas */
+	if (!(new_seg = alloc_lv_segment(striped_segtype, lv, le, area_len * seg->area_count,
+					 0 /* seg->reshape_len */, seg->status & ~RAID,
+					 seg->stripe_size, NULL, seg->area_count,
+					 area_len, seg->chunk_size, 0, 0, NULL)))
+		return_0;
+
+	dm_list_add(new_segments, &new_seg->list);
+
+	return 1;
+}
+
 /*
  * HM
  *
  * All areas from @lv image component LV's segments are
- * being moved to @new_segments allocated.
+ * being split at "striped" compatible boundaries and
+ * moved to @new_segments allocated.
+ *
  * The metadata+data component LVs are being mapped to an
- * error target and linked to @removal_lvs
+ * error target and linked to @removal_lvs for callers
+ * disposal.
  *
  * Returns: 1 on success, 0 on failure
  */
 static int _raid0_to_striped_retrieve_segments_and_lvs(struct logical_volume *lv,
 						       struct dm_list *removal_lvs)
 {
-	uint32_t s, area_le, area_len, l, le;
-	struct lv_segment *seg = first_seg(lv), *seg_from, *seg_to;
-	struct logical_volume *mlv, *dlv;
+	uint32_t s, area_le, area_len, le;
+	struct lv_segment *seg = first_seg(lv), *seg_to;
 	struct dm_list new_segments;
-	struct lv_list *lvl_array;
-	struct segment_type *striped_segtype;
+	struct lv_list *lvl_array, *lvl;
 
-	if (!(striped_segtype = get_segtype_from_string(lv->vg->cmd, SEG_TYPE_NAME_STRIPED)))
+	if (!(lvl_array = dm_pool_alloc(lv->vg->vgmem, 2 * seg->area_count * sizeof(*lvl_array))))
 		return_0;
 
 	dm_list_init(&new_segments);
-PFL();
-	if (!(lvl_array = dm_pool_alloc(lv->vg->vgmem, 2 * seg->area_count * sizeof(*lvl_array))))
-		return_0;
+
 	/*
-	 * Walk all segments of all data LVs to create the number
-	 * of segments we need and move mappings across,
+	 * Walk all segments of all data LVs splitting them up at proper boundaries
+	 * and create the number of new striped segments we need to move them across
 	 */
-	le = 0;
-	area_le = 0;
+	area_le = le = 0;
 	while (le < lv->le_count) {
-		area_len = ~0;
-
-		/* Find smallest segment of each of the data image lvs at offset area_le */
-		for (s = 0; s < seg->area_count; s++) {
-			dlv = seg_lv(seg, s);
-			seg_from = find_seg_by_le(dlv, area_le);
-			l = seg_from->le + seg_from->len - area_le;
-			if (l < area_len)
-				area_len = l;
-PFLA("are_len=%u l=%u", area_len, l);
-		}
-		/* area_len now holds the smallest one */
-#if 0
-		for (s = 0; s < seg->area_count; s++) {
-			dlv = seg_lv(seg, s);
-			if (!lv_split_segment(dlv, area_le)) {
-				log_error(INTERNAL_ERROR "splitting data lv segment");
-				return 0;
-			}
-		}
-
+		area_len = _smallest_segment_lvs_area(seg, area_le);
 		area_le += area_len;
+
+		if (!_split_area_lvs_segments(seg, area_le))
+			return 0;
+		if (!_alloc_new_striped_segment(lv, le, area_len, &new_segments))
+			return 0;
+
 		le += area_len * seg->area_count;
 	}
 
-	for (s = 0; s < seg->area_count; s++) {
-		dlv = seg_lv(seg, s);
-		dm_list_iterate_items_safe(seg_from, &dlv->segments)
-			dm_list_move();
-	}
-#endif
+	/* Now move the prepared split areas across to the new segments */
+	area_le = 0;
+	dm_list_iterate_items(seg_to, &new_segments) {
+		struct lv_segment *data_seg;
 
-		/* Allocate a segment with area_count areas */
-PFLA("seg->area_count=%u seg->stripe_size=%u", seg->area_count, seg->stripe_size);
-		if (!(seg_to = alloc_lv_segment(striped_segtype, lv, le, area_len * seg->area_count,
-						0 /* seg->reshape_len */,
-						seg->status & ~RAID,
-						seg->stripe_size, NULL, seg->area_count,
-						area_len, seg->chunk_size,
-						0, 0, NULL)))
-			return_0;
-
-		dm_list_add(&new_segments, &seg_to->list);
-		area_le += area_len;
-		le += area_len * seg->area_count;
-	}
-
-	/* Loop the new segments backwards and move partial areas across from the raid0 areas */
-	dm_list_iterate_back_items(seg_to, &new_segments) {
-		area_le -= seg_to->area_len;
-PFLA("area_le=%u", area_le);
 		for (s = 0; s < seg->area_count; s++) {
-PFLA("s=%u", s);
-			dlv = seg_lv(seg, s);
-PFLA("dlv->name=%s", dlv->name);
-			seg_from = find_seg_by_le(dlv, area_le);
-			if (!_raid_move_partial_lv_segment_area(seg_to, s, seg_from, 0, seg_to->area_len))
+			data_seg = find_seg_by_le(seg_lv(seg, s), area_le);
+
+			/* Move the respective area across to our new segments area */
+			if (!move_lv_segment_area(seg_to, s, data_seg, 0))
 				return_0;
 		}
-	}
-PFL();
 
-	/* Loop the areas and move the meta and data LVs across to @removal_lvs */
+		/* Presumes all data LVs have equal size */
+		area_le += data_seg->len;
+	}
+
+	/* Loop the areas and set any metadata LVs and all data LVs to error segments and remove them */
 	for (s = 0; s < seg->area_count; s++) {
 		/* If any metadata lvs -> remove them */
+		lvl = &lvl_array[seg->area_count + s];
 		if (seg->meta_areas &&
-		    (mlv = lvl_array[seg->area_count + s].lv = seg_metalv(seg, s))) {
-			dm_list_add(removal_lvs, &lvl_array[seg->area_count + s].list);
-			if (!_remove_and_set_error_target(mlv, seg))
+		    (lvl->lv = seg_metalv(seg, s))) {
+			dm_list_add(removal_lvs, &lvl->list);
+			if (!_remove_and_set_error_target(lvl->lv, seg))
 				return_0;
 		}
 
-		dlv = lvl_array[s].lv = seg_lv(seg, s);
-		dm_list_add(removal_lvs, &lvl_array[s].list);
 
-		if (!_remove_and_set_error_target(dlv, seg))
+		lvl = &lvl_array[s];
+		lvl->lv = seg_lv(seg, s);
+		dm_list_add(removal_lvs, &lvl->list);
+		if (!_remove_and_set_error_target(lvl->lv, seg))
 			return_0;
 	}
-PFL();
 
 	/*
 	 * Remove the one segment holding the image component areas
 	 * from the top-level LV and add the new segments to it
 	 */
 	dm_list_del(&seg->list);
+	dm_pool_free(lv->vg->vgmem, seg);
 	dm_list_splice(&lv->segments, &new_segments);
 
 	lv->status &= ~RAID;

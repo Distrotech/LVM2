@@ -242,7 +242,6 @@ PFL();
 		for (s = 0; s < seg->area_count; s++) {
 			uint64_t status = seg_lv(seg, s)->status;
 
-PFLA("lv=%s status=%X", seg_lv(seg, s)->name, status);
 			if (status & LV_REBUILD)
 				rebuilds[s/64] |= 1ULL << (s%64);
 
