@@ -1018,14 +1018,12 @@ int lvmetad_pvscan_all_devs(struct cmd_context *cmd, activation_handler handler)
 	was_silent = silent_mode();
 	init_silent(1);
 
-PFL();
 	while ((dev = dev_iter_get(iter))) {
 		if (sigint_caught()) {
 			r = 0;
 			stack;
 			break;
 		}
-PFLA("dev=%s", dev->pvid);
 		if (!lvmetad_pvscan_single(cmd, dev, handler))
 			r = 0;
 	}

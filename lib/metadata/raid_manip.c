@@ -1303,13 +1303,10 @@ static int _lv_alloc_reshape_space(struct logical_volume *lv,
 				   enum alloc_where where,
 				   struct dm_list *allocate_pvs)
 {
-	/* FIXME: les per disk dynamic to better address small extent size? at least one MiB for now... */
-	uint32_t out_of_place_les_per_disk = 2048 / lv->vg->extent_size, reshape_len;
+	/* Reshape LEs per disk minimum one MiB for now... */
+	uint32_t out_of_place_les_per_disk = max(2048 / (unsigned long long) lv->vg->extent_size, 1);
 	uint64_t data_offset, dev_sectors;
 	struct lv_segment *seg = first_seg(lv);
-
-	if (!out_of_place_les_per_disk)
-		out_of_place_les_per_disk = 1;
 
 	/* Get data_offset and dev_sectors from the kernel */
 	if (!lv_raid_offset_and_sectors(lv, &data_offset, &dev_sectors)) {
@@ -1318,7 +1315,6 @@ static int _lv_alloc_reshape_space(struct logical_volume *lv,
 		return 0;
 	}
 PFLA("data_offset=%llu dev_sectors=%llu seg->reshape_len=%u out_of_place_les_per_disk=%u lv->le_count=%u", (unsigned long long) data_offset, (unsigned long long) dev_sectors, seg->reshape_len, out_of_place_les_per_disk, lv->le_count);
-#if 1
 
 	/*
 	 * If dev_sectors is 0, we are running on a pre-1.8.0 dm-raid target
@@ -1337,8 +1333,9 @@ PFLA("data_offset=%llu dev_sectors=%llu seg->reshape_len=%u out_of_place_les_per
 	 * is accounting for the data rimages so that unchanged
 	 * lv_extend()/lv_reduce() can be used to allocate/free
 	 */
-	reshape_len = out_of_place_les_per_disk * _data_rimages_count(seg, seg->area_count);
 	if (!seg->reshape_len) {
+		uint32_t reshape_len = out_of_place_les_per_disk * _data_rimages_count(seg, seg->area_count);
+
 		if (!lv_extend(lv, seg->segtype,
 				_data_rimages_count(seg, seg->area_count),
 				seg->stripe_size,
@@ -1351,44 +1348,35 @@ PFLA("data_offset=%llu dev_sectors=%llu seg->reshape_len=%u out_of_place_les_per
 		seg->reshape_len = reshape_len;
 	}
 
-PFLA("lv->le_count=%u", lv->le_count);
-
 	/*
-	 * If we need space at the beginning and don't have it -> shift it
+	 * Handle reshape space relocation
 	 */
-	if (where == alloc_begin && !data_offset) {
-PFLA("Moving to begin%s", "");
-		/*
-		 * Move the reshape LEs of each stripe (i.e. the data image sub LVs)
-		 * in the last segments across to new segments inserted at the beginning
-		 * the whole segments if size fits
-		 */
-		if (!_relocate_reshape_space(lv, 0))
+	switch (where) {
+	case alloc_begin:
+		/* Kernel says we have it at the end -> relocate it to the begin */
+		if (!data_offset && !_relocate_reshape_space(lv, 0))
 			return_0;
+		break;
+
+	case alloc_end:
+		/* Kernel says we have it at the beginning -> relocate it to the end */
+		if (data_offset && !_relocate_reshape_space(lv, 1))
+			return_0;
+		break;
+
+	case alloc_anywhere:
+		/* We don't care were the space is */
+		break;
+
+	default:
+		log_error(INTERNAL_ERROR, "Bogus reshape space allocation request");
+		return 0;
 	}
 
-	/*
-	 * If we need space at the end don't have it -> shift it
-	 */
-	if (where == alloc_end && data_offset) {
-PFLA("Moving to end%s", "");
-		/*
-		 * Move the rest of the LEs of each stripe (i.e. the data image sub LVs)
-		 * in the first segments across to new segments or move the whole segments
-		 * if size fits
-		 */
-		if (!_relocate_reshape_space(lv, 1))
-			return_0;
-	}
+	/* Inform kernel about the reshape lenght in sectors */
+	seg->data_offset = _reshape_les_per_dev(seg) * lv->vg->extent_size;
 
-	/* Set data offset only on allocation, not on reshape space removal */
-	if (allocate_pvs)
-		seg->data_offset = _reshape_les_per_dev(seg) * lv->vg->extent_size;
-	else
-		seg->data_offset = 0;
-
-#endif
-	/* Try merging segments */
+	/* At least try merging segments */
 	return lv_merge_segments(lv);
 }
 
@@ -1790,7 +1778,7 @@ PFL();
 			seg_lv(seg, s)->status |= LV_RESHAPE_DELTA_DISKS_PLUS;
 		}
 PFL();
-		/* Reshape adding image component pairs -> change size accordingly */
+		/* Reshape adding image component pairs -> change sizes accordingly */
 PFLA("lv->le_count=%u data_rimages=%u plus_extents=%u", lv->le_count, _data_rimages_count(seg, old_count), plus_extents);
 		lv->le_count += plus_extents;
 		lv->size = lv->le_count * lv->vg->extent_size;
@@ -1798,7 +1786,8 @@ PFLA("lv->le_count=%u data_rimages=%u plus_extents=%u", lv->le_count, _data_rima
 		seg->area_len += plus_extents;
 		seg->reshape_len = seg->reshape_len / _data_rimages_count(seg, old_count) *
 						      _data_rimages_count(seg, new_count);
-		seg->stripe_size = seg->stripe_size ?: 64 * 2;
+		if (old_count == 2)
+			seg->stripe_size = 64 * 2;
 PFLA("lv->le_count=%u", lv->le_count);
 	}
 
@@ -1995,12 +1984,8 @@ static int _raid_remove_images(struct logical_volume *lv,
 	struct lv_segment *seg = first_seg(lv);
 	int reshape_disks = (seg_is_striped_raid(seg) && segtype && is_same_level(seg->segtype, segtype));
 	unsigned old_count = seg->area_count;
-	struct segment_type *raid1_segtype;
 	struct dm_list removal_list;
 	struct lv_list *lvl;
-
-	if (!(raid1_segtype = get_segtype_from_string(lv->vg->cmd, SEG_TYPE_NAME_RAID1)))
-		return_0;
 
 	/* HM FIXME: TESTME: allow to remove out-of-sync dedicated parity/Q syndrome devices */
 	if (seg_is_striped_raid(seg) &&
@@ -2065,7 +2050,7 @@ PFL();
 		seg->region_size = 0;
 
 PFL();
-	/* Reshape adding image component pairs -> change size accordingly */
+	/* Reshape adding image component pairs -> change sizes accordingly */
 	if (reshape_disks) {
 		uint32_t minus_extents = (old_count - new_count) * (lv->le_count / _data_rimages_count(seg, old_count));
 
@@ -2082,8 +2067,9 @@ PFLA("lv->le_count=%u", lv->le_count);
 	}
 
 	/* Convert to linear? */
-	if (segtype_is_linear(segtype)) { /* new_count == 1) { */
-		seg->segtype = raid1_segtype;
+	if (segtype_is_linear(segtype)) { /* new_count == 1 */
+		if (!(seg->segtype = get_segtype_from_string(lv->vg->cmd, SEG_TYPE_NAME_RAID1)))
+			return_0;
 
 		if (!_raid_remove_top_layer(lv, &removal_list)) {
 			log_error("Failed to remove RAID layer"
@@ -2092,7 +2078,8 @@ PFLA("lv->le_count=%u", lv->le_count);
 		}
 
 		lv->status &= ~(LV_NOTSYNCED | LV_WRITEMOSTLY);
-		first_seg(lv)->writebehind = 0;
+		seg->stripe_size = 0;
+		seg->writebehind = 0;
 	}
 
 PFL();
@@ -3207,7 +3194,7 @@ PFL();
 			return_0;
 
 		/*
-		 * Allocate free data image LVs space for forward out-of-place reshape
+		 * Allocate free forward out of place reshape space at the beginning of all data image LVs
 		 */
 		if (!_lv_alloc_reshape_space(lv, alloc_begin, allocate_pvs))
 			return 0;
@@ -3266,7 +3253,7 @@ PFLA("new_dev_count=%u _data_rimages_count(seg, new_dev_count)=%u new_len=%u", n
 				return_0;
 
 			/*
-			 * Allocate free data image LVs space for forward out-of-place reshape at the end
+			 * Allocate free backward out of place reshape space at the end of all data image LVs
 			 */
 			if (!_lv_alloc_reshape_space(lv, alloc_end, allocate_pvs))
 				return 0;
@@ -3375,7 +3362,6 @@ PFLA("segtype=%s old_count=%u new_count=%u", segtype->name, seg->area_count, new
 	/* Takeover raid4 <-> raid5_n */
 	if (new_count == seg->area_count) {
 PFL();
-
 		if (seg->area_count == 2 ||
 		    ((segtype_is_raid5_n(seg->segtype) && segtype_is_raid4(segtype)) ||
 		     (segtype_is_raid4(seg->segtype)   && segtype_is_raid5_n(segtype)))) {

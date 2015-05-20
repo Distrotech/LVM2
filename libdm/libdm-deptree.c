@@ -2079,10 +2079,8 @@ static int _emit_areas_line(struct dm_task *dmt __attribute__((unused)),
 	unsigned first_time = 1;
 	const char *logtype, *synctype;
 	unsigned log_parm_count;
-unsigned a = 1;
-PFLA("seg->area_count=%u", seg->area_count);
+
 	dm_list_iterate_items(area, &seg->areas) {
-PFLA("a=%u", a++);
 		switch (seg->type) {
 		case SEG_REPLICATOR_DEV:
 			if (!_build_dev_string(devbuf, sizeof(devbuf), area->dev_node))
@@ -2140,7 +2138,6 @@ PFLA("a=%u", a++);
 		case SEG_RAID6_RS_6:
 		case SEG_RAID6_0_6:
 		case SEG_RAID6_N_6:
-PFL();
 			if (!area->dev_node) {
 				EMIT_PARAMS(*pos, " -");
 				break;

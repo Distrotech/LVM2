@@ -1241,8 +1241,10 @@ static int _check_raid_parameters(struct volume_group *vg,
 	 */
 	if (!seg_is_mirrored(lp)) {
 		if (!arg_count(cmd, stripes_ARG) &&
-		    (devs > 2 * lp->segtype->parity_devs))
+		    (devs > 2 * lp->segtype->parity_devs)) {
 			lp->stripes = devs - lp->segtype->parity_devs;
+lp->stripes = 2; /* Or stripe bomb with many devs given */
+		}
 
 		if (!lp->stripe_size)
 			lp->stripe_size = find_config_tree_int(cmd, metadata_stripesize_CFG, NULL) * 2;
