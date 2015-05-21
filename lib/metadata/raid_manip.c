@@ -27,7 +27,8 @@
 #include "dump.h"
 #endif
 
-#if 1
+/* HM FIXME: REMOVEME: devel output */
+#ifdef USE_PFL
 #define PFL() printf("%s %u\n", __func__, __LINE__);
 #define PFLA(format, arg...) printf("%s %u " format "\n", __func__, __LINE__, arg);
 #else
