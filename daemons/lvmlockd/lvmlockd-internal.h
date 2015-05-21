@@ -82,7 +82,7 @@ struct client {
 	unsigned int recv : 1;
 	unsigned int dead : 1;
 	unsigned int poll_ignore : 1;
-	char name[MAX_NAME];
+	char name[MAX_NAME+1];
 };
 
 #define LD_AF_PERSISTENT           0x00000001
