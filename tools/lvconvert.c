@@ -1924,8 +1924,8 @@ static int _lvconvert_raid(struct logical_volume *lv, struct lvconvert_params *l
 		lp->segtype = seg->segtype;
 PFLA("stripes_ARG=%u stripes_long_ARG=%u", arg_count(lv->vg->cmd, stripes_ARG), arg_count(lv->vg->cmd, stripes_long_ARG));
 
-	/* FIXME: remove constraint on mirror/raid1 */
-	/* Can only change image count for raid1 and linear */
+	/* -mN can change image count for mirror/raid1 and linear (converting it to mirror/raid1) */
+	/* -m0 can change raid0 with one stripe and raid4/5 with 2 to linear */
 	if (arg_count(cmd, mirrors_ARG) &&
 	    !seg_is_linear(seg) &&
 	    !seg_is_mirrored(seg) &&
