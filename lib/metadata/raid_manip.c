@@ -623,6 +623,7 @@ static int _realloc_meta_and_data_seg_areas(struct logical_volume *lv, struct lv
 	        _realloc_seg_areas(lv, seg, areas, &seg->areas)) ? 1 : 0;
 }
 
+#if 0
 /*
  * HM
  *
@@ -653,6 +654,7 @@ static int _raid_move_partial_lv_segment_area(struct lv_segment *seg_to, uint32_
 
 	return 1;
 }
+#endif
 
 /*
  * _extract_image_component
@@ -1134,18 +1136,6 @@ PFL();
 	return 1;
 err:
 	alloc_destroy(ah);
-	return 0;
-}
-
-/* Cleanly remove newly-allocated LVs that failed insertion attempt */
-static int _remove_lvs(struct dm_list *lvs)
-{
-	struct lv_list *lvl;
-
-	dm_list_iterate_items(lvl, lvs)
-		if (!lv_remove(lvl->lv))
-			return_0;
-
 	return 0;
 }
 
@@ -1822,15 +1812,9 @@ PFL();
 fail:
 PFL();
 	/* Cleanly remove newly-allocated LVs that failed insertion attempt */
-#if 0
-	if (!_remove_lvs(&meta_lvs) ||
-	    !_remove_lvs(&data_lvs))
-		return_0;
-#else
 	if (!_eliminate_extracted_lvs(lv->vg, &meta_lvs) ||
 	    !_eliminate_extracted_lvs(lv->vg, &data_lvs))
 		return_0;
-#endif
 
 	return 0;
 }
@@ -3004,7 +2988,6 @@ static int _raid0_to_striped_retrieve_segments_and_lvs(struct logical_volume *lv
 	 * from the top-level LV and add the new segments to it
 	 */
 	dm_list_del(&seg->list);
-	dm_pool_free(lv->vg->vgmem, seg);
 	dm_list_splice(&lv->segments, &new_segments);
 
 	lv->status &= ~RAID;
@@ -3889,9 +3872,8 @@ int lv_raid_convert(struct logical_volume *lv,
 		goto err;
 	
 
-PFLA("new_image_count=%u new_stripes=%u new_segtype=%s", new_image_count, new_stripes, new_segtype->name);
+	/* Define new image count if not passed in */
 	new_image_count = new_image_count ?: seg->area_count;
-PFLA("new_image_count=%u new_stripes=%u seg->area_count=%u", new_image_count, new_stripes, seg->area_count);
 
 	/* @lv has to be active locally */
 	if (vg_is_clustered(lv->vg) && !lv_is_active_exclusive_locally(lv)) {
