@@ -265,6 +265,7 @@ static int unused_client_count;
 static int unused_resource_count;
 static int unused_lock_count;
 static int resource_lm_data_size; /* max size of lm_data from sanlock|dlm */
+static int alloc_new_structs; /* used for initializing in setup_structs */
 
 #define DO_STOP 1
 #define NO_STOP 0
@@ -395,7 +396,7 @@ static struct action *alloc_action(void)
 	struct action *act;
 
 	pthread_mutex_lock(&unused_struct_mutex);
-	if (!unused_action_count) {
+	if (!unused_action_count || alloc_new_structs) {
 		act = malloc(sizeof(struct action));
 	} else {
 		act = list_first_entry(&unused_action, struct action, list);
@@ -415,7 +416,7 @@ static struct client *alloc_client(void)
 	struct client *cl;
 
 	pthread_mutex_lock(&unused_struct_mutex);
-	if (!unused_client_count) {
+	if (!unused_client_count || alloc_new_structs) {
 		cl = malloc(sizeof(struct client));
 	} else {
 		cl = list_first_entry(&unused_client, struct client, list);
@@ -435,7 +436,7 @@ static struct resource *alloc_resource(void)
 	struct resource *r;
 
 	pthread_mutex_lock(&unused_struct_mutex);
-	if (!unused_resource_count) {
+	if (!unused_resource_count || alloc_new_structs) {
 		r = malloc(sizeof(struct resource) + resource_lm_data_size);
 	} else {
 		r = list_first_entry(&unused_resource, struct resource, list);
@@ -458,7 +459,7 @@ static struct lock *alloc_lock(void)
 	struct lock *lk;
 
 	pthread_mutex_lock(&unused_struct_mutex);
-	if (!unused_lock_count) {
+	if (!unused_lock_count || alloc_new_structs) {
 		lk = malloc(sizeof(struct lock));
 	} else {
 		lk = list_first_entry(&unused_lock, struct lock, list);
@@ -539,6 +540,13 @@ static int setup_structs(void)
 	INIT_LIST_HEAD(&unused_resource);
 	INIT_LIST_HEAD(&unused_lock);
 
+	/*
+	 * For setup, force the alloc_ functions to alloc new structs instead
+	 * of taking them unused.  This allows alloc_struct/free_struct loop to
+	 * populate the unused lists.
+	 */
+	alloc_new_structs = 1;
+
 	for (i = 0; i < MAX_UNUSED_ACTION/2; i++) {
 		if (!(act = alloc_action()))
 			goto fail;
@@ -562,8 +570,11 @@ static int setup_structs(void)
 			goto fail;
 		free_lock(lk);
 	}
+
+	alloc_new_structs = 0;
 	return 0;
 fail:
+	alloc_new_structs = 0;
 	return -ENOMEM;
 }
 
@@ -3633,6 +3644,21 @@ retry:
 	return 0;
 }
 
+static int print_structs(const char *prefix, int pos, int len)
+{
+	return snprintf(dump_buf + pos, len - pos,
+			"info=%s "
+			"unused_action_count=%d "
+			"unused_client_count=%d "
+			"unused_resource_count=%d "
+			"unused_lock_count=%d\n",
+			prefix,
+			unused_action_count,
+			unused_client_count,
+			unused_resource_count,
+			unused_lock_count);
+}
+
 static int print_client(struct client *cl, const char *prefix, int pos, int len)
 {
 	return snprintf(dump_buf + pos, len - pos,
@@ -3755,6 +3781,19 @@ static int dump_info(int *dump_len)
 	memset(dump_buf, 0, sizeof(dump_buf));
 	len = sizeof(dump_buf);
 	pos = 0;
+
+	/*
+	 * memory
+	 */
+
+	pthread_mutex_lock(&unused_struct_mutex);
+	ret = print_structs("structs", pos, len);
+	if (ret >= len - pos) {
+		pthread_mutex_unlock(&unused_struct_mutex);
+		return -ENOSPC;
+	}
+	pos += ret;
+	pthread_mutex_unlock(&unused_struct_mutex);
 
 	/*
 	 * clients

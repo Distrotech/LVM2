@@ -248,7 +248,10 @@ static void format_info_line(char *line)
 	char r_name[MAX_NAME+1];
 	char r_type[MAX_NAME+1];
 
-	if (!strncmp(line, "info=client ", strlen("info=client "))) {
+	if (!strncmp(line, "info=structs ", strlen("info=structs "))) {
+		printf("%s\n", line);
+
+	} else if (!strncmp(line, "info=client ", strlen("info=client "))) {
 		save_client_info(line);
 
 	} else if (!strncmp(line, "info=ls ", strlen("info=ls "))) {
