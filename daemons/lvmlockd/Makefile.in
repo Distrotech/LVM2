@@ -32,7 +32,7 @@ LVMLIBS = -ldaemonserver $(LVMINTERNAL_LIBS) -ldevmapper
 LIBS += $(PTHREAD_LIBS) -ldlm_lt -lsanlock_client
 
 LDFLAGS += -L$(top_builddir)/libdaemon/server
-CLDFLAGS += -L$(top_builddir)/libdaemon/server -D_GNU_SOURCE
+CLDFLAGS += -L$(top_builddir)/libdaemon/server
 
 lvmlockd: $(OBJECTS) $(top_builddir)/libdaemon/client/libdaemonclient.a \
 		    $(top_builddir)/libdaemon/server/libdaemonserver.a
