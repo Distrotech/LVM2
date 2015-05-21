@@ -10,6 +10,7 @@
 
 #define _XOPEN_SOURCE 500  /* pthread */
 #define _ISOC99_SOURCE
+#define _GNU_SOURCE
 
 #include <assert.h>
 #include <pthread.h>
