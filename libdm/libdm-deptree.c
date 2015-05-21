@@ -3334,7 +3334,7 @@ static unsigned _get_nr_fields(const char *p)
  * Versions 1.5.0+  (6 fields):
  *   <raid_type> <#devs> <health_str> <sync_ratio> <sync_action> <mismatch_cnt>
  * Versions 1.8.0+  (8 fields):
- *   <raid_type> <#devs> <health_str> <sync_ratio> <sync_action> <mismatch_cnt> <data_offset> <dev_sectors>
+ *   <raid_type> <#devs> <health_str> <sync_ratio> <sync_action> <mismatch_cnt> <data_offset>
  */
 int dm_get_status_raid(struct dm_pool *mem, const char *params,
 		       struct dm_status_raid **status)
@@ -3396,17 +3396,15 @@ int dm_get_status_raid(struct dm_pool *mem, const char *params,
 
 		/*
 		 * All pre-1.8.0 version parameters are read.  Now we check
-		 * for additional 1.8.0+ parameters (i.e. nr_fields at least 8).
+		 * for additional 1.8.0+ parameters (i.e. nr_fields at least 7).
 		 *
-		 * Note that data_offset and dev_sectors will be 0
-		 * if the kernel returns a pre-1.8.0 status with
-		 * dev_sectors being 0 indicating pre-1.8.0 status
-		 * to userspace. (data_offset being 0 does not!).
+		 * Note that data_offset will be 0 if the
+		 * kernel returns a pre-1.8.0 status.
 		 */
-		if (nr_fields >= 8) {
-			fields = "<data_offset> and <dev_sectors>";
+		if (nr_fields >= 7) {
+			fields = "<data_offset>";
 			p = _skip_fields(params, 6); /* skip pre-1.8.0 params */
-			if (sscanf(p, "%" PRIu64 " %" PRIu64, &s->data_offset, &s->dev_sectors) != 2)
+			if (sscanf(p, "%" PRIu64, &s->data_offset) != 1)
 				goto bad;
 		}
 	}

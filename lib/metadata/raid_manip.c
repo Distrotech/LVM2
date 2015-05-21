@@ -1308,16 +1308,6 @@ static int _lv_alloc_reshape_space(struct logical_volume *lv,
 PFLA("data_offset=%llu dev_sectors=%llu seg->reshape_len=%u out_of_place_les_per_disk=%u lv->le_count=%u", (unsigned long long) data_offset, (unsigned long long) dev_sectors, seg->reshape_len, out_of_place_les_per_disk, lv->le_count);
 
 	/*
-	 * If dev_sectors is 0, we are running on a pre-1.8.0 dm-raid target
-	 *
-	 * -> reshape is not supported
-	 */
-	if (!dev_sectors) {
-		log_error("dm-raid target does not support reshaping");
-		return 0;
-	}
-
-	/*
 	 * Check if we have reshape space allocated or extend the LV to have it
 	 *
 	 * fist_seg(lv)->reshape_len (only segment of top level raid LV)
@@ -3824,6 +3814,33 @@ static void _seg_get_redundancy(const struct segment_type *segtype, unsigned tot
  *
  * Returns: 1 on success, 0 on failure
  */
+/*
+ * [18:42] <lvmguy> agk: what has to be changed when getting "Performing unsafe table load while..."
+ * [18:50] <agk> Ah, that depends on the context
+ * [18:51] <agk> as you're doing something new, we need to look at the trace and work out what to do
+ * [18:51] <agk> What it means is:
+ * [18:52] <agk>    if a device is suspended, i/o might get blocked and you might be unable to allocate memory
+ * [18:52] <agk>    doing a table load needs memory
+ * [18:52] <agk> So if you have suspend + load, then you could get deadlock
+ * [18:52] <agk> and it's warning about that 
+ * [18:52] <agk> but not every situation is like that - there are false positives
+ * [18:53] <agk> So get the -vvvv trace from the command, then grep out the ioctls
+ * [18:53] <agk> and look at the sequence and see what is supended at the time of the load
+ * [18:54] <agk> IOW a suspend can cause a later table load to block - and it won't clear until you get a resume - but that resume depends on the load completing, which isn't going to happen
+ * [18:54] <lvmguy> I thought it was trying to prevent OOM. need analyze the details...
+ * [18:54] <agk> so the code normally does:   load, suspend, resume   in that order
+ * [18:54] <agk> never suspend, load, resume
+ * [18:55] <agk> but when you get complex operations all that dependency tree code tries to deal with this
+ * [18:56] <lvmguy> yep, the sequences I have to do look like they fall into this latter realm ;)
+ * [18:56] <agk> - it tries to sort all the operations on the various devices into a safe order in which to perform them
+ * [18:58] <agk> So normally, (1) get the actual list of operations it's performing.  (2) work out if there is an easy fix by performing them in a different order - if so, we work out how to change the code to do that (often needs hacks)
+ * [18:59] <agk>   - if not, then we look for an alternative strategy, usually by splitting operations into more than one step which can be done within the dependency rules
+ * [19:02] <lvmguy> let me figure out dependency details then we can discuss
+ * [19:03] <agk> - kabi is *very* familiar with fixing these sorts of problems:)
+ * [19:04] <agk>   - we had to go through it all for thin and cache
+ * [19:04] <agk> But so far, we've not yet hit a situation we couldn't solve
+ * [19:04] <lvmguy> k
+ * */
 int lv_raid_convert(struct logical_volume *lv,
 		    const struct segment_type *new_segtype,
 		    int yes, int force,

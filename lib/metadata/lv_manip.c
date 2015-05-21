@@ -1240,8 +1240,9 @@ PFLA("metadata LV = %s", lv->name);
 			seg_metalv(seg, area_num) = lv;
 			seg_metale(seg, area_num) = le;
 		}
-else
+else {
 PFLA("NO meta_areas!!! metadata LV = %s", lv->name);
+}
 	} else {
 		seg->areas[area_num].type = AREA_LV;
 		seg_lv(seg, area_num) = lv;

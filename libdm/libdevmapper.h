@@ -295,7 +295,6 @@ struct dm_status_raid {
 	char *dev_health;
 	char *sync_action;
 	uint64_t data_offset;
-	uint64_t dev_sectors;
 };
 
 int dm_get_status_raid(struct dm_pool *mem, const char *params,
