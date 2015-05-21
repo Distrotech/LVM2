@@ -3962,7 +3962,7 @@ static void client_recv_action(struct client *cl)
 
 	/* TODO: do this in hello message instead */
 	if (!cl->name[0] && cl_name)
-		strncpy(cl->name, cl_name, MAX_NAME-1);
+		strncpy(cl->name, cl_name, MAX_NAME);
 
 	if (!gl_use_dlm && !gl_use_sanlock && (lm > 0)) {
 		if (lm == LD_LM_DLM)
