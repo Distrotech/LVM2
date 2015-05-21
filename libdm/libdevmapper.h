@@ -1804,6 +1804,12 @@ int dm_report_field_string_list(struct dm_report *rh, struct dm_report_field *fi
 				const struct dm_list *data, const char *delimiter);
 int dm_report_field_string_list_unsorted(struct dm_report *rh, struct dm_report_field *field,
 					 const struct dm_list *data, const char *delimiter);
+int dm_report_field_string_list_decorated(struct dm_report *rh, struct dm_report_field *field,
+					  const struct dm_list *data, const char *delimiter,
+					  const char *prefix_list[], const char *suffix_list[]);
+int dm_report_field_string_list_unsorted_decorated(struct dm_report *rh, struct dm_report_field *field,
+						   const struct dm_list *data, const char *delimiter,
+						   const char *prefix_listp[], const char *suffix_list[]);
 int dm_report_field_int32(struct dm_report *rh, struct dm_report_field *field,
 			  const int32_t *data);
 int dm_report_field_uint32(struct dm_report *rh, struct dm_report_field *field,

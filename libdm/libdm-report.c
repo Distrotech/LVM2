@@ -327,6 +327,7 @@ int dm_report_field_percent(struct dm_report *rh,
 }
 
 struct str_list_sort_value_item {
+	unsigned rpos;
 	unsigned pos;
 	size_t len;
 };
@@ -338,6 +339,7 @@ struct str_list_sort_value {
 
 struct str_list_sort_item {
 	const char *str;
+	size_t str_len;
 	struct str_list_sort_value_item item;
 };
 
@@ -346,21 +348,66 @@ static int _str_list_sort_item_cmp(const void *a, const void *b)
 	const struct str_list_sort_item *slsi_a = (const struct str_list_sort_item *) a;
 	const struct str_list_sort_item *slsi_b = (const struct str_list_sort_item *) b;
 
-	return strcmp(slsi_a->str, slsi_b->str);
+	if (slsi_a->item.len == slsi_b->item.len)
+		return strncmp(slsi_a->str + slsi_a->item.rpos, slsi_b->str + slsi_b->item.rpos, slsi_a->item.len);
+
+	return slsi_a->item.len > slsi_b->item.len ? 1 : -1;
+}
+
+static void _set_str_list_sort_value_item(const char *item_str, unsigned offset,
+					  const char *prefix_list[], const char *suffix_list[],
+					  struct str_list_sort_value_item *item)
+{
+	const char **pprefix = prefix_list;
+	const char **psuffix = suffix_list;
+	size_t prefix_len, suffix_len;
+	size_t len = strlen(item_str);
+	const char *p_start, *p_end;
+
+	item->rpos = 0;
+	item->pos = offset;
+	item->len = len;
+
+	if (!prefix_list && !suffix_list)
+		return;
+
+	p_start = item_str;
+	p_end = item_str + len;
+
+	while (pprefix && *pprefix) {
+		prefix_len = strlen(*pprefix);
+		if (!strncmp(p_start, *pprefix, prefix_len))
+			p_start += prefix_len;
+		pprefix++;
+	}
+
+	while (psuffix && *psuffix) {
+		suffix_len = strlen(*psuffix);
+		if ((p_end - p_start >= suffix_len) &&
+		    !strncmp(p_end - suffix_len, *psuffix, suffix_len))
+			p_end -= suffix_len;
+		psuffix++;
+	}
+
+	item->rpos = p_start - item_str;
+	item->pos = item->rpos + offset;
+	item->len = p_end - p_start;
 }
 
 static int _report_field_string_list(struct dm_report *rh,
 				     struct dm_report_field *field,
 				     const struct dm_list *data,
 				     const char *delimiter,
-				     int sort)
+				     int sort,
+				     const char *prefix_list[],
+				     const char *suffix_list[])
 {
 	static const char _string_list_grow_object_failed_msg[] = "dm_report_field_string_list: dm_pool_grow_object_failed";
 	struct str_list_sort_value *sort_value = NULL;
 	unsigned int list_size, pos, i;
 	struct str_list_sort_item *arr = NULL;
 	struct dm_str_list *sl;
-	size_t delimiter_len, len;
+	size_t delimiter_len;
 	void *object;
 	int r = 0;
 
@@ -412,9 +459,10 @@ static int _report_field_string_list(struct dm_report *rh,
 			log_error("dm_report_field_string_list: dm_pool_strdup failed");
 			goto out;
 		}
-		sort_value->items[1].pos = 0;
-		sort_value->items[1].len = strlen(sl->str);
+
+		_set_str_list_sort_value_item(sl->str, 0, prefix_list, suffix_list, &sort_value->items[1]);
 		field->sort_value = sort_value;
+
 		return 1;
 	}
 
@@ -433,21 +481,22 @@ static int _report_field_string_list(struct dm_report *rh,
 		delimiter = ",";
 	delimiter_len = strlen(delimiter);
 
-	i = pos = len = 0;
+	i = pos = 0;
 	dm_list_iterate_items(sl, data) {
 		arr[i].str = sl->str;
+		arr[i].str_len = strlen(arr[i].str);
+
 		if (!sort) {
 			/* sorted outpud not required - report the list as it is */
-			len = strlen(sl->str);
-			if (!dm_pool_grow_object(rh->mem, arr[i].str, len) ||
+			if (!dm_pool_grow_object(rh->mem, arr[i].str, arr[i].str_len) ||
 			    (i+1 != list_size && !dm_pool_grow_object(rh->mem, delimiter, delimiter_len))) {
 				log_error(_string_list_grow_object_failed_msg);
 				goto out;
 			}
-			arr[i].item.pos = pos;
-			arr[i].item.len = len;
-			pos = i+1 == list_size ? pos+len : pos+len+delimiter_len;
 		}
+
+		_set_str_list_sort_value_item(arr[i].str, pos, prefix_list, suffix_list, &arr[i].item);
+		pos = i+1 == list_size ? pos+arr[i].str_len : pos+arr[i].str_len+delimiter_len;
 		i++;
 	}
 
@@ -456,8 +505,7 @@ static int _report_field_string_list(struct dm_report *rh,
 	for (i = 0, pos = 0; i < list_size; i++) {
 		if (sort) {
 			/* sorted output required - report the list as sorted */
-			len = strlen(arr[i].str);
-			if (!dm_pool_grow_object(rh->mem, arr[i].str, len) ||
+			if (!dm_pool_grow_object(rh->mem, arr[i].str, arr[i].str_len) ||
 			    (i+1 != list_size && !dm_pool_grow_object(rh->mem, delimiter, delimiter_len))) {
 				log_error(_string_list_grow_object_failed_msg);
 				goto out;
@@ -467,13 +515,10 @@ static int _report_field_string_list(struct dm_report *rh,
 			 * element in report_string for sort_value.
 			 * Use i+1 here since items[0] stores list size!!!
 			 */
-			sort_value->items[i+1].pos = pos;
-			sort_value->items[i+1].len = len;
-			pos = i+1 == list_size ? pos+len : pos+len+delimiter_len;
-		} else {
-			sort_value->items[i+1].pos = arr[i].item.pos;
-			sort_value->items[i+1].len = arr[i].item.len;
-		}
+			_set_str_list_sort_value_item(arr[i].str, pos, prefix_list, suffix_list, &sort_value->items[i+1]);
+			pos = i+1 == list_size ? pos+arr[i].str_len : pos+arr[i].str_len+delimiter_len;
+		} else
+			sort_value->items[i+1] = arr[i].item;
 	}
 
 	if (!dm_pool_grow_object(rh->mem, "\0", 1)) {
@@ -499,7 +544,7 @@ int dm_report_field_string_list(struct dm_report *rh,
 				const struct dm_list *data,
 				const char *delimiter)
 {
-	return _report_field_string_list(rh, field, data, delimiter, 1);
+	return _report_field_string_list(rh, field, data, delimiter, 1, NULL,  NULL);
 }
 
 int dm_report_field_string_list_unsorted(struct dm_report *rh,
@@ -512,7 +557,32 @@ int dm_report_field_string_list_unsorted(struct dm_report *rh,
 	 * Having the raw value always sorted helps when matching selection list
 	 * with selection criteria.
 	 */
-	return _report_field_string_list(rh, field, data, delimiter, 0);
+	return _report_field_string_list(rh, field, data, delimiter, 0, NULL, NULL);
+}
+
+int dm_report_field_string_list_decorated(struct dm_report *rh,
+					  struct dm_report_field *field,
+					  const struct dm_list *data,
+					  const char *delimiter,
+					  const char *prefix_list[],
+					  const char *suffix_list[])
+{
+	return _report_field_string_list(rh, field, data, delimiter, 1, prefix_list, suffix_list);
+}
+
+int dm_report_field_string_list_unsorted_decorated(struct dm_report *rh,
+						   struct dm_report_field *field,
+						   const struct dm_list *data,
+						   const char *delimiter,
+						   const char *prefix_list[],
+						   const char *suffix_list[])
+{
+	/*
+	 * The raw value is always sorted, just the string reported is unsorted.
+	 * Having the raw value always sorted helps when matching selection list
+	 * with selection criteria.
+	 */
+	return _report_field_string_list(rh, field, data, delimiter, 0, prefix_list, suffix_list);
 }
 
 int dm_report_field_int(struct dm_report *rh,

@@ -162,6 +162,15 @@ static int _field_set_string_list(struct dm_report *rh, struct dm_report_field *
 		      : dm_report_field_string_list_unsorted(rh, field, list, cmd->report_list_item_separator);
 }
 
+static int _field_set_string_list_decorated(struct dm_report *rh, struct dm_report_field *field,
+					    const struct dm_list *list, void *private, int sorted,
+					    const char *prefix_list[], const char *suffix_list[])
+{
+	struct cmd_context *cmd = (struct cmd_context *) private;
+	return sorted ? dm_report_field_string_list_decorated(rh, field, list, cmd->report_list_item_separator, prefix_list, suffix_list)
+		      : dm_report_field_string_list_unsorted_decorated(rh, field, list, cmd->report_list_item_separator, prefix_list, suffix_list);
+}
+
 /*
  * Data-munging functions to prepare each data type for display and sorting
  */

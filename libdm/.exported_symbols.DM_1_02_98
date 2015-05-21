@@ -1,1 +1,3 @@
 dm_task_get_errno
+dm_report_field_string_list_decorated
+dm_report_field_string_list_unsorted_decorated
