@@ -17,11 +17,11 @@
 
 /* Wrappers to open/close connection */
 
-static inline daemon_handle lvmlockd_open(const char *socket)
+static inline daemon_handle lvmlockd_open(const char *sock)
 {
 	daemon_info lvmlockd_info = {
 		.path = "lvmlockd",
-		.socket = socket ?: LVMLOCKD_SOCKET,
+		.socket = sock ?: LVMLOCKD_SOCKET,
 		.protocol = "lvmlockd",
 		.protocol_version = 1,
 		.autostart = 0
