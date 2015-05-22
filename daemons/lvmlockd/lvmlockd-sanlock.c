@@ -29,6 +29,7 @@
 #include "configure.h"
 #include "daemon-server.h"
 #include "daemon-log.h"
+#include "xlate.h"
 
 #include "lvmlockd-internal.h"
 #include "lvmlockd-client.h"
