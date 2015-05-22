@@ -138,6 +138,7 @@ struct resource {
 	unsigned int sh_count;		/* number of sh locks on locks list */
 	uint32_t version;
 	unsigned int lm_init : 1;	/* lm_data is initialized */
+	unsigned int adopt : 1;		/* temp flag in remove_inactive_lvs */
 	struct list_head locks;
 	struct list_head actions;
 	struct val_blk *vb;
