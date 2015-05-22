@@ -262,16 +262,31 @@ static int _tags_disp(struct dm_report *rh, struct dm_pool *mem,
 
 struct _str_list_append_baton {
 	struct dm_pool *mem;
+	const char *prefix;
+	const char *suffix;
 	struct dm_list *result;
 };
 
 static int _str_list_append(const char *line, void *baton)
 {
 	struct _str_list_append_baton *b = baton;
-	const char *line2 = dm_pool_strdup(b->mem, line);
+	char *line2;
+	size_t len;
 
-	if (!line2)
-		return_0;
+	if (!b->prefix && !b->suffix) {
+		if (!(line2 = dm_pool_strdup(b->mem, line)))
+			return_0;
+	} else {
+		len = ((b->prefix ? strlen(b->prefix) : 0) +
+		       strlen(line) +
+		       (b->suffix ? strlen(b->suffix) : 0) + 1);
+		if (!(line2 = dm_pool_alloc(b->mem, len)))
+			return_0;
+		dm_snprintf(line2, len, "%s%s%s",
+			    b->prefix ? b->prefix : "",
+			    line,
+			    b->suffix ? b->suffix : "");
+	}
 
 	if (!str_list_add(b->mem, b->result, line2))
 		return_0;
@@ -288,6 +303,8 @@ static int _cache_settings_disp(struct dm_report *rh, struct dm_pool *mem,
 	struct dm_list *result;
 	struct _str_list_append_baton baton;
 	struct dm_list dummy_list; /* dummy list to display "nothing" */
+
+	baton.prefix = baton.suffix = NULL;
 
 	if (seg_is_cache(seg))
 		seg = first_seg(seg->pool_lv);
@@ -642,12 +659,16 @@ static int _origin_disp(struct dm_report *rh, struct dm_pool *mem,
 	return _field_set_value(field, "", NULL);
 }
 
+#define REMOVED_LV_PREFIX "-"
+#define REMOVED_LV_SUFFIX ""
+
 static int _find_ancestors(struct _str_list_append_baton *ancestors,
 			   struct logical_volume *lv, int full)
 {
 	struct logical_volume *ancestor_lv = NULL;
 	struct lv_segment *seg;
 	struct dm_str_list *strl;
+	int r;
 
 	if (lv_is_cow(lv)) {
 		ancestor_lv = origin_from_cow(lv);
@@ -658,9 +679,14 @@ static int _find_ancestors(struct _str_list_append_baton *ancestors,
 		else if (seg->external_lv)
 			ancestor_lv = seg->external_lv;
 		else if (full) {
-			dm_list_iterate_items(strl, &seg->lv->removed_ancestor_lv_names)
-				if (!_str_list_append(strl->str, ancestors))
+			dm_list_iterate_items(strl, &seg->lv->removed_ancestor_lv_names) {
+				ancestors->prefix = REMOVED_LV_PREFIX;
+				ancestors->suffix = REMOVED_LV_SUFFIX;
+				r = _str_list_append(strl->str, ancestors);
+				ancestors->prefix = ancestors->suffix = NULL;
+				if (!r)
 					return_0;
+			}
 			if (seg->indirect_origin)
 				ancestor_lv = seg->indirect_origin;
 		}
@@ -684,6 +710,7 @@ static int _lvancestors_disp(struct dm_report *rh, struct dm_pool *mem,
 	struct _str_list_append_baton ancestors;
 
 	ancestors.mem = mem;
+	ancestors.prefix = ancestors.suffix = NULL;
 	if (!(ancestors.result = str_list_create(mem)))
 		return_0;
 
@@ -695,6 +722,9 @@ static int _lvancestors_disp(struct dm_report *rh, struct dm_pool *mem,
 	return _field_set_string_list(rh, field, ancestors.result, private, 0);
 }
 
+static const char *_lv_name_prefix_list[] = {REMOVED_LV_PREFIX, NULL};
+static const char *_lv_name_suffix_list[] = {REMOVED_LV_SUFFIX, NULL};
+
 static int _lvfullancestors_disp(struct dm_report *rh, struct dm_pool *mem,
 				 struct dm_report_field *field,
 				 const void *data, void *private)
@@ -703,6 +733,7 @@ static int _lvfullancestors_disp(struct dm_report *rh, struct dm_pool *mem,
 	struct _str_list_append_baton full_ancestors;
 
 	full_ancestors.mem = mem;
+	full_ancestors.prefix = full_ancestors.suffix = NULL;
 	if (!(full_ancestors.result = str_list_create(mem)))
 		return_0;
 
@@ -711,7 +742,8 @@ static int _lvfullancestors_disp(struct dm_report *rh, struct dm_pool *mem,
 		return_0;
 	}
 
-	return _field_set_string_list(rh, field, full_ancestors.result, private, 0);
+	return _field_set_string_list_decorated(rh, field, full_ancestors.result, private, 0,
+						_lv_name_prefix_list, _lv_name_suffix_list);
 }
 
 static int _find_descendants(struct _str_list_append_baton *descendants,
@@ -721,6 +753,7 @@ static int _find_descendants(struct _str_list_append_baton *descendants,
 	const struct seg_list *sl;
 	struct lv_segment *seg;
 	struct dm_str_list *strl;
+	int r;
 
 	if (lv_is_origin(lv)) {
 		dm_list_iterate_items_gen(seg, &lv->snapshot_segs, origin_list) {
@@ -758,9 +791,14 @@ static int _find_descendants(struct _str_list_append_baton *descendants,
 					descendant_lv = sl->seg->lv;
 
 				if (descendant_lv) {
-					dm_list_iterate_items(strl, &descendant_lv->removed_ancestor_lv_names)
-						if (!_str_list_append(strl->str, descendants))
+					dm_list_iterate_items(strl, &descendant_lv->removed_ancestor_lv_names) {
+						descendants->prefix = REMOVED_LV_PREFIX;
+						descendants->suffix = REMOVED_LV_SUFFIX;
+						r = _str_list_append(strl->str, descendants);
+						descendants->prefix = descendants->suffix = NULL;
+						if (!r)
 							return_0;
+					}
 					if (!_str_list_append(descendant_lv->name, descendants))
 						return_0;
 					if (!_find_descendants(descendants, descendant_lv, full))
@@ -781,6 +819,7 @@ static int _lvdescendants_disp(struct dm_report *rh, struct dm_pool *mem,
 	struct _str_list_append_baton descendants;
 
 	descendants.mem = mem;
+	descendants.prefix = descendants.suffix = NULL;
 	if (!(descendants.result = str_list_create(mem)))
 		return_0;
 
@@ -800,6 +839,7 @@ static int _lvfulldescendants_disp(struct dm_report *rh, struct dm_pool *mem,
 	struct _str_list_append_baton full_descendants;
 
 	full_descendants.mem = mem;
+	full_descendants.prefix = full_descendants.suffix = NULL;
 	if (!(full_descendants.result = str_list_create(mem)))
 		return_0;
 
@@ -808,7 +848,8 @@ static int _lvfulldescendants_disp(struct dm_report *rh, struct dm_pool *mem,
 		return_0;
 	}
 
-	return _field_set_string_list(rh, field, full_descendants.result, private, 0);
+	return _field_set_string_list_decorated(rh, field, full_descendants.result, private, 0,
+						_lv_name_prefix_list, _lv_name_suffix_list);
 }
 
 static int _movepv_disp(struct dm_report *rh, struct dm_pool *mem __attribute__((unused)),
