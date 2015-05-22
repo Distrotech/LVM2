@@ -27,11 +27,6 @@ static int gl_disable;
 static int stop_lockspaces;
 static char *able_vg_name;
 
-static int cmd_pipe[2];
-static int cmd_argc;
-static char *cmd_name;
-static char **cmd_argv;
-
 #define DUMP_SOCKET_NAME "lvmlockd-dump.sock"
 #define DUMP_BUF_SIZE (1024 * 1024)
 static char dump_buf[DUMP_BUF_SIZE];
@@ -519,7 +514,7 @@ static void print_usage(void)
 static int read_options(int argc, char *argv[])
 {
 	int option_index = 0;
-	int i, j, c, len;
+	int c;
 
 	static struct option long_options[] = {
 		{"help",            no_argument,       0,  'h' },
@@ -532,7 +527,6 @@ static int read_options(int argc, char *argv[])
 		{"gl-disable",      required_argument, 0,  'D' },
 		{"stop-lockspaces", no_argument,       0,  'S' },
 		{"sleep",           required_argument, 0,  's' },
-		{"command",         required_argument, 0,  'c' },
 		{0, 0, 0, 0 }
 	};
 
@@ -544,7 +538,7 @@ static int read_options(int argc, char *argv[])
 	*/
 
 	while (1) {
-		c = getopt_long(argc, argv, "hqidE:D:s:c:w:f:S", long_options, &option_index);
+		c = getopt_long(argc, argv, "hqidE:D:s:w:f:S", long_options, &option_index);
 		if (c == -1)
 			break;
 
@@ -579,103 +573,29 @@ static int read_options(int argc, char *argv[])
 		case 'S':
 			stop_lockspaces = 1;
 			break;
-		case 'c':
-			/* --command path args */
-			cmd_name = strdup(optarg);
-			break;
 		default:
 			print_usage();
 			exit(1);
 		}
-
-		if (cmd_name)
-			break;
 	}
 
-	if (cmd_name) {
-		/*
-		 * optind is the index in argv of the first argv element that
-		 * is not an option.
-		 */
-
-		cmd_argc = argc - optind + 1; /* +1 for cmd_name */
-
-		len = (cmd_argc + 1) * sizeof(char *); /* +1 for final NULL */
-		cmd_argv = malloc(len);
-		if (!cmd_argv)
-			return -ENOMEM;
-		memset(cmd_argv, 0, len);
-
-		j = 0;
-		cmd_argv[j++] = cmd_name;
-
-		for (i = optind; i < argc; i++) {
-			cmd_argv[j++] = strdup(argv[i]);
-			if (!cmd_argv[j-1])
-				return -ENOMEM;
-		}
-	}
 
 	return 0;
 }
 
-static void run_command(void)
-{
-	char go[1];
-	int rv;
-
-	while (1) {
-		/* wait for parent to tell us to go */
-		rv = read(cmd_pipe[0], go, 1);
-		if (rv == -1 && errno == EINTR)
-			continue;
-		if (rv == 1 && go[0] == 'g')
-			break;
-		else
-			exit(-1);
-	}
-
-	execv(cmd_name, cmd_argv);
-	log_error("execv failed");
-}
-
 int main(int argc, char **argv)
 {
-	int status;
-	int pid = 0;
 	int rv = 0;
 
 	rv = read_options(argc, argv);
 	if (rv < 0)
 		return rv;
 
-	/*
-	 * fork child for command before acquiring locks,
-	 * exec command in child after acquiring locks,
-	 * release locks after child exits.
-	 */
-
-	if (cmd_name) {
-		if (pipe(cmd_pipe)) {
-			log_error("pipe error");
-			return -1;
-		}
-		pid = fork();
-		if (pid < 0) {
-			log_error("cannot fork");
-			return -1;
-		}
-		if (!pid) {
-			run_command();
-			return -1;
-		}
-	}
-
 	_lvmlockd = lvmlockd_open(NULL);
 
 	if (_lvmlockd.socket_fd < 0 || _lvmlockd.error) {
 		log_error("lvmlockd open error %d", _lvmlockd.error);
-		goto out_pid;
+		return -1;
 	}
 
 	if (quit) {
@@ -708,20 +628,8 @@ int main(int argc, char **argv)
 		goto out;
 	}
 
-	if (pid) {
-		/* tell child to exec */
-		write(cmd_pipe[1], "g", 1);
-		waitpid(pid, &status, 0);
-		pid = 0;
-	}
 out:
 	lvmlockd_close(_lvmlockd);
-out_pid:
-	if (pid) {
-		kill(pid, SIGKILL);
-		waitpid(pid, &status, 0);
-	}
-
 	return rv;
 }
 
