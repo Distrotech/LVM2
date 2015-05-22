@@ -4304,7 +4304,6 @@ static int get_lockd_vgs(struct list_head *vg_lockd)
 	const char *vg_uuid;
 	const char *lock_type;
 	const char *lock_args;
-	const char *system_id;
 	char lv_lock_path[PATH_MAX];
 	int mutex_unlocked = 0;
 	int rv = 0;
@@ -4389,9 +4388,8 @@ static int get_lockd_vgs(struct list_head *vg_lockd)
 		if (lock_args)
 			strncpy(ls->vg_args, lock_args, MAX_ARGS);
 
-		system_id = dm_config_find_str(metadata, "metadata/system_id", NULL);
-		if (system_id)
-			strncpy(ls->vg_sysid, system_id, MAX_NAME);
+		log_debug("get_lockd_vgs %s lock_type %s lock_args %s",
+			  ls->vg_name, lock_type, lock_args ?: "none");
 
 		/*
 		 * Make a record (struct resource) of each lv that uses a lock.
@@ -4428,9 +4426,6 @@ static int get_lockd_vgs(struct list_head *vg_lockd)
  next:
 		daemon_reply_destroy(reply);
 
-		log_debug("get_lockd_vgs %s lock_type %s lock_args %s",
-			  ls->vg_name, lock_type, lock_args ?: "none");
-
 		if (rv < 0)
 			break;
 	}
@@ -4455,65 +4450,81 @@ out:
 }
 
 /*
- * For each lockd VG found in lvmetad, check if any
- * of it's LV's are active.  If there's a device node
- * for the LV in /dev/<vg>/ then we conclude it's active
- * and will go on to adopt a lock for it.
- * If not, then we don't need to adopt an LV lock for it
- * and remove the struct resource that represents the LV.
+ * All LVs with a lock_type are on ls->resources.
+ * Remove any that are not active.  The remaining
+ * will have locks adopted.
  */
-
-static int get_active_lvs(struct list_head *vg_lockd)
+static int remove_inactive_lvs(struct list_head *vg_lockd)
 {
 	struct lockspace *ls;
 	struct resource *r, *rsafe;
-	struct list_head tmp_resources;
-	char vg_dir_path[PATH_MAX];
-	struct dirent *de;
-	DIR *vg_dir;
+	struct dm_names *names;
+	struct dm_task *dmt;
+	char *vgname, *lvname, *layer;
+	unsigned next = 0;
+	int rv = 0;
 
-	INIT_LIST_HEAD(&tmp_resources);
+	if (!(dmt = dm_task_create(DM_DEVICE_LIST)))
+		return -1;
 
-	/* Get the subset of lockd vgs with active lvs. */
-
-	list_for_each_entry(ls, vg_lockd, list) {
-
-		/* Add these resources back as LV device nodes are found for them. */
-		list_for_each_entry_safe(r, rsafe, &ls->resources, list) {
-			list_del(&r->list);
-			list_add(&r->list, &tmp_resources);
-		}
-
-		snprintf(vg_dir_path, PATH_MAX-1, "/dev/%s/", ls->vg_name);
-
-		if ((vg_dir = opendir(vg_dir_path))) {
-			while ((de = readdir(vg_dir))) {
-				if (de->d_name[0] == '.')
-					continue;
-
-				/* put the struct resource back on the ls */
-				list_for_each_entry(r, &tmp_resources, list) {
-					if (strncmp(r->name, de->d_name, MAX_NAME))
-						continue;
-
-					log_debug("lockd vg %s has active lv %s", ls->vg_name, r->name);
-					list_del(&r->list);
-					list_add_tail(&r->list, &ls->resources);
-					break;
-				}
-			}
-			closedir(vg_dir);
-		}
-
-		/* Remove remaining tmp_resources for LVs that are not active. */
-		list_for_each_entry_safe(r, rsafe, &tmp_resources, list) {
-			log_debug("lockd vg %s ignore inactive lv %s", ls->vg_name, r->name);
-			list_del(&r->list);
-			free_resource(r);
-		}
+	if (!dm_task_run(dmt)) {
+		log_error("Failed to get dm devices");
+		rv = -1;
+		goto ret;
 	}
 
-	return 0;
+	if (!(names = dm_task_get_names(dmt))) {
+		log_error("Failed to get dm names");
+		rv = -1;
+		goto ret;
+	}
+
+	if (!names->dev)
+		goto out;
+
+	do {
+		names = (struct dm_names *)((char *) names + next);
+		vgname = NULL;
+		lvname = NULL;
+		layer = NULL;
+
+		dm_split_lvm_name(NULL, names->name, &vgname, &lvname, &layer);
+
+		if (!vgname || !lvname)
+			goto skip;
+
+		list_for_each_entry(ls, vg_lockd, list) {
+			if (strcmp(vgname, ls->vg_name))
+				continue;
+
+			list_for_each_entry(r, &ls->resources, list) {
+				if (strcmp(lvname, r->name))
+					continue;
+
+				/* Found an active LV in a lockd VG. */
+				log_debug("lockd vg %s has active lv %s", ls->vg_name, r->name);
+				r->adopt = 1;
+			}
+		}
+skip:
+		next = names->next;
+	} while (next);
+
+out:
+	/* Remove any struct resources that do not need locks adopted. */
+	list_for_each_entry(ls, vg_lockd, list) {
+		list_for_each_entry_safe(r, rsafe, &ls->resources, list) {
+			if (r->adopt) {
+				r->adopt = 0;
+			} else {
+				list_del(&r->list);
+				free_resource(r);
+			}
+		}
+	}
+ret:
+	dm_task_destroy(dmt);
+	return rv;
 }
 
 static void adopt_locks(void)
@@ -4558,11 +4569,21 @@ static void adopt_locks(void)
 		return;
 	}
 
+	/*
+	 * Adds a struct lockspace to vg_lockd for each lockd VG.
+	 * Adds a struct resource to ls->resources for each LV.
+	 */
 	rv = get_lockd_vgs(&vg_lockd);
 	if (rv < 0)
 		goto fail;
 
-	rv = get_active_lvs(&vg_lockd);
+	/*
+	 * For each resource on each lockspace, check if the
+	 * corresponding LV is active.  If so, leave the
+	 * resource struct, if not free the resource struct.
+	 * The remain entries need to have locks adopted.
+	 */
+	rv = remove_inactive_lvs(&vg_lockd);
 	if (rv < 0)
 		goto fail;
 
