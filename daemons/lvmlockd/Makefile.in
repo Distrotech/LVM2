@@ -29,7 +29,7 @@ include $(top_builddir)/make.tmpl
 INCLUDES += -I$(top_srcdir)/libdaemon/server
 LVMLIBS = -ldaemonserver $(LVMINTERNAL_LIBS) -ldevmapper
 
-LIBS += $(PTHREAD_LIBS) -ldlm_lt -lsanlock_client
+LIBS += $(PTHREAD_LIBS) -ldlm_lt -lsanlock_client -lrt
 
 LDFLAGS += -L$(top_builddir)/libdaemon/server
 CLDFLAGS += -L$(top_builddir)/libdaemon/server
