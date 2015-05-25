@@ -1356,6 +1356,9 @@ cfg(report_binary_values_as_numeric_CFG, "binary_values_as_numeric", report_CFG_
 	"(not counting the 'unknown' value which denotes that the\n"
 	"value could not be determined).\n")
 
+cfg(report_time_format_CFG, "time_format", report_CFG_SECTION, CFG_PROFILABLE, CFG_TYPE_STRING, DEFAULT_TIME_FORMAT, vsn(2, 2, 121), NULL, 0, NULL,
+        "Set time format for fields reporting time values.")
+
 cfg(report_devtypes_sort_CFG, "devtypes_sort", report_CFG_SECTION, CFG_PROFILABLE | CFG_DEFAULT_COMMENTED, CFG_TYPE_STRING, DEFAULT_DEVTYPES_SORT, vsn(2, 2, 101), NULL, 0, NULL,
 	"List of columns to sort by when reporting 'lvm devtypes' command.\n"
 	"See 'lvm devtypes -o help' for the list of possible fields.\n")

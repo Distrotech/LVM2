@@ -881,9 +881,7 @@ char *lv_time_dup(struct dm_pool *mem, const struct logical_volume *lv)
 
 	if (!ts ||
 	    !(local_tm = localtime(&ts)) ||
-	    /* FIXME: make this lvm.conf configurable */
-	    !strftime(buffer, sizeof(buffer),
-		      "%Y-%m-%d %T %z", local_tm))
+	    !strftime(buffer, sizeof(buffer), lv->vg->cmd->time_format, local_tm))
 		buffer[0] = 0;
 
 	return dm_pool_strdup(mem, buffer);
