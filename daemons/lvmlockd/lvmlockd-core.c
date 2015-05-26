@@ -4381,8 +4381,10 @@ static int get_lockd_vgs(struct list_head *vg_lockd)
 		lock_type = dm_config_find_str(metadata, "metadata/lock_type", NULL);
 		ls->lm_type = str_to_lm(lock_type);
 
-		if ((ls->lm_type != LD_LM_SANLOCK) && (ls->lm_type != LD_LM_DLM))
+		if ((ls->lm_type != LD_LM_SANLOCK) && (ls->lm_type != LD_LM_DLM)) {
+			log_debug("get_lockd_vgs %s not lockd type", ls->vg_name);
 			continue;
+		}
 
 		lock_args = dm_config_find_str(metadata, "metadata/lock_args", NULL);
 		if (lock_args)
@@ -4421,6 +4423,8 @@ static int get_lockd_vgs(struct list_head *vg_lockd)
 				if (lock_args)
 					strncpy(r->lv_args, lock_args, MAX_ARGS);
 				list_add_tail(&r->list, &ls->resources);
+				log_debug("get_lockd_vgs %s lv %s %s",
+					  ls->vg_name, r->name, lock_args ? lock_args : "");
 			}
 		}
  next:
@@ -4449,6 +4453,50 @@ out:
 	return rv;
 }
 
+static int is_lvm_device(char *name)
+{
+	struct dm_info info;
+	struct dm_task *dmt;
+	const char *uuid;
+	int rv = 0;
+
+	if (!(dmt = dm_task_create(DM_DEVICE_INFO)))
+		goto fail_out;
+
+	if (!dm_task_set_name(dmt, name))
+		goto fail;
+
+	if (!dm_task_run(dmt))
+		goto fail;
+
+	if (!dm_task_get_info(dmt, &info))
+		goto fail;
+
+	if (!info.exists)
+		goto fail;
+
+	uuid = dm_task_get_uuid(dmt);
+
+	if (!uuid)
+		goto fail;
+
+	if (!strncmp(uuid, "LVM", 3)) {
+		log_debug("dm device %s is from LVM", name);
+		rv = 1;
+	} else {
+		log_debug("dm device %s is not from LVM", name);
+	}
+
+	dm_task_destroy(dmt);
+	return rv;
+
+fail:
+	dm_task_destroy(dmt);
+fail_out:
+	log_error("Failed to get dm info about device %s", name);
+	return 0;
+}
+
 /*
  * All LVs with a lock_type are on ls->resources.
  * Remove any that are not active.  The remaining
@@ -4461,6 +4509,7 @@ static int remove_inactive_lvs(struct list_head *vg_lockd)
 	struct dm_names *names;
 	struct dm_task *dmt;
 	char *vgname, *lvname, *layer;
+	char namebuf[MAX_NAME+1];
 	unsigned next = 0;
 	int rv = 0;
 
@@ -4479,8 +4528,10 @@ static int remove_inactive_lvs(struct list_head *vg_lockd)
 		goto ret;
 	}
 
-	if (!names->dev)
+	if (!names->dev) {
+		log_debug("dm names none found");
 		goto out;
+	}
 
 	do {
 		names = (struct dm_names *)((char *) names + next);
@@ -4488,21 +4539,33 @@ static int remove_inactive_lvs(struct list_head *vg_lockd)
 		lvname = NULL;
 		layer = NULL;
 
-		dm_split_lvm_name(NULL, names->name, &vgname, &lvname, &layer);
+		memset(namebuf, 0, sizeof(namebuf));
+		strncpy(namebuf, names->name, MAX_NAME);
+		vgname = namebuf;
 
-		if (!vgname || !lvname)
+		dm_split_lvm_name(NULL, NULL, &vgname, &lvname, &layer);
+
+		if (!vgname || !lvname) {
+			log_debug("dm name %s invalid split vg %s lv %s layer %s",
+				  names->name, vgname ? vgname : "", lvname ? lvname : "", layer ? layer : "");
 			goto skip;
+		}
 
 		list_for_each_entry(ls, vg_lockd, list) {
 			if (strcmp(vgname, ls->vg_name))
 				continue;
 
+			log_debug("lockd vg %s has dm name %s", vgname, lvname);
+
 			list_for_each_entry(r, &ls->resources, list) {
 				if (strcmp(lvname, r->name))
 					continue;
 
+				if (!is_lvm_device(names->name))
+					continue;
+
 				/* Found an active LV in a lockd VG. */
-				log_debug("lockd vg %s has active lv %s", ls->vg_name, r->name);
+				log_debug("lockd vg %s has active lv %s to adopt", ls->vg_name, r->name);
 				r->adopt = 1;
 			}
 		}
@@ -4517,6 +4580,7 @@ out:
 			if (r->adopt) {
 				r->adopt = 0;
 			} else {
+				log_debug("lockd vg %s remove inactive lv %s", ls->vg_name, r->name);
 				list_del(&r->list);
 				free_resource(r);
 			}
@@ -4574,8 +4638,10 @@ static void adopt_locks(void)
 	 * Adds a struct resource to ls->resources for each LV.
 	 */
 	rv = get_lockd_vgs(&vg_lockd);
-	if (rv < 0)
+	if (rv < 0) {
+		log_error("adopt_locks get_lockd_vgs failed");
 		goto fail;
+	}
 
 	/*
 	 * For each resource on each lockspace, check if the
@@ -4584,8 +4650,10 @@ static void adopt_locks(void)
 	 * The remain entries need to have locks adopted.
 	 */
 	rv = remove_inactive_lvs(&vg_lockd);
-	if (rv < 0)
+	if (rv < 0) {
+		log_error("adopt_locks remove_inactive_lvs failed");
 		goto fail;
+	}
 
 	list_for_each_entry(ls, &ls_found, list) {
 		if (ls->lm_type == LD_LM_DLM)
@@ -4603,7 +4671,7 @@ static void adopt_locks(void)
 			  ls->vg_name, lm_str(ls->lm_type), ls->vg_args);
 
 		list_for_each_entry(r, &ls->resources, list)
-			log_debug("adopt device lv %s/%s", ls->vg_name, r->name);
+			log_debug("adopt lv %s/%s", ls->vg_name, r->name);
 	}
 
 	/*
