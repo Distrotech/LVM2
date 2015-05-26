@@ -918,7 +918,7 @@ int lv_raid_offset_and_sectors(const struct logical_volume *lv,
 		stack;
 
 	*data_offset = status->data_offset;
-	*dev_sectors = status->total_regions;
+	*dev_sectors = status->total_dev_sectors;
 
 	dev_manager_destroy(dm);
 

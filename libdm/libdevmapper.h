@@ -287,8 +287,8 @@ struct dm_pool;
  */
 struct dm_status_raid {
 	uint64_t reserved;
-	uint64_t total_regions;
-	uint64_t insync_regions;
+	uint64_t total_dev_sectors;
+	uint64_t insync_dev_sectors;
 	uint64_t mismatch_count;
 	uint32_t dev_count;
 	char *raid_type;

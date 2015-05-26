@@ -488,7 +488,7 @@ PFLA("lv=%s s=%u seg->status=%lX seg_lv(seg, %u)=%s", lv->name, s, seg->status, 
 	}
 PFL();
 
-	if (le != lv->le_count) { //  + first_seg(lv)->reshape_len) {
+	if (le != lv->le_count) {
 		log_error("LV %s: inconsistent LE count %u != %u",
 			  lv->name, le, lv->le_count);
 		inc_error_count;

@@ -2386,19 +2386,22 @@ PFLA("seg->area_count=%u", seg->area_count);
 	else if (seg->flags & DM_FORCESYNC)
 		EMIT_PARAMS(pos, " sync");
 
+#if 0
+	if (seg->raid10_format)
+		EMIT_PARAMS(pos, " %s", seg->raid10_format);
+
+	if (seg->raid10_copies)
+		EMIT_PARAMS(pos, " raid10_copies %u", seg->raid_copies);
+#endif
+
 	if (seg->region_size)
 		EMIT_PARAMS(pos, " region_size %u", seg->region_size);
 
+	if (seg->data_offset)
+		EMIT_PARAMS(pos, " data_offset %d", seg->data_offset);
+
 	if (seg->delta_disks)
 		EMIT_PARAMS(pos, " delta_disks %d", seg->delta_disks);
-
-	/*
-	 * seg->data_offset is overloaded to cause emitting,
-	 * i.e. 1 defining 0 offset to save a sgment flag
-	 */
-	if (seg->data_offset)
-		EMIT_PARAMS(pos, " data_offset %d", 
-			    (seg->data_offset == 1) ? 0 : seg->data_offset);
 
 	for (i = 0; i < area_count; i++)
 		if (seg->rebuilds[i/64] & (1ULL << (i%64)))
@@ -3370,8 +3373,8 @@ int dm_get_status_raid(struct dm_pool *mem, const char *params,
 		   s->raid_type,
 		   &s->dev_count,
 		   s->dev_health,
-		   &s->insync_regions,
-		   &s->total_regions) != 5)
+		   &s->insync_dev_sectors,
+		   &s->total_dev_sectors) != 5)
 		goto bad;
 
 	*status = s;

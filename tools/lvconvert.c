@@ -1931,7 +1931,7 @@ PFLA("stripes_ARG=%u stripes_long_ARG=%u", arg_count(lv->vg->cmd, stripes_ARG), 
 	    !seg_is_linear(seg) &&
 	    !seg_is_mirrored(seg) &&
 	    !(seg_is_any_raid0(seg) && seg->area_count == 1) &&
-	    !(seg_is_any_raid4(seg) && seg->area_count == 2) &&
+	    !(seg_is_raid4(seg) && seg->area_count == 2) &&
 	    !(seg_is_any_raid5(seg) && seg->area_count == 2)) {
 		log_error("'--mirrors/-m' is not compatible with %s",
 			  lvseg_name(seg));
