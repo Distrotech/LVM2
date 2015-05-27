@@ -3510,129 +3510,6 @@ static int _raid_level_down(struct logical_volume *lv,
  * personality to an equivalent raid6 personality
  * with the Q block at the end.
  */
-
-#if 0
-struct possible_type {
-	const char *current_type;
-	const char *possible_types[13];
-};
-/* HM FIXME: use seg->flags instead of heavy strings */
-static const struct segment_type *_adjust_segtype(struct logical_volume *lv,
-						  const struct segment_type *segtype,
-						  const struct segment_type *new_segtype)
-{
-	unsigned cn, pn;
-	struct possible_type pt[] = {
-		{ .current_type = SEG_TYPE_NAME_LINEAR,
-		  .possible_types = { SEG_TYPE_NAME_RAID1,
-				      SEG_TYPE_NAME_RAID4,
-				      SEG_TYPE_NAME_RAID5_N, NULL } },
-		{ .current_type = SEG_TYPE_NAME_STRIPED,
-		  .possible_types = { SEG_TYPE_NAME_RAID0, SEG_TYPE_NAME_RAID0_META,
-				      SEG_TYPE_NAME_RAID4,
-				      SEG_TYPE_NAME_RAID5_N, SEG_TYPE_NAME_RAID6_N_6, NULL } },
-		{ .current_type = SEG_TYPE_NAME_RAID0,
-		  .possible_types = { SEG_TYPE_NAME_STRIPED,
-				      SEG_TYPE_NAME_RAID4,
-				      SEG_TYPE_NAME_RAID5_N, SEG_TYPE_NAME_RAID6_N_6,
-				      SEG_TYPE_NAME_RAID10, NULL } },
-		{ .current_type = SEG_TYPE_NAME_RAID0_META,
-		  .possible_types = { SEG_TYPE_NAME_STRIPED,
-				      SEG_TYPE_NAME_RAID4,
-				      SEG_TYPE_NAME_RAID5_N, SEG_TYPE_NAME_RAID6_N_6,
-				      SEG_TYPE_NAME_RAID10, NULL } },
-		{ .current_type = SEG_TYPE_NAME_RAID1,
-		  .possible_types = { SEG_TYPE_NAME_RAID5_N, NULL } },
-		{ .current_type = SEG_TYPE_NAME_RAID4,
-		  .possible_types = { SEG_TYPE_NAME_LINEAR,  SEG_TYPE_NAME_STRIPED,
-				      SEG_TYPE_NAME_RAID0,   SEG_TYPE_NAME_RAID0_META,
-				      SEG_TYPE_NAME_RAID1,
-				      SEG_TYPE_NAME_RAID5_N,
-				      SEG_TYPE_NAME_RAID6_N_6,  NULL } },
-		{ .current_type = SEG_TYPE_NAME_RAID5,
-		  .possible_types = { SEG_TYPE_NAME_RAID1,
-				      SEG_TYPE_NAME_RAID5_N,
-				      SEG_TYPE_NAME_RAID5_LS, SEG_TYPE_NAME_RAID5_RS,
-				      SEG_TYPE_NAME_RAID5_LA, SEG_TYPE_NAME_RAID5_RA,
-				      SEG_TYPE_NAME_RAID6_LS_6, NULL } },
-		{ .current_type = SEG_TYPE_NAME_RAID5_LS,
-		  .possible_types = { SEG_TYPE_NAME_RAID1,
-				      SEG_TYPE_NAME_RAID5,    SEG_TYPE_NAME_RAID5_N,
-							      SEG_TYPE_NAME_RAID5_RS,
-				      SEG_TYPE_NAME_RAID5_LA, SEG_TYPE_NAME_RAID5_RA,
-		                      SEG_TYPE_NAME_RAID6_LS_6, NULL } },
-		{ .current_type = SEG_TYPE_NAME_RAID5_RS,
-		  .possible_types = { SEG_TYPE_NAME_RAID1,
-		  		      SEG_TYPE_NAME_RAID5,     SEG_TYPE_NAME_RAID5_N,
-				      SEG_TYPE_NAME_RAID5_LS, 
-				      SEG_TYPE_NAME_RAID5_LA,  SEG_TYPE_NAME_RAID5_RA,
-		                      SEG_TYPE_NAME_RAID6_RS_6, NULL } },
-		{ .current_type = SEG_TYPE_NAME_RAID5_LA,
-		  .possible_types = { SEG_TYPE_NAME_RAID1,
-				      SEG_TYPE_NAME_RAID5,    SEG_TYPE_NAME_RAID5_N,
-				      SEG_TYPE_NAME_RAID5_LS, SEG_TYPE_NAME_RAID5_RS,
-							      SEG_TYPE_NAME_RAID5_RA,
-		                      SEG_TYPE_NAME_RAID6_LA_6, NULL } },
-		{ .current_type = SEG_TYPE_NAME_RAID5_RA,
-		  .possible_types = { SEG_TYPE_NAME_RAID1,
-				      SEG_TYPE_NAME_RAID5,    SEG_TYPE_NAME_RAID5_N,
-				      SEG_TYPE_NAME_RAID5_LS, SEG_TYPE_NAME_RAID5_RS,
-				      SEG_TYPE_NAME_RAID5_LA,
-		                      SEG_TYPE_NAME_RAID6_RA_6, NULL } },
-		{ .current_type = SEG_TYPE_NAME_RAID5_N,
-		  .possible_types = { SEG_TYPE_NAME_LINEAR,    SEG_TYPE_NAME_STRIPED,
-				      SEG_TYPE_NAME_RAID0,     SEG_TYPE_NAME_RAID0_META,
-				      SEG_TYPE_NAME_RAID1,
-				      SEG_TYPE_NAME_RAID4,     SEG_TYPE_NAME_RAID5,
-				      SEG_TYPE_NAME_RAID5_LS,  SEG_TYPE_NAME_RAID5_RS,
-				      SEG_TYPE_NAME_RAID5_LA,  SEG_TYPE_NAME_RAID5_RA,
-				      SEG_TYPE_NAME_RAID6_N_6, NULL } },
-		{ .current_type = SEG_TYPE_NAME_RAID6_ZR,
-		  .possible_types = { SEG_TYPE_NAME_RAID6_NC, SEG_TYPE_NAME_RAID6_NR,
-				      SEG_TYPE_NAME_RAID6_N_6, NULL } },
-		{ .current_type = SEG_TYPE_NAME_RAID6_NC,
-		  .possible_types = { SEG_TYPE_NAME_RAID6_ZR, SEG_TYPE_NAME_RAID6_NR,
-				      SEG_TYPE_NAME_RAID6_N_6, NULL } },
-		{ .current_type = SEG_TYPE_NAME_RAID6_NR,
-		  .possible_types = { SEG_TYPE_NAME_RAID6_ZR, SEG_TYPE_NAME_RAID6_NC,
-				      SEG_TYPE_NAME_RAID6_N_6, NULL } },
-		{ .current_type = SEG_TYPE_NAME_RAID6_N_6,
-		  .possible_types = { SEG_TYPE_NAME_RAID6_ZR, SEG_TYPE_NAME_RAID6_NR,
-				      SEG_TYPE_NAME_RAID6_NC, SEG_TYPE_NAME_RAID5_N,
-				      SEG_TYPE_NAME_RAID0,    SEG_TYPE_NAME_RAID0_META,
-				      SEG_TYPE_NAME_RAID4,
-				      SEG_TYPE_NAME_STRIPED, NULL } },
-		{ .current_type = SEG_TYPE_NAME_RAID6_LS_6,
-		  .possible_types = { SEG_TYPE_NAME_RAID6_ZR, SEG_TYPE_NAME_RAID6_NR,
-				      SEG_TYPE_NAME_RAID6_NC, SEG_TYPE_NAME_RAID5_LS, NULL } },
-		{ .current_type = SEG_TYPE_NAME_RAID6_RS_6,
-		  .possible_types = { SEG_TYPE_NAME_RAID6_ZR, SEG_TYPE_NAME_RAID6_NR,
-				      SEG_TYPE_NAME_RAID6_NC, SEG_TYPE_NAME_RAID5_RS, NULL } },
-		{ .current_type = SEG_TYPE_NAME_RAID6_LA_6,
-		  .possible_types = { SEG_TYPE_NAME_RAID6_ZR, SEG_TYPE_NAME_RAID6_NR,
-				      SEG_TYPE_NAME_RAID6_NC, SEG_TYPE_NAME_RAID5_LA, NULL } },
-		{ .current_type = SEG_TYPE_NAME_RAID6_RA_6,
-		  .possible_types = { SEG_TYPE_NAME_RAID6_ZR, SEG_TYPE_NAME_RAID6_NR,
-				      SEG_TYPE_NAME_RAID6_NC, SEG_TYPE_NAME_RAID5_RA, NULL } },
-		{ .current_type = SEG_TYPE_NAME_RAID10,
-		  .possible_types = { SEG_TYPE_NAME_RAID0, SEG_TYPE_NAME_RAID0_META, NULL } },
-	};
-
-	for (cn = 0; cn < ARRAY_SIZE(pt); cn++) {
-		if (!strcmp(segtype->name, pt[cn].current_type)) {
-			for (pn = 0; pt[cn].possible_types[pn]; pn++)
-				if (!strcmp(new_segtype->name, pt[cn].possible_types[pn]))
-					return get_segtype_from_string(lv->vg->cmd, pt[cn].possible_types[pn]);
-
-			for (pn = 0; pt[cn].possible_types[pn]; pn++)
-				if (!strncmp(new_segtype->name, pt[cn].possible_types[pn], 5))
-					return get_segtype_from_string(lv->vg->cmd, pt[cn].possible_types[pn]);
-		}
-	}
-
-	return NULL;
-}
-#else
 struct possible_type {
 	const uint64_t current_type;
 	const uint64_t possible_types;
@@ -3701,17 +3578,19 @@ static int _is_possible_segtype(struct logical_volume *lv,
 		  .possible_types = SEG_AREAS_STRIPED|SEG_RAID0|SEG_RAID0_META }
 	};
 
+PFLA("seg->segtype=%s new_segtype=%s", seg->segtype->name, new_segtype->name);
 	for (cn = 0; cn < ARRAY_SIZE(pt); cn++)
-		if (seg->segtype->flag & pt[cn].current_type) {
+		if (seg->segtype->flags & pt[cn].current_type) {
+PFLA("current segtype=%s new_segtype=%s", seg->segtype->name);
 			/* Skip to striped */
-			if (!seg_is_linear(seg) && (pt[cn].possible_types & SEG_RAID1))
+			if (seg_is_striped(seg) && (pt[cn].possible_types & SEG_RAID1))
 				continue;
 
 			/* Skip to striped raid0 */
 			if (seg_is_any_raid0(seg) && seg->area_count > 1 && (pt[cn].possible_types & SEG_RAID1))
 				continue;
 
-			return 1;
+			return (new_segtype->flags & pt[cn].possible_types) ? 1 : 0;
 		}
 
 	return 0;
@@ -3723,16 +3602,22 @@ static int _is_possible_segtype(struct logical_volume *lv,
  *
  * HM FIXME: complete?
  */
-static int _check_and_inform_segtype(struct logical_volume *lv,
-				     const struct segment_type *new_segtype,
-				     const struct segment_type *final_segtype)
+static int _adjust_segtype(struct logical_volume *lv,
+			   struct segment_type **new_segtype,
+			   const struct segment_type *final_segtype)
 {
-	if (!_is_possible_segtype(lv, new_segtype)) {
-		const char *interim_type = "";
+	if (!_is_possible_segtype(lv, *new_segtype)) {
+		const char *interim_type = "", *type;
 		const struct lv_segment *seg = first_seg(lv);
 
-		if (seg_is_any_raid6(seg)) {
-			if (segtype_is_any_raid5(new_segtype))
+		if (seg_is_striped(seg) || seg_is_any_raid0(seg)) {
+			if (segtype_is_any_raid5(*new_segtype))
+				interim_type = "raid5_n";
+			else if (segtype_is_any_raid6(*new_segtype))
+				interim_type = "raid6_n_6";
+
+		} else if (seg_is_any_raid6(seg)) {
+			if (segtype_is_any_raid5(*new_segtype))
 				interim_type = "raid6_ls_6, raid6_la_6, raid6_rs_6, raid6_ra_6 or raid6_n_6";
 			else
 				interim_type = "raid6_n_6";
@@ -3740,7 +3625,7 @@ static int _check_and_inform_segtype(struct logical_volume *lv,
 		} else if (seg_is_raid4(seg) || seg_is_any_raid5(seg)) {
 			if (((final_segtype && (segtype_is_linear(final_segtype) ||
 						segtype_is_striped(final_segtype))) ||
-			     segtype_is_any_raid0(new_segtype)) &&
+			     segtype_is_any_raid0(*new_segtype)) &&
 			    seg->area_count == 2)
 				goto ok;
 			else
@@ -3748,15 +3633,24 @@ static int _check_and_inform_segtype(struct logical_volume *lv,
 
 		} else if (seg_is_striped(seg))
 			interim_type = "raid5_n";
-			
-		log_error("Can't takeover %s to %s", seg->segtype->name, new_segtype->name);
-		log_error("Convert to %s first!", interim_type);
-		return 0;
+
+		else {
+			log_error("Can't takeover %s to %s", seg->segtype->name, (*new_segtype)->name);
+			return 0;
+		}
+
+		/* Adjust to interim type */
+		type = strrchr(interim_type, ' ');
+		type = type ? type + 1 : interim_type;
+		if (!(*new_segtype = get_segtype_from_string(lv->vg->cmd, type)))
+			return_0;
+
+		log_warn("Conversion to %s is possible", interim_type);
+		log_warn("Selecting %s", (*new_segtype)->name);
 	}
 ok:
 	return 1;
 }
-#endif
 
 /*
  * Convert a RAID set in @lv to another RAID level and algorithm defined
@@ -3766,7 +3660,7 @@ ok:
  * Returns: 1 on success, 0 on failure
  */
 static int _convert_raid_to_raid(struct logical_volume *lv,
-				 const struct segment_type *new_segtype,
+				 struct segment_type *new_segtype,
 				 const struct segment_type *final_segtype,
 				 int yes, int force,
 				 const unsigned new_stripes,
@@ -3816,6 +3710,11 @@ PFLA("stripes=%u stripe_size=%u seg->stripe_size=%u", stripes, stripe_size, seg-
 	    !(seg->stripe_size = find_config_tree_int(lv->vg->cmd, global_raid_stripe_size_default_CFG, NULL)))
 		return 0;
 
+PFLA("seg->segtype=%s new_segtype->name=%s", seg->segtype->name, new_segtype->name);
+	if (!is_same_level(seg->segtype, new_segtype) &&
+	    !_adjust_segtype(lv, &new_segtype, final_segtype))
+		return 0;
+
 	/*
 	 * raid0 <-> raid0_meta adding metadata image devices
 	 * on converting from raid0 -> raid0_meta or removing
@@ -3845,9 +3744,6 @@ PFLA("stripes=%u stripe_size=%u seg->stripe_size=%u", stripes, stripe_size, seg-
 	 * In order to postprocess the takeover of a raid set from level M to M (M > N)
 	 * in @lv, the last rimage/rmeta devs pair need to be droped in the metadata.
 	 */
-PFLA("seg->segtype=%s new_segtype->name=%s", seg->segtype->name, new_segtype->name);
-	if (!_check_and_inform_segtype(lv, new_segtype, final_segtype))
-		return 0;
 
 PFLA("segtype=%s new_segtype->name=%s", seg->segtype->name, new_segtype->name);
 	/* Down convert from raid4/5 to linear in case of more than 2 legs */
@@ -3912,8 +3808,6 @@ static int _convert_linear_or_raid0_to_raid0145(struct logical_volume *lv,
 
 	/* raid1 <-> raid10/4/5 with 2 images */
 	else if ((convert = ((seg_is_raid1(seg) || seg_is_raid4(seg) || seg_is_any_raid5(seg)) &&
-			       seg->area_count == 2 &&
-			       !new_stripes &&
 			       (segtype_is_raid1(new_segtype) ||
 			        segtype_is_raid10(new_segtype) ||
 				segtype_is_raid4(new_segtype) ||
@@ -3923,8 +3817,19 @@ static int _convert_linear_or_raid0_to_raid0145(struct logical_volume *lv,
 			return 0;
 		}
 
+		if (seg->area_count != 2) {
+			log_error("Can't convert unless 2 images");
+			return 0;
+		}
+
 		if (new_image_count != 2)
 			log_warn("Ignoring new image count");
+
+		if (new_stripes)
+			log_warn("Ignoring stripes");
+
+		if (new_stripe_size)
+			log_warn("Ignoring stripe size");
 
 		seg->segtype = new_segtype;
 
@@ -4320,8 +4225,10 @@ PFLA("cur_redundancy=%u new_redundancy=%u", cur_redundancy, new_redundancy);
 	/*
 	 * All the rest of the raid conversions...
 	 */
-	if (!_convert_raid_to_raid(lv, new_segtype, final_segtype, yes, force, new_stripes, new_stripe_size, allocate_pvs))
+	if (!_convert_raid_to_raid(lv, new_segtype, final_segtype, yes, force, new_stripes, new_stripe_size, allocate_pvs)) {
+		lv_update_and_reload(lv);
 		return 0;
+	}
 
 	/* HM FIXME: avoid update and reload in _convert_raid_to_raid when we have a final_segtype and reload here! */
 	/* Do the final step to convert from "raid0" to "striped" here if requested */

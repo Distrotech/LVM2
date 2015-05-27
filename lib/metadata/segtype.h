@@ -112,7 +112,6 @@ struct segment_type {
 
 	struct segtype_handler *ops;
 	const char *name;
-	uint64_t flag;
 
 	void *library;			/* lvm_register_segtype() sets this. */
 	void *private;			/* For the segtype handler to use. */
