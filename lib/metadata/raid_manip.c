@@ -3808,17 +3808,14 @@ static int _convert_linear_or_raid0_to_raid0145(struct logical_volume *lv,
 
 	/* raid1 <-> raid10/4/5 with 2 images */
 	else if ((convert = ((seg_is_raid1(seg) || seg_is_raid4(seg) || seg_is_any_raid5(seg)) &&
-			       (segtype_is_raid1(new_segtype) ||
-			        segtype_is_raid10(new_segtype) ||
-				segtype_is_raid4(new_segtype) ||
-				segtype_is_any_raid5(new_segtype))))) {
+			     seg->area_count == 2 &&
+			     !new_stripes &&
+			     (segtype_is_raid1(new_segtype) ||
+			      segtype_is_raid10(new_segtype) ||
+			      segtype_is_raid4(new_segtype) ||
+			      segtype_is_any_raid5(new_segtype))))) {
 		if (seg->segtype == new_segtype) {
 			log_error("No change requested");
-			return 0;
-		}
-
-		if (seg->area_count != 2) {
-			log_error("Can't convert unless 2 images");
 			return 0;
 		}
 
@@ -3836,8 +3833,8 @@ static int _convert_linear_or_raid0_to_raid0145(struct logical_volume *lv,
 		return lv_update_and_reload(lv);
 
 	/* raid10 with 2 images -> raid1 with 2 images */
-	} else if ((convert = (seg_is_raid10(seg) && seg->area_count == 2 &&
-		   segtype_is_raid1(new_segtype)))) {
+	} else if (seg_is_raid10(seg) && seg->area_count == 2 &&
+		   segtype_is_raid1(new_segtype)) {
 		seg->segtype = new_segtype;
 
 		return lv_update_and_reload(lv);
