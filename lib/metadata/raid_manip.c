@@ -3511,7 +3511,7 @@ static int _raid_level_down(struct logical_volume *lv,
  * with the Q block at the end.
  */
 struct possible_type {
-	const uint64_t current_type;
+	const uint64_t current_types;
 	const uint64_t possible_types;
 };
 /*
@@ -3519,81 +3519,119 @@ struct possible_type {
  *
  * HM FIXME: complete?
  */
-static int _is_possible_segtype(struct logical_volume *lv,
-				const struct segment_type *new_segtype)
+static uint64_t _is_possible_segtype(struct logical_volume *lv,
+				     const struct segment_type *new_segtype)
 {
 	unsigned cn;
 	const struct lv_segment *seg = first_seg(lv);
 	struct possible_type pt[] = {
-		{ .current_type = SEG_AREAS_STRIPED, /* linear, i.e. seg->area_count = 1 */
+		{ .current_types  = SEG_AREAS_STRIPED, /* linear, i.e. seg->area_count = 1 */
 		  .possible_types = SEG_RAID1|SEG_RAID10|SEG_RAID4|SEG_RAID5_LS|SEG_RAID5_LA| \
 				    SEG_RAID5_RS|SEG_RAID5_RA|SEG_RAID5_N },
-		{ .current_type = SEG_AREAS_STRIPED, /* striped, i.e. seg->area_count > 1 */
+		{ .current_types  = SEG_AREAS_STRIPED, /* striped, i.e. seg->area_count > 1 */
 		  .possible_types = SEG_RAID0|SEG_RAID0_META|SEG_RAID10|SEG_RAID4|SEG_RAID5_N|SEG_RAID6_N_6 },
-		{ .current_type = SEG_RAID0|SEG_RAID0_META,
+		{ .current_types  = SEG_RAID0|SEG_RAID0_META, /* seg->area_count = 1 */
 		  .possible_types = SEG_RAID1|SEG_RAID10|SEG_RAID4|SEG_RAID5_LS|SEG_RAID5_LA| \
 				    SEG_RAID5_RS|SEG_RAID5_RA|SEG_RAID5_N },
-		{ .current_type = SEG_RAID0|SEG_RAID0_META,
-		  .possible_types = SEG_AREAS_STRIPED|SEG_RAID10|SEG_RAID4|SEG_RAID5_N|SEG_RAID6_N_6},
-		{ .current_type = SEG_RAID1,
+		{ .current_types  = SEG_RAID0|SEG_RAID0_META,
+		  .possible_types = SEG_AREAS_STRIPED|SEG_RAID10|SEG_RAID4|SEG_RAID5_N|SEG_RAID6_N_6 },
+		{ .current_types  = SEG_RAID1, /* seg->area_count = 2 */
 		  .possible_types = SEG_RAID10|SEG_RAID4|SEG_RAID5_LS|SEG_RAID5_LA|SEG_RAID5_RS|SEG_RAID5_RA|SEG_RAID5_N },
-		{ .current_type = SEG_RAID4,
+		{ .current_types  = SEG_RAID4,
 		  .possible_types = SEG_AREAS_STRIPED|SEG_RAID0|SEG_RAID0_META|SEG_RAID5_N|SEG_RAID6_N_6 },
-		{ .current_type = SEG_RAID5,
-		  .possible_types = SEG_RAID1|SEG_RAID5_N|SEG_RAID5_LS|SEG_RAID5_RS|SEG_RAID5_LA|SEG_RAID5_RA|SEG_RAID6_LS_6 },
-		{ .current_type = SEG_RAID5_LS,
-		  .possible_types = SEG_RAID1|SEG_RAID5|SEG_RAID5_N|SEG_RAID5_RS|SEG_RAID5_LA|SEG_RAID5_RA|SEG_RAID6_LS_6 },
-		{ .current_type = SEG_RAID5_RS,
-		  .possible_types = SEG_RAID1|SEG_RAID5|SEG_RAID5_N|SEG_RAID5_LS|SEG_RAID5_LA| SEG_RAID5_RA|SEG_RAID6_RS_6 },
-		{ .current_type = SEG_RAID5_LA,
-		  .possible_types = SEG_RAID1|SEG_RAID5|SEG_RAID5_N|SEG_RAID5_LS|SEG_RAID5_RS|SEG_RAID5_RA|SEG_RAID6_LA_6 },
-		{ .current_type = SEG_RAID5_RA,
-		  .possible_types = SEG_RAID1|SEG_RAID5|SEG_RAID5_N|SEG_RAID5_LS|SEG_RAID5_RS|SEG_RAID5_LA|SEG_RAID6_RA_6 },
-		{ .current_type = SEG_RAID5_N,
-		  .possible_types = SEG_AREAS_STRIPED|SEG_RAID0|SEG_RAID0_META|SEG_RAID1|SEG_RAID4| \
-				    SEG_RAID5|SEG_RAID5_LS|SEG_RAID5_RS|SEG_RAID5_LA|SEG_RAID5_RA|SEG_RAID6_N_6 },
-		{ .current_type = SEG_RAID6_ZR,
-		  .possible_types = SEG_RAID6_NC|SEG_RAID6_NR|SEG_RAID6_N_6 },
-		{ .current_type = SEG_RAID6_NC,
-		  .possible_types = SEG_RAID6_ZR|SEG_RAID6_NR|SEG_RAID6_N_6,},
-		{ .current_type = SEG_RAID6_NR,
-		  .possible_types = SEG_RAID6_ZR|SEG_RAID6_NC|SEG_RAID6_N_6 },
-		{ .current_type = SEG_RAID6_N_6,
+		{ .current_types  = SEG_RAID5_LS,
+		  .possible_types = SEG_RAID5_N|SEG_RAID5_LA|SEG_RAID5_RS|SEG_RAID5_RA|SEG_RAID6_LS_6 },
+		{ .current_types  = SEG_RAID5_LA,
+		  .possible_types = SEG_RAID5|SEG_RAID5_N|SEG_RAID5_LS|SEG_RAID5_RS|SEG_RAID5_RA|SEG_RAID6_LA_6 },
+		{ .current_types  = SEG_RAID5_RS,
+		  .possible_types = SEG_RAID5|SEG_RAID5_N|SEG_RAID5_LS|SEG_RAID5_LA| SEG_RAID5_RA|SEG_RAID6_RS_6 },
+		{ .current_types  = SEG_RAID5_RA,
+		  .possible_types = SEG_RAID5|SEG_RAID5_N|SEG_RAID5_LS|SEG_RAID5_RS|SEG_RAID5_LA|SEG_RAID6_RA_6 },
+		{ .current_types  = SEG_RAID5_N,
+		  .possible_types = SEG_AREAS_STRIPED|SEG_RAID0|SEG_RAID0_META|SEG_RAID4| \
+				    SEG_RAID5_LA|SEG_RAID5_LS|SEG_RAID5_RS|SEG_RAID5_RA|SEG_RAID6_N_6 },
+		{ .current_types  = SEG_RAID6_NC|SEG_RAID6_NR|SEG_RAID6_ZR,
+		  .possible_types = SEG_RAID6_NC|SEG_RAID6_NR|SEG_RAID6_ZR|SEG_RAID6_N_6 },
+		{ .current_types  = SEG_RAID6_N_6,
 		  .possible_types = SEG_RAID6_LS_6|SEG_RAID6_LA_6|SEG_RAID6_RS_6|SEG_RAID6_RA_6| \
-				    SEG_RAID6_ZR|SEG_RAID6_NR|SEG_RAID6_NC| \
-				    SEG_RAID5_N|SEG_RAID0|SEG_RAID0_META|SEG_RAID4|SEG_AREAS_STRIPED },
-		{ .current_type = SEG_RAID6_LS_6,
-		  .possible_types = SEG_RAID6_LA_6|SEG_RAID6_RS_6|SEG_RAID6_LA_6| \
-				    SEG_RAID6_ZR|SEG_RAID6_NR|SEG_RAID6_NC|SEG_RAID5_LS },
-		{ .current_type = SEG_RAID6_RS_6,
+				    SEG_RAID6_NR|SEG_RAID6_NC|SEG_RAID6_ZR| \
+				    SEG_RAID5_N|SEG_RAID4|SEG_RAID0|SEG_RAID0_META|SEG_AREAS_STRIPED },
+		{ .current_types  = SEG_RAID6_LS_6,
+		  .possible_types = SEG_RAID6_LA_6|SEG_RAID6_RS_6|SEG_RAID6_RA_6| \
+				    SEG_RAID6_NC|SEG_RAID6_NR|SEG_RAID6_ZR|SEG_RAID6_N_6|SEG_RAID5_LS },
+		{ .current_types  = SEG_RAID6_RS_6,
 		  .possible_types = SEG_RAID6_LS_6|SEG_RAID6_LA_6|SEG_RAID6_RA_6| \
-				    SEG_RAID6_ZR|SEG_RAID6_NR|SEG_RAID6_NC|SEG_RAID5_RS },
-		{ .current_type = SEG_RAID6_LA_6,
+				    SEG_RAID6_NC|SEG_RAID6_NR|SEG_RAID6_ZR|SEG_RAID6_N_6|SEG_RAID5_RS },
+		{ .current_types  = SEG_RAID6_LA_6,
 		  .possible_types = SEG_RAID6_LS_6|SEG_RAID6_RS_6|SEG_RAID6_RA_6| \
-				    SEG_RAID6_ZR|SEG_RAID6_NR|SEG_RAID6_NC|SEG_RAID5_LA },
-		{ .current_type = SEG_RAID6_RA_6,
+				    SEG_RAID6_NC|SEG_RAID6_NR|SEG_RAID6_ZR|SEG_RAID6_N_6|SEG_RAID5_LA },
+		{ .current_types  = SEG_RAID6_RA_6,
 		  .possible_types = SEG_RAID6_LS_6|SEG_RAID6_LA_6|SEG_RAID6_RS_6| \
-				    SEG_RAID6_ZR|SEG_RAID6_NR|SEG_RAID6_NC|SEG_RAID5_RA },
-		{ .current_type = SEG_RAID10,
+				    SEG_RAID6_NC|SEG_RAID6_NR|SEG_RAID6_ZR|SEG_RAID6_N_6|SEG_RAID5_RA },
+		{ .current_types  = SEG_RAID10,
 		  .possible_types = SEG_AREAS_STRIPED|SEG_RAID0|SEG_RAID0_META }
 	};
 
 PFLA("seg->segtype=%s new_segtype=%s", seg->segtype->name, new_segtype->name);
 	for (cn = 0; cn < ARRAY_SIZE(pt); cn++)
-		if (seg->segtype->flags & pt[cn].current_type) {
+		if (seg->segtype->flags & pt[cn].current_types) {
 PFLA("current segtype=%s new_segtype=%s", seg->segtype->name);
-			/* Skip to striped */
-			if (seg_is_striped(seg) && (pt[cn].possible_types & SEG_RAID1))
+			/* Skip to striped (raid0), i.e. seg->rea_count > 1 */
+			if ((seg_is_striped(seg) || seg_is_any_raid0(seg)) &&
+			    seg->area_count > 1)
 				continue;
 
-			/* Skip to striped raid0 */
-			if (seg_is_any_raid0(seg) && seg->area_count > 1 && (pt[cn].possible_types & SEG_RAID1))
-				continue;
+			/* raid1 conversions only with 2 images */
+			if (seg_is_raid1(seg) && seg->area_count != 2)
+				return 0;
 
-			return (new_segtype->flags & pt[cn].possible_types) ? 1 : 0;
+			return pt[cn].possible_types;
 		}
 
 	return 0;
+}
+
+/*
+ * Find raid type name by segment type flag
+ */
+struct _raid_flag_to_name {
+	uint64_t flag;
+	const char *name;
+};
+
+static const char * _seg_flag_to_name(uint64_t flags, struct _raid_flag_to_name *rftn, unsigned elems)
+{
+	while (elems--)
+		if (flags & rftn[elems].flag)
+			return rftn[elems].name;
+
+	return NULL;
+}
+
+static const char * _raid_type_5_to_6(struct lv_segment *seg)
+{
+	static struct _raid_flag_to_name r5_to_r6[] = {
+		{ SEG_RAID5_LS, SEG_TYPE_NAME_RAID6_LS_6 },
+		{ SEG_RAID5_LA, SEG_TYPE_NAME_RAID6_LA_6 },
+		{ SEG_RAID5_RS, SEG_TYPE_NAME_RAID6_RS_6 },
+		{ SEG_RAID5_RA, SEG_TYPE_NAME_RAID6_RA_6 },
+		{ SEG_RAID5_N,  SEG_TYPE_NAME_RAID6_N_6 }
+	};
+
+	return _seg_flag_to_name(seg->segtype->flags, r5_to_r6, ARRAY_SIZE(r5_to_r6));
+}
+
+static const char * _raid_type_6_to_5(struct lv_segment *seg)
+{
+	static struct _raid_flag_to_name r6_to_r5[] = {
+		{ SEG_RAID6_LS_6, SEG_TYPE_NAME_RAID5_LS },
+		{ SEG_RAID6_LA_6, SEG_TYPE_NAME_RAID5_LA },
+		{ SEG_RAID6_RS_6, SEG_TYPE_NAME_RAID5_RS },
+		{ SEG_RAID6_RA_6, SEG_TYPE_NAME_RAID5_RA },
+		{ SEG_RAID6_N_6,  SEG_TYPE_NAME_RAID5_N }
+	};
+
+	return _seg_flag_to_name(seg->segtype->flags, r6_to_r5, ARRAY_SIZE(r6_to_r5));
 }
 
 /*
@@ -3606,50 +3644,38 @@ static int _adjust_segtype(struct logical_volume *lv,
 			   struct segment_type **new_segtype,
 			   const struct segment_type *final_segtype)
 {
-	if (!_is_possible_segtype(lv, *new_segtype)) {
-		const char *interim_type = "", *type;
-		const struct lv_segment *seg = first_seg(lv);
+	uint64_t possible_types = _is_possible_segtype(lv, *new_segtype);
+	const struct lv_segment *seg = first_seg(lv);
+	const char *type = "";
 
-		if (seg_is_striped(seg) || seg_is_any_raid0(seg)) {
-			if (segtype_is_any_raid5(*new_segtype))
-				interim_type = "raid5_n";
-			else if (segtype_is_any_raid6(*new_segtype))
-				interim_type = "raid6_n_6";
+	if (possible_types) {
+		if (seg_is_striped(seg) ||
+		    seg_is_any_raid0(seg) ||
+		    seg_is_raid4(seg)) {
+			if (segtype_is_any_raid5(*new_segtype) && !segtype_is_raid5_n(*new_segtype))
+				type = SEG_TYPE_NAME_RAID5_N;
+			else if (segtype_is_any_raid6(*new_segtype) && !segtype_is_raid6_n_6(*new_segtype))
+				type = SEG_TYPE_NAME_RAID6_N_6;
+
+		} else if (seg_is_any_raid5(seg)) {
+			if (segtype_is_any_raid6(*new_segtype))
+				type = _raid_type_5_to_6(seg);
 
 		} else if (seg_is_any_raid6(seg)) {
 			if (segtype_is_any_raid5(*new_segtype))
-				interim_type = "raid6_ls_6, raid6_la_6, raid6_rs_6, raid6_ra_6 or raid6_n_6";
-			else
-				interim_type = "raid6_n_6";
-
-		} else if (seg_is_raid4(seg) || seg_is_any_raid5(seg)) {
-			if (((final_segtype && (segtype_is_linear(final_segtype) ||
-						segtype_is_striped(final_segtype))) ||
-			     segtype_is_any_raid0(*new_segtype)) &&
-			    seg->area_count == 2)
-				goto ok;
-			else
-				interim_type = "raid5_n";
-
-		} else if (seg_is_striped(seg))
-			interim_type = "raid5_n";
-
-		else {
-			log_error("Can't takeover %s to %s", seg->segtype->name, (*new_segtype)->name);
-			return 0;
+				type = _raid_type_6_to_5(seg);
 		}
 
-		/* Adjust to interim type */
-		type = strrchr(interim_type, ' ');
-		type = type ? type + 1 : interim_type;
-		if (!(*new_segtype = get_segtype_from_string(lv->vg->cmd, type)))
-			return_0;
+PFLA("found type=%s", type);
+		if (type) {
+			if (!(*new_segtype = get_segtype_from_string(lv->vg->cmd, type)))
+				return_0;
 
-		log_warn("Conversion to %s is possible", interim_type);
-		log_warn("Selecting %s", (*new_segtype)->name);
+			return 1;
+		}
 	}
-ok:
-	return 1;
+
+	return 0;
 }
 
 /*
