@@ -1705,7 +1705,8 @@ static int _add_mirrors_that_preserve_segments(struct logical_volume *lv,
 							   lv->le_count,
 							   region_size, 1);
 
-	if (!(ah = allocate_extents(lv->vg, NULL, segtype, 1, mirrors, 0, 0,
+	if (!(ah = allocate_extents(lv->vg, NULL, segtype,
+				    1, mirrors, 0, 0,
 				    lv->le_count, allocatable_pvs, alloc, 0,
 				    parallel_areas))) {
 		log_error("Unable to allocate mirror extents for %s.", lv->name);

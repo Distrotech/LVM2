@@ -19,6 +19,11 @@
 #ifndef _LVM_LIB_H
 #define _LVM_LIB_H
 
+/* HM FIXME: REMOVEME: devel output */
+#if 1
+#define	USE_PFL
+#endif
+
 #include "configure.h"
 
 #define _REENTRANT

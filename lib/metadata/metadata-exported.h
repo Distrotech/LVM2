@@ -27,7 +27,7 @@
 #include "lv.h"
 #include "lvm-percent.h"
 
-#define MAX_STRIPES 128U
+#define MAX_STRIPES 251U
 #define SECTOR_SHIFT 9L
 #define SECTOR_SIZE ( 1L << SECTOR_SHIFT )
 #define STRIPE_SIZE_MIN ( (unsigned) lvm_getpagesize() >> SECTOR_SHIFT)	/* PAGESIZE in sectors */
@@ -334,6 +334,7 @@ struct lv_segment_area {
 		struct {
 			struct logical_volume *lv;
 			uint32_t le;
+			uint32_t reshape_le;
 		} lv;
 	} u;
 };
@@ -403,6 +404,7 @@ struct lv_segment {
 	const struct segment_type *segtype;
 	uint32_t le;
 	uint32_t len;
+	uint32_t reshape_len;	/* RAID: user hidden additional out of place reshaping length off area_len and len */
 
 	uint64_t status;
 
@@ -411,6 +413,8 @@ struct lv_segment {
 	uint32_t writebehind;   /* For RAID (RAID1 only) */
 	uint32_t min_recovery_rate; /* For RAID */
 	uint32_t max_recovery_rate; /* For RAID */
+	uint32_t data_offset; /* For RAID, data offset in sectors on each data component image
+				 overloaded by setting 1 to cause emmiting 0 offset */
 	uint32_t area_count;
 	uint32_t area_len;
 	uint32_t chunk_size;	/* For snapshots/thin_pool.  In sectors. */
@@ -1093,6 +1097,8 @@ int lv_raid_split_and_track(struct logical_volume *lv,
 int lv_raid_merge(struct logical_volume *lv);
 int lv_raid_convert(struct logical_volume *lv,
 		    const struct segment_type *new_segtype,
+		    int yes, int force,
+		    const unsigned image_count,
 		    const unsigned stripes,
 		    const unsigned new_stripe_size,
 		    struct dm_list *allocate_pvs);

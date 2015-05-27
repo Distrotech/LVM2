@@ -12,6 +12,15 @@
  * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
+/* HM FIXME: REMOVEME: devel output */
+#ifdef USE_PFL
+#define PFL() printf("%s %u\n", __func__, __LINE__);
+#define PFLA(format, arg...) printf("%s %u " format "\n", __func__, __LINE__, arg);
+#else
+#define PFL()
+#define PFLA(format, arg...)
+#endif
+
 #include "dmlib.h"
 #include "libdm-targets.h"
 #include "libdm-common.h"
@@ -47,7 +56,6 @@ enum {
 	SEG_RAID1,
 	SEG_RAID10,
 	SEG_RAID4,
-	SEG_RAID5_0,
 	SEG_RAID5_N,
 	SEG_RAID5_LA,
 	SEG_RAID5_RA,
@@ -60,7 +68,6 @@ enum {
 	SEG_RAID6_RA_6,
 	SEG_RAID6_LS_6,
 	SEG_RAID6_RS_6,
-	SEG_RAID6_0_6,
 	SEG_RAID6_N_6,
 };
 
@@ -89,7 +96,6 @@ static const struct {
 	{ SEG_RAID1, "raid1"},
 	{ SEG_RAID10, "raid10"},
 	{ SEG_RAID4, "raid4"},
-	{ SEG_RAID5_0, "raid5_0"},
 	{ SEG_RAID5_N, "raid5_n"},
 	{ SEG_RAID5_LA, "raid5_la"},
 	{ SEG_RAID5_RA, "raid5_ra"},
@@ -102,7 +108,6 @@ static const struct {
 	{ SEG_RAID6_RA_6, "raid6_ra_6"},
 	{ SEG_RAID6_LS_6, "raid6_ls_6"},
 	{ SEG_RAID6_RS_6, "raid6_rs_6"},
-	{ SEG_RAID6_0_6, "raid6_0_6"},
 	{ SEG_RAID6_N_6, "raid6_n_6"},
 
 	/*
@@ -208,9 +213,10 @@ struct load_segment {
 	struct dm_tree_node *replicator;/* Replicator-dev */
 	uint64_t rdevice_index;		/* Replicator-dev */
 
-	int delta_disks;		/* raid */
-	uint64_t rebuilds;		/* raid */
-	uint64_t writemostly;		/* raid */
+	int delta_disks;		/* raid reshape number of disks */
+	int data_offset;		/* raid reshape data offset on disk to set */
+	uint64_t rebuilds[4];		/* raid, max 256 devs */
+	uint64_t writemostly[4];	/* raid, max 256 devs*/
 	uint32_t writebehind;		/* raid */
 	uint32_t max_recovery_rate;	/* raid kB/sec/disk */
 	uint32_t min_recovery_rate;	/* raid kB/sec/disk */
@@ -2114,7 +2120,6 @@ static int _emit_areas_line(struct dm_task *dmt __attribute__((unused)),
 		case SEG_RAID1:
 		case SEG_RAID10:
 		case SEG_RAID4:
-		case SEG_RAID5_0:
 		case SEG_RAID5_N:
 		case SEG_RAID5_LA:
 		case SEG_RAID5_RA:
@@ -2127,7 +2132,6 @@ static int _emit_areas_line(struct dm_task *dmt __attribute__((unused)),
 		case SEG_RAID6_RA_6:
 		case SEG_RAID6_LS_6:
 		case SEG_RAID6_RS_6:
-		case SEG_RAID6_0_6:
 		case SEG_RAID6_N_6:
 			if (!area->dev_node) {
 				EMIT_PARAMS(*pos, " -");
@@ -2323,6 +2327,20 @@ static int _2_if_value(unsigned p)
 	return p ? 2 : 0;
 }
 
+/* Return number of bits passed in @bits assuming 2 * 64 bit size */
+static int _get_params_count(uint64_t *bits)
+{
+	int r = 0;
+	int i = 4;
+
+	while (i--) {
+		r += 2 * hweight32(bits[i] & 0xFFFFFFFF);
+		r += 2 * hweight32(bits[i] >> 32);
+	}
+
+	return r;
+}
+
 static int _raid_emit_segment_line(struct dm_task *dmt, uint32_t major,
 				   uint32_t minor, struct load_segment *seg,
 				   uint64_t *seg_start, char *params,
@@ -2332,28 +2350,35 @@ static int _raid_emit_segment_line(struct dm_task *dmt, uint32_t major,
 	uint32_t area_count = seg->area_count / 2;
 	int param_count = 1; /* mandatory 'chunk size'/'stripe size' arg */
 	int pos = 0;
+	unsigned type;
 
+	if (seg->area_count % 2)
+		return 0;
+
+PFLA("seg->area_count=%u", seg->area_count);
 	if ((seg->flags & DM_NOSYNC) || (seg->flags & DM_FORCESYNC))
 		param_count++;
 
-	param_count += _2_if_value(seg->delta_disks) +
+	param_count += _2_if_value(seg->data_offset) +
+		       _2_if_value(seg->delta_disks) +
 		       _2_if_value(seg->region_size) +
 		       _2_if_value(seg->writebehind) +
 		       _2_if_value(seg->min_recovery_rate) +
 		       _2_if_value(seg->max_recovery_rate);
 
-	/* rebuilds is 64-bit */
-	param_count += 2 * hweight32(seg->rebuilds & 0xFFFFFFFF);
-	param_count += 2 * hweight32(seg->rebuilds >> 32);
-
-	/* writemostly is 64-bit */
-	param_count += 2 * hweight32(seg->writemostly & 0xFFFFFFFF);
-	param_count += 2 * hweight32(seg->writemostly >> 32);
+	/* rebuilds and writemostly are 4 * 64 bits */
+	param_count += _get_params_count(seg->rebuilds);
+	param_count += _get_params_count(seg->writemostly);
 
 	if ((seg->type == SEG_RAID1) && seg->stripe_size)
 		log_error("WARNING: Ignoring RAID1 stripe size");
 
-	EMIT_PARAMS(pos, "%s %d %u", _dm_segtypes[seg->type].target,
+	/* Kernel only expects "raid0", not "raid0_meta" */
+	type = seg->type;
+	if (seg->type == SEG_RAID0_META)
+		type = SEG_RAID0;
+
+	EMIT_PARAMS(pos, "%s %d %u", _dm_segtypes[type].target,
 		    param_count, seg->stripe_size);
 
 	if (seg->flags & DM_NOSYNC)
@@ -2361,18 +2386,29 @@ static int _raid_emit_segment_line(struct dm_task *dmt, uint32_t major,
 	else if (seg->flags & DM_FORCESYNC)
 		EMIT_PARAMS(pos, " sync");
 
+#if 0
+	if (seg->raid10_format)
+		EMIT_PARAMS(pos, " %s", seg->raid10_format);
+
+	if (seg->raid10_copies)
+		EMIT_PARAMS(pos, " raid10_copies %u", seg->raid_copies);
+#endif
+
 	if (seg->region_size)
 		EMIT_PARAMS(pos, " region_size %u", seg->region_size);
+
+	if (seg->data_offset)
+		EMIT_PARAMS(pos, " data_offset %d", seg->data_offset);
 
 	if (seg->delta_disks)
 		EMIT_PARAMS(pos, " delta_disks %d", seg->delta_disks);
 
 	for (i = 0; i < area_count; i++)
-		if (seg->rebuilds & (1ULL << i))
+		if (seg->rebuilds[i/64] & (1ULL << (i%64)))
 			EMIT_PARAMS(pos, " rebuild %u", i);
 
 	for (i = 0; i < area_count; i++)
-		if (seg->writemostly & (1ULL << i))
+		if (seg->writemostly[i/64] & (1ULL << (i%64)))
 			EMIT_PARAMS(pos, " write_mostly %u", i);
 
 	if (seg->writebehind)
@@ -2563,7 +2599,6 @@ static int _emit_segment_line(struct dm_task *dmt, uint32_t major,
 	case SEG_RAID1:
 	case SEG_RAID10:
 	case SEG_RAID4:
-	case SEG_RAID5_0:
 	case SEG_RAID5_N:
 	case SEG_RAID5_LA:
 	case SEG_RAID5_RA:
@@ -2576,8 +2611,8 @@ static int _emit_segment_line(struct dm_task *dmt, uint32_t major,
 	case SEG_RAID6_RA_6:
 	case SEG_RAID6_LS_6:
 	case SEG_RAID6_RS_6:
-	case SEG_RAID6_0_6:
 	case SEG_RAID6_N_6:
+PFL();
 		target_type_is_raid = 1;
 		r = _raid_emit_segment_line(dmt, major, minor, seg, seg_start,
 					    params, paramsize);
@@ -3225,20 +3260,24 @@ int dm_tree_node_add_raid_target_with_params(struct dm_tree_node *node,
 	unsigned i;
 	struct load_segment *seg = NULL;
 
+PFLA("p->raid_type=%s", p->raid_type);
 	for (i = 0; i < DM_ARRAY_SIZE(_dm_segtypes) && !seg; ++i)
 		if (!strcmp(p->raid_type, _dm_segtypes[i].target))
 			if (!(seg = _add_segment(node,
 						 _dm_segtypes[i].type, size)))
 				return_0;
+PFL();
 	if (!seg)
 		return_0;
 
+PFL();
 	seg->region_size = p->region_size;
 	seg->stripe_size = p->stripe_size;
 	seg->area_count = 0;
 	seg->delta_disks = p->delta_disks;
-	seg->rebuilds = p->rebuilds;
-	seg->writemostly = p->writemostly;
+	seg->data_offset = p->data_offset;
+	memcpy(seg->rebuilds, p->rebuilds, sizeof(seg->rebuilds));
+	memcpy(seg->writemostly, p->writemostly, sizeof(seg->writemostly));
 	seg->writebehind = p->writebehind;
 	seg->min_recovery_rate = p->min_recovery_rate;
 	seg->max_recovery_rate = p->max_recovery_rate;
@@ -3252,18 +3291,43 @@ int dm_tree_node_add_raid_target(struct dm_tree_node *node,
 				 const char *raid_type,
 				 uint32_t region_size,
 				 uint32_t stripe_size,
-				 uint64_t rebuilds,
+				 uint64_t *rebuilds,
 				 uint64_t flags)
 {
 	struct dm_tree_node_raid_params params = {
 		.raid_type = raid_type,
 		.region_size = region_size,
 		.stripe_size = stripe_size,
-		.rebuilds = rebuilds,
 		.flags = flags
 	};
 
+	memcpy(params.rebuilds, rebuilds, sizeof(params.rebuilds));
+
 	return dm_tree_node_add_raid_target_with_params(node, size, &params);
+}
+
+/* Skip @nr single space delimited fields in string @p */
+static const char *_skip_fields(const char *p, unsigned nr)
+{
+	while (p && nr-- && (p = strchr(p, ' ')))
+		p++;
+	
+	return p;
+}
+
+/*
+ * Count number of single space delimited fields in @p
+ *
+ * Number of fields is number of spaces plus one
+ */
+static unsigned _get_nr_fields(const char *p)
+{
+	unsigned r = p ? (*p ? 1 : 0) : 0; /* If p and *p  -> first paramater */
+
+	while (r && (p = _skip_fields(p, 1)))
+		r++;
+
+	return r;
 }
 
 /*
@@ -3272,74 +3336,94 @@ int dm_tree_node_add_raid_target(struct dm_tree_node *node,
  *   <raid_type> <#devs> <health_str> <sync_ratio>
  * Versions 1.5.0+  (6 fields):
  *   <raid_type> <#devs> <health_str> <sync_ratio> <sync_action> <mismatch_cnt>
+ * Versions 1.8.0+  (8 fields):
+ *   <raid_type> <#devs> <health_str> <sync_ratio> <sync_action> <mismatch_cnt> <data_offset>
  */
 int dm_get_status_raid(struct dm_pool *mem, const char *params,
 		       struct dm_status_raid **status)
 {
 	int i;
-	const char *pp, *p;
-	struct dm_status_raid *s;
+	unsigned nr_fields;
+	const char *p, *fields = "";
+	struct dm_status_raid *s = NULL;
 
-	if (!params || !(p = strchr(params, ' '))) {
-		log_error("Failed to parse invalid raid params.");
-		return 0;
-	}
-	p++;
+	*status = NULL;
+
+	if ((nr_fields = _get_nr_fields(params)) < 4)
+		goto bad;
 
 	/* second field holds the device count */
+	fields = "<#devs>";
+	p = _skip_fields(params, 1); /* p -> <#devs> */
 	if (sscanf(p, "%d", &i) != 1)
-		return_0;
+		goto bad;
 
+	fields = "";
 	if (!(s = dm_pool_zalloc(mem, sizeof(struct dm_status_raid))))
-		return_0;
-
-	if (!(s->raid_type = dm_pool_zalloc(mem, p - params)))
-		goto_bad; /* memory is freed went pool is destroyed */
-
-	if (!(s->dev_health = dm_pool_zalloc(mem, i + 1)))
 		goto_bad;
 
+	if (!(s->raid_type = dm_pool_zalloc(mem, p - params)))
+		goto_bad;
+
+	if (!(s->dev_health = dm_pool_zalloc(mem, i + 1))) /* Space for health chars */
+		goto_bad;
+
+	fields = "<raid_type>, <#devs>, <health_str> and <sync_ratio>";
 	if (sscanf(params, "%s %u %s %" PRIu64 "/%" PRIu64,
 		   s->raid_type,
 		   &s->dev_count,
 		   s->dev_health,
-		   &s->insync_regions,
-		   &s->total_regions) != 5) {
-		log_error("Failed to parse raid params: %s", params);
+		   &s->insync_dev_sectors,
+		   &s->total_dev_sectors) != 5)
 		goto bad;
-	}
 
 	*status = s;
 
 	/*
 	 * All pre-1.5.0 version parameters are read.  Now we check
-	 * for additional 1.5.0+ parameters.
+	 * for additional 1.5.0+ parameters (i.e. nr_fields at least 6).
 	 *
 	 * Note that 'sync_action' will be NULL (and mismatch_count
 	 * will be 0) if the kernel returns a pre-1.5.0 status.
+	 *
+	 * See below for any additional 1.8.0+ parameters
 	 */
-	for (p = params, i = 0; i < 4; i++, p++)
-		if (!(p = strchr(p, ' ')))
-			return 1;  /* return pre-1.5.0 status */
+	if (nr_fields >= 6) {
+		fields = "<sync_action> and <mismatch_count>";
+		p = _skip_fields(params, 4); /* skip pre-1.5.0 params */
+		if (!(s->sync_action = dm_pool_zalloc(mem, _skip_fields(p, 1) - p)))
+			goto_bad;
 
-	pp = p;
-	if (!(p = strchr(p, ' '))) {
-		log_error(INTERNAL_ERROR "Bad RAID status received.");
-		goto bad;
-	}
-	p++;
+		if (sscanf(p, "%s %" PRIu64, s->sync_action, &s->mismatch_count) != 2)
+			goto bad;
 
-	if (!(s->sync_action = dm_pool_zalloc(mem, p - pp)))
-		goto_bad;
-
-	if (sscanf(pp, "%s %" PRIu64, s->sync_action, &s->mismatch_count) != 2) {
-		log_error("Failed to parse raid params: %s", params);
-		goto bad;
+		/*
+		 * All pre-1.8.0 version parameters are read.  Now we check
+		 * for additional 1.8.0+ parameters (i.e. nr_fields at least 7).
+		 *
+		 * Note that data_offset will be 0 if the
+		 * kernel returns a pre-1.8.0 status.
+		 */
+		if (nr_fields >= 7) {
+			fields = "<data_offset>";
+			p = _skip_fields(params, 6); /* skip pre-1.8.0 params */
+			if (sscanf(p, "%" PRIu64, &s->data_offset) != 1)
+				goto bad;
+		}
 	}
 
 	return 1;
+
 bad:
-	dm_pool_free(mem, s);
+	if (s) {
+		if (s->sync_action)
+			dm_pool_free(mem, s->sync_action);
+
+		dm_pool_free(mem, s);
+		*status = NULL;
+	}
+
+	log_error("Failed to parse %s%sraid params: %s", fields, *fields ? " " : "", params);
 
 	return 0;
 }
@@ -3409,18 +3493,6 @@ int dm_tree_node_add_cache_target(struct dm_tree_node *node,
 
 
 	return 1;
-}
-
-static const char *advance_to_next_word(const char *str, int count)
-{
-	int i;
-	const char *p;
-
-	for (p = str, i = 0; i < count; i++, p++)
-		if (!(p = strchr(p, ' ')))
-			return NULL;
-
-	return p;
 }
 
 /*
@@ -3496,7 +3568,7 @@ int dm_get_status_cache(struct dm_pool *mem, const char *params,
 		goto bad;
 
 	/* Now jump to "features" section */
-	if (!(p = advance_to_next_word(params, 12)))
+	if (!(p = _skip_fields(params, 12)))
 		goto bad;
 
 	/* Read in features */
@@ -3508,7 +3580,7 @@ int dm_get_status_cache(struct dm_pool *mem, const char *params,
 		else
 			log_error("Unknown feature in status: %s", params);
 
-		if (!(p = advance_to_next_word(p, 1)))
+		if (!(p = _skip_fields(p, 1)))
 			goto bad;
 	}
 
@@ -3517,22 +3589,22 @@ int dm_get_status_cache(struct dm_pool *mem, const char *params,
 		goto bad;
 	if (s->core_argc &&
 	    (!(s->core_argv = dm_pool_zalloc(mem, sizeof(char *) * s->core_argc)) ||
-	     !(p = advance_to_next_word(p, 1)) ||
+	     !(p = _skip_fields(p, 1)) ||
 	     !(str = dm_pool_strdup(mem, p)) ||
-	     !(p = advance_to_next_word(p, s->core_argc)) ||
+	     !(p = _skip_fields(p, s->core_argc)) ||
 	     (dm_split_words(str, s->core_argc, 0, s->core_argv) != s->core_argc)))
 		goto bad;
 
 	/* Read in policy args */
 	pp = p;
-	if (!(p = advance_to_next_word(p, 1)) ||
+	if (!(p = _skip_fields(p, 1)) ||
 	    !(s->policy_name = dm_pool_zalloc(mem, (p - pp))))
 		goto bad;
 	if (sscanf(pp, "%s %d", s->policy_name, &s->policy_argc) != 2)
 		goto bad;
 	if (s->policy_argc &&
 	    (!(s->policy_argv = dm_pool_zalloc(mem, sizeof(char *) * s->policy_argc)) ||
-	     !(p = advance_to_next_word(p, 1)) ||
+	     !(p = _skip_fields(p, 1)) ||
 	     !(str = dm_pool_strdup(mem, p)) ||
 	     (dm_split_words(str, s->policy_argc, 0, s->policy_argv) != s->policy_argc)))
 		goto bad;
@@ -4101,7 +4173,6 @@ int dm_tree_node_add_null_area(struct dm_tree_node *node, uint64_t offset)
 	case SEG_RAID0_META:
 	case SEG_RAID1:
 	case SEG_RAID4:
-	case SEG_RAID5_0:
 	case SEG_RAID5_N:
 	case SEG_RAID5_LA:
 	case SEG_RAID5_RA:
@@ -4114,7 +4185,6 @@ int dm_tree_node_add_null_area(struct dm_tree_node *node, uint64_t offset)
 	case SEG_RAID6_RA_6:
 	case SEG_RAID6_LS_6:
 	case SEG_RAID6_RS_6:
-	case SEG_RAID6_0_6:
 	case SEG_RAID6_N_6:
 		break;
 	default:

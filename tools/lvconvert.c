@@ -16,7 +16,14 @@
 #include "polldaemon.h"
 #include "lv_alloc.h"
 
-#define printf(a ...)
+/* HM FIXME: REMOVEME: devel output */
+#ifdef USE_PFL
+#define PFL() printf("%s %u\n", __func__, __LINE__);
+#define PFLA(format, arg...) printf("%s %u " format "\n", __func__, __LINE__, arg);
+#else
+#define PFL()
+#define PFLA(format, arg...)
+#endif
 
 struct lvconvert_params {
 	int cache;
@@ -456,16 +463,16 @@ static int _read_params(struct cmd_context *cmd, int argc, char **argv,
 		return 0;
 	}
 
+#if 0
 	if ((arg_count(cmd, stripes_long_ARG) || arg_count(cmd, stripesize_ARG)) &&
-#if 1
 	    (!_mirror_or_raid_type_requested(cmd, type_str) ||
-#endif
 	     arg_count(cmd, repair_ARG) ||
 	     arg_count(cmd, thinpool_ARG))) {
 		log_error("--stripes or --stripesize argument is only valid "
 			  "with --mirrors/--type mirror/--type raid*, --repair and --thinpool");
 		return 0;
 	}
+#endif
 
 	if (arg_count(cmd, cache_ARG))
 		lp->cache = 1;
@@ -1068,9 +1075,11 @@ static struct dm_list *_failed_pv_list(struct volume_group *vg)
 
 	dm_list_init(failed_pvs);
 
+PFLA("dm_list_size(vg->pvs)=%u", dm_list_size(&vg->pvs));
 	dm_list_iterate_items(pvl, &vg->pvs) {
 		if (!is_missing_pv(pvl->pv))
 			continue;
+PFLA("after is_missing_pv%s", "");
 
 		/*
 		 * Finally, --repair will remove empty PVs.
@@ -1831,6 +1840,7 @@ static int _is_valid_raid_conversion(const struct segment_type *from_segtype,
 	if (from_segtype == to_segtype)
 		return 1;
 
+PFLA("from_segtype=%s to_segtype=%s\n", from_segtype->name, to_segtype->name);
 	/* From striped to mirror or vice-versa */
 	if (segtype_is_striped(from_segtype) &&
 	    segtype_is_mirror(to_segtype))
@@ -1846,16 +1856,16 @@ static int _is_valid_raid_conversion(const struct segment_type *from_segtype,
 		return 1;
 
 	if (segtype_is_raid(from_segtype) &&
-	    segtype_is_striped(to_segtype))
+	    (segtype_is_linear(to_segtype) || segtype_is_striped(to_segtype)))
 		return 1;
 
-	/* From striped to raid1 or vice-versa */
-	if (segtype_is_striped(from_segtype) &&
+	/* From linear to raid1 or vice-versa */
+	if (segtype_is_linear(from_segtype) &&
 	    segtype_is_raid1(to_segtype))
 		return 1;
 
 	if (segtype_is_raid1(from_segtype) &&
-	    segtype_is_striped(to_segtype))
+	    segtype_is_linear(to_segtype))
 		return 1;
 
 	/* From mirror to raid1 */
@@ -1911,14 +1921,18 @@ static int _lvconvert_raid(struct logical_volume *lv, struct lvconvert_params *l
 	struct lv_segment *seg = first_seg(lv);
 	dm_percent_t sync_percent;
 
-printf("%s %u stripes_ARG=%u stripes_long_ARG=%u\n", __func__, __LINE__, arg_count(lv->vg->cmd, stripes_ARG), arg_count(lv->vg->cmd, stripes_long_ARG));
 	if (!arg_count(cmd, type_ARG))
 		lp->segtype = seg->segtype;
+PFLA("stripes_ARG=%u stripes_long_ARG=%u", arg_count(lv->vg->cmd, stripes_ARG), arg_count(lv->vg->cmd, stripes_long_ARG));
 
-	/* FIXME: remove constraint on mirror/raid1 */
-	/* Can only change image count for raid1 and linear */
+	/* -mN can change image count for mirror/raid1 and linear (converting it to mirror/raid1) */
+	/* -m0 can change raid0 with one stripe and raid4/5 with 2 to linear */
 	if (arg_count(cmd, mirrors_ARG) &&
-	    !seg_is_mirrored(seg) && !seg_is_linear(seg)) {
+	    !seg_is_linear(seg) &&
+	    !seg_is_mirrored(seg) &&
+	    !(seg_is_any_raid0(seg) && seg->area_count == 1) &&
+	    !(seg_is_raid4(seg) && seg->area_count == 2) &&
+	    !(seg_is_any_raid5(seg) && seg->area_count == 2)) {
 		log_error("'--mirrors/-m' is not compatible with %s",
 			  lvseg_name(seg));
 		return 0;
@@ -1945,7 +1959,7 @@ printf("%s %u stripes_ARG=%u stripes_long_ARG=%u\n", __func__, __LINE__, arg_cou
 			image_count -= lp->mirrors;
 		else
 			image_count = lp->mirrors + 1;
-printf("image_count=%u\n", image_count);
+PFLA("image_count=%u\n", image_count);
 
 		track = arg_count(cmd, trackchanges_ARG);
 		if (image_count < 1 || (track && lp->mirrors != 1)) {
@@ -1966,30 +1980,30 @@ printf("image_count=%u\n", image_count);
 		return lv_raid_split(lv, lp->lv_split_name,
 				     image_count, lp->pvh);
 
-printf("lp-Segtyoe=%s\n", lp->segtype->name);
-	/* HM FIXME: lv_raid_reshape to cope with changing raid1 image counts too? */
-	if (!segtype_is_mirror(lp->segtype) &&
-	    (seg_is_linear(seg) || seg_is_raid(seg)) &&
-	    arg_count(cmd, mirrors_ARG)) {
-		if (seg_is_linear(seg))
-			seg->region_size = lp->region_size;
-
-		return lv_raid_change_image_count(lv, image_count, lp->pvh);
-	}
-
-	if ((seg_is_striped(seg) || seg_is_mirrored(seg) || lv_is_raid(lv)) &&
+PFLA("lp->segtype=%s\n", lp->segtype->name);
+	if ((seg_is_linear(seg) || seg_is_striped(seg) || seg_is_mirrored(seg) || lv_is_raid(lv)) &&
 	    (arg_count(cmd, type_ARG) ||
+	     image_count ||
 	     arg_count(cmd, stripes_ARG) ||
 	     arg_count(cmd, stripes_long_ARG) ||
 	     arg_count(cmd, stripesize_ARG))) {
 		unsigned stripes = (arg_count(cmd, stripes_ARG) || arg_count(cmd, stripes_long_ARG)) ? lp->stripes  : 0;
 		unsigned stripe_size = arg_count(cmd, stripesize_ARG) ? lp->stripe_size  : 0;
-printf("stripes=%u stripe_size=%u\n", stripes, stripe_size);
+PFLA("stripes=%u stripe_size=%u\n", stripes, stripe_size);
 
 		if (seg_is_striped(seg))
 			seg->region_size = lp->region_size;
 
-		return lv_raid_convert(lv, lp->segtype, stripes, stripe_size, lp->pvh);
+		/* Check for reshaping support if requested */
+		if (((seg->segtype != lp->segtype && !strncmp(seg->segtype->name, lp->segtype->name, 5)) ||
+		     (stripes && stripes != seg->area_count - seg->segtype->parity_devs) ||
+		     (stripe_size && stripe_size != seg->stripe_size)) &&
+		     !(lp->target_attr & RAID_FEATURE_RESHAPING)) {
+			log_error("RAID module does not support reshaping.");
+			return 0;
+		}
+
+		return lv_raid_convert(lv, lp->segtype, lp->yes, lp->force, image_count, stripes, stripe_size, lp->pvh);
 	}
 
 	if (arg_count(cmd, replace_ARG))
@@ -2025,11 +2039,48 @@ printf("stripes=%u stripe_size=%u\n", stripes, stripe_size);
 			init_mirror_in_sync(1);
 		}
 
+PFLA("replace=%d", replace);
 		_lvconvert_raid_repair_ask(cmd, lp, &replace);
 
+PFLA("replace=%d", replace);
 		if (replace) {
+
+
+#if 0
+{
+			int r;
+			struct pv_list *pvl;
+			struct volume_group *vg;
+
+#if 0
+			dm_list_iterate_items(pvl, &lv->vg->pvs);
+				if (pvl->pv && pvl->pv->dev)
+					lvmetad_pv_gone_by_dev(pvl->pv->dev, NULL);
+					// lvmetad_pvscan_single(cmd, pvl->pv->dev, NULL);
+#endif
+#if 1
+			r = lvmetad_pvscan_all_devs(cmd, NULL);
+			log_warn("lvmetad_pvscan_all_devs returnd %d", r);
+#if 0
+			vg = vg_read(cmd, lv->vg->name, NULL, 0);
+			log_warn("vg_read returnd %p lv->vg==vg=%d", vg, lv->vg == vg);
+			if (!vg)
+				return 0;
+
+			lv->vg = vg;
+#endif
+#else
+			r = pvscan(cmd, 0, NULL);
+			log_warn("pvscan returnd %d", r);
+#endif
+}
+#endif
+
+
 			if (!(failed_pvs = _failed_pv_list(lv->vg)))
 				return_0;
+
+PFLA("dm_list_size(failed_pvs)=%u", dm_list_size(failed_pvs));
 
 			if (!lv_raid_replace(lv, failed_pvs, lp->pvh)) {
 				log_error("Failed to replace faulty devices in"
@@ -3212,7 +3263,7 @@ static int _lvconvert_pool(struct cmd_context *cmd,
 	}
 
 	/* Allocate a new pool segment */
-	if (!(seg = alloc_lv_segment(lp->segtype, pool_lv, 0, data_lv->le_count,
+	if (!(seg = alloc_lv_segment(lp->segtype, pool_lv, 0, data_lv->le_count, 0,
 				     pool_lv->status, 0, NULL, 1,
 				     data_lv->le_count, 0, 0, 0, NULL)))
 		return_0;
@@ -3538,6 +3589,12 @@ static int lvconvert_single(struct cmd_context *cmd, struct lvconvert_params *lp
 	if (arg_count(cmd, repair_ARG)) {
 		init_ignore_suspended_devices(1);
 		cmd->handles_missing_pvs = 1;
+
+#if 1
+		/* Update PV metadata in cache too allow repair to spot recently lost PVs */
+		if (lvmetad_active())
+			lvmetad_pvscan_all_devs(cmd, NULL);
+#endif
 	}
 
 	if (!(lv = get_vg_lock_and_logical_volume(cmd, lp->vg_name, lp->lv_name)))

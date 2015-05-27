@@ -287,13 +287,14 @@ struct dm_pool;
  */
 struct dm_status_raid {
 	uint64_t reserved;
-	uint64_t total_regions;
-	uint64_t insync_regions;
+	uint64_t total_dev_sectors;
+	uint64_t insync_dev_sectors;
 	uint64_t mismatch_count;
 	uint32_t dev_count;
 	char *raid_type;
 	char *dev_health;
 	char *sync_action;
+	uint64_t data_offset;
 };
 
 int dm_get_status_raid(struct dm_pool *mem, const char *params,
@@ -722,7 +723,7 @@ int dm_tree_node_add_raid_target(struct dm_tree_node *node,
 				 const char *raid_type,
 				 uint32_t region_size,
 				 uint32_t stripe_size,
-				 uint64_t rebuilds,
+				 uint64_t *rebuilds, /* 256 bits (4 * uint64_t) */
 				 uint64_t flags);
 
 /*
@@ -749,16 +750,17 @@ struct dm_tree_node_raid_params {
 	uint32_t region_size;
 	uint32_t stripe_size;
 
-	int delta_disks;
+	int delta_disks; /* +/- number of disks to add/remove (reshaping) */
+	int data_offset; /* data offset to set (reshaping) */
 
 	/*
 	 * 'rebuilds' and 'writemostly' are bitfields that signify
 	 * which devices in the array are to be rebuilt or marked
-	 * writemostly.  By choosing a 'uint64_t', we limit ourself
-	 * to RAID arrays with 64 devices.
+	 * writemostly.  By choosing a 'uint64_t' array with 4 elements,
+	 * we limit ourself to RAID arrays with 256 devices.
 	 */
-	uint64_t rebuilds;
-	uint64_t writemostly;
+	uint64_t rebuilds[4];
+	uint64_t writemostly[4];
 	uint32_t writebehind;       /* I/Os (kernel default COUNTER_MAX / 2) */
 	uint32_t sync_daemon_sleep; /* ms (kernel default = 5sec) */
 	uint32_t max_recovery_rate; /* kB/sec/disk */

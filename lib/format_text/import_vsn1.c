@@ -327,7 +327,7 @@ static int _read_segment(struct logical_volume *lv, const struct dm_config_node 
 	struct lv_segment *seg;
 	const struct dm_config_node *sn_child = sn->child;
 	const struct dm_config_value *cv;
-	uint32_t start_extent, extent_count;
+	uint32_t start_extent, extent_count, reshape_count;
 	struct segment_type *segtype;
 	const char *segtype_str;
 
@@ -348,6 +348,10 @@ static int _read_segment(struct logical_volume *lv, const struct dm_config_node 
 		return 0;
 	}
 
+	/* HM FIXME: use reshape_count */
+	if (!_read_int32(sn_child, "reshape_count", &reshape_count))
+		reshape_count = 0;
+
 	segtype_str = "striped";
 
 	if (!dm_config_get_str(sn_child, "type", &segtype_str)) {
@@ -363,7 +367,7 @@ static int _read_segment(struct logical_volume *lv, const struct dm_config_node 
 		return_0;
 
 	if (!(seg = alloc_lv_segment(segtype, lv, start_extent,
-				     extent_count, 0, 0, NULL, area_count,
+				     extent_count, reshape_count, 0, 0, NULL, area_count,
 				     extent_count, 0, 0, 0, NULL))) {
 		log_error("Segment allocation failed");
 		return 0;

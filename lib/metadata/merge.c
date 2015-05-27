@@ -21,7 +21,7 @@
 #include "segtype.h"
 
 /* HM FIXME: REMOVEME: devel output */
-#if 1
+#ifdef USE_PFL
 #define PFL() printf("%s %u\n", __func__, __LINE__);
 #define PFLA(format, arg...) printf("%s %u " format "\n", __func__, __LINE__, arg);
 #else
@@ -150,7 +150,7 @@ int check_lv_segments(struct logical_volume *lv, int complete_vg)
 		area_multiplier = seg_is_striped(seg) ? seg->area_count - seg->segtype->parity_devs : 1;
 
 PFLA("segtype=%s seg->area_len=%u seg->area_count=%u parity_devs=%u area_multiplier=%u seg->len=%u", seg->segtype->name, seg->area_len, seg->area_count, seg->segtype->parity_devs, area_multiplier, seg->len);
-		if (seg->area_len * area_multiplier != seg->len) {
+		if (seg->area_len * area_multiplier != seg->len) { //  - seg->reshape_len) {
 			log_error("LV %s: segment %u has inconsistent "
 				  "area_len %u",
 				  lv->name, seg_count, seg->area_len);
@@ -486,6 +486,7 @@ PFLA("lv=%s s=%u seg->status=%lX seg_lv(seg, %u)=%s", lv->name, s, seg->status, 
 			inc_error_count;
 		}
 	}
+PFL();
 
 	if (le != lv->le_count) {
 		log_error("LV %s: inconsistent LE count %u != %u",
@@ -517,7 +518,7 @@ static int _lv_split_segment(struct logical_volume *lv, struct lv_segment *seg,
 
 	/* Clone the existing segment */
 	if (!(split_seg = alloc_lv_segment(seg->segtype,
-					   seg->lv, seg->le, seg->len,
+					   seg->lv, seg->le, seg->len, seg->reshape_len,
 					   seg->status, seg->stripe_size,
 					   seg->log_lv,
 					   seg->area_count, seg->area_len,

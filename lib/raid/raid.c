@@ -25,6 +25,15 @@
 #include "metadata.h"
 #include "lv_alloc.h"
 
+/* HM FIXME: REMOVEME: devel output */
+#ifdef USE_PFL
+#define PFL() printf("%s %u\n", __func__, __LINE__);
+#define PFLA(format, arg...) printf("%s %u " format "\n", __func__, __LINE__, arg);
+#else
+#define PFL()
+#define PFLA(format, arg...)
+#endif
+
 static void _raid_display(const struct lv_segment *seg)
 {
 	unsigned s;
@@ -196,14 +205,16 @@ static int _raid_add_target_line(struct dev_manager *dm __attribute__((unused)),
 				 struct dm_tree_node *node, uint64_t len,
 				 uint32_t *pvmove_mirror_count __attribute__((unused)))
 {
-	int delta_disks = 0;
+	int r, delta_disks = 0, data_offset = 0;
 	uint32_t s;
 	uint64_t flags = 0;
-	uint64_t rebuilds = 0;
-	uint64_t writemostly = 0;
+	uint64_t rebuilds[4];
+	uint64_t writemostly[4];
 	struct dm_tree_node_raid_params params;
 
 	memset(&params, 0, sizeof(params));
+	memset(&rebuilds, 0, sizeof(rebuilds));
+	memset(&writemostly, 0, sizeof(writemostly));
 
 	if (!seg->area_count) {
 		log_error(INTERNAL_ERROR "_raid_add_target_line called "
@@ -212,7 +223,7 @@ static int _raid_add_target_line(struct dev_manager *dm __attribute__((unused)),
 	}
 
 	/*
-	 * 64 device restriction imposed by kernel as well due to bitfield limitation in superblock.
+	 * 253 device restriction imposed by kernel due to MD and dm-raid bitfield limitation in superblock.
 	 * It is not strictly a userspace limitation.
 	 */
 	if (seg->area_count > DEFAULT_RAID_MAX_IMAGES) {
@@ -221,7 +232,8 @@ static int _raid_add_target_line(struct dev_manager *dm __attribute__((unused)),
 		return 0;
 	}
 
-	if (!(seg_is_raid0(seg) || seg_is_raid0_meta(seg))) {
+	if (!seg_is_any_raid0(seg)) {
+PFL();
 		if (!seg->region_size) {
 			log_error("Missing region size for raid segment in %s.",
 				  seg_lv(seg, 0)->name);
@@ -232,7 +244,8 @@ static int _raid_add_target_line(struct dev_manager *dm __attribute__((unused)),
 			uint64_t status = seg_lv(seg, s)->status;
 
 			if (status & LV_REBUILD)
-				rebuilds |= 1ULL << s;
+				rebuilds[s/64] |= 1ULL << (s%64);
+
 			if (status & LV_RESHAPE_DELTA_DISKS_PLUS) {
 				if (status & LV_RESHAPE_DELTA_DISKS_MINUS) {
 					log_error(INTERNAL_ERROR "delta disks minus when delta disks plus requested!");
@@ -240,26 +253,35 @@ static int _raid_add_target_line(struct dev_manager *dm __attribute__((unused)),
 				}
 
 				delta_disks++;
-			} else if (status & LV_RESHAPE_DELTA_DISKS_MINUS)
+			} else if (status & LV_RESHAPE_DELTA_DISKS_MINUS) {
+				if (status & LV_RESHAPE_DELTA_DISKS_PLUS) {
+					log_error(INTERNAL_ERROR "delta disks plus when delta disks minus requested!");
+					return 0;
+				}
+
 				delta_disks--;
+			}
 
 			if (status & LV_WRITEMOSTLY)
-				writemostly |= 1ULL << s;
+				writemostly[s/64] |= 1ULL << (s%64);
 		}
+
+		data_offset = seg->data_offset;
 
 		if (mirror_in_sync())
 			flags = DM_NOSYNC;
 	}
 
 	params.raid_type = lvseg_name(seg);
-
+PFL();
 	if (seg->segtype->parity_devs) {
 		/* RAID 4/5/6 */
 		params.mirrors = 1;
 		params.stripes = seg->area_count - seg->segtype->parity_devs;
-	} else if (seg_is_raid0(seg)) {
+	} else if (seg_is_any_raid0(seg)) {
 		params.mirrors = 1;
 		params.stripes = seg->area_count;
+PFLA("mirrors=%u stripes=%u", params.mirrors, params.stripes);
 	} else if (seg_is_raid10(seg)) {
 		/* RAID 10 only supports 2 mirrors now */
 		/* FIXME: HM: is this actually a constraint still? */
@@ -270,24 +292,29 @@ static int _raid_add_target_line(struct dev_manager *dm __attribute__((unused)),
 		params.mirrors = seg->area_count;
 		params.stripes = 1;
 		params.writebehind = seg->writebehind;
-		params.writemostly = writemostly;
+		memcpy(params.writemostly, writemostly, sizeof(params.writemostly));
 	}
 
-	/* RAID 0 doesn't have a bitmap, thus no region_size etc. */
-	if (!seg_is_raid0(seg)) {
+	/* RAID 0 doesn't have a bitmap, thus no region_size, rebuilds etc. */
+	if (!seg_is_any_raid0(seg)) {
 		params.region_size = seg->region_size;
-		params.rebuilds = rebuilds;
+		memcpy(params.rebuilds, rebuilds, sizeof(params.rebuilds));
 		params.min_recovery_rate = seg->min_recovery_rate;
 		params.max_recovery_rate = seg->max_recovery_rate;
 		params.delta_disks = delta_disks;
+		params.data_offset = data_offset;
 	}
 
 	params.stripe_size = seg->stripe_size;
 	params.flags = flags;
 
+PFL();
 	if (!dm_tree_node_add_raid_target_with_params(node, len, &params))
 		return_0;
-
+PFL();
+	r = add_areas_line(dm, seg, node, 0u, seg->area_count);
+PFLA("r=%d", r);
+	return r;
 	return add_areas_line(dm, seg, node, 0u, seg->area_count);
 }
 
@@ -336,7 +363,7 @@ static int _raid_target_percent(void **target_state,
 	*total_numerator += numerator;
 	*total_denominator += denominator;
 
-	if (seg)
+	if (seg && denominator)
 		seg->extents_copied = seg->area_len * numerator / denominator;
 
 	*percent = dm_make_percent(numerator, denominator);
@@ -357,6 +384,7 @@ static int _raid_target_present(struct cmd_context *cmd,
 	} _features[] = {
 		{ 1, 3, RAID_FEATURE_RAID10, SEG_TYPE_NAME_RAID10 },
 		{ 1, 7, RAID_FEATURE_RAID0, SEG_TYPE_NAME_RAID0 },
+		{ 1, 8, RAID_FEATURE_RESHAPING, "reshaping" },
 	};
 
 	static int _raid_checked = 0;
@@ -460,30 +488,28 @@ static struct segtype_handler _raid_ops = {
 static const struct raid_type {
 	const char name[12];
 	unsigned parity;
-	int extra_flags;
+	uint64_t extra_flags;
 } _raid_types[] = {
-	{ SEG_TYPE_NAME_RAID0,      0 },
-	{ SEG_TYPE_NAME_RAID0_META, 0 },
-	{ SEG_TYPE_NAME_RAID1,      0, SEG_AREAS_MIRRORED },
-	{ SEG_TYPE_NAME_RAID10,     0, SEG_AREAS_MIRRORED },
-	{ SEG_TYPE_NAME_RAID4,      1 },
-	{ SEG_TYPE_NAME_RAID5,      1 },
-	{ SEG_TYPE_NAME_RAID5_0,    1 },
-	{ SEG_TYPE_NAME_RAID5_N,    1 },
-	{ SEG_TYPE_NAME_RAID5_LA,   1 },
-	{ SEG_TYPE_NAME_RAID5_LS,   1 },
-	{ SEG_TYPE_NAME_RAID5_RA,   1 },
-	{ SEG_TYPE_NAME_RAID5_RS,   1 },
-	{ SEG_TYPE_NAME_RAID6,      2 },
-	{ SEG_TYPE_NAME_RAID6_NC,   2 },
-	{ SEG_TYPE_NAME_RAID6_NR,   2 },
-	{ SEG_TYPE_NAME_RAID6_ZR,   2 },
-	{ SEG_TYPE_NAME_RAID6_LA_6, 2 },
-	{ SEG_TYPE_NAME_RAID6_LS_6, 2 },
-	{ SEG_TYPE_NAME_RAID6_RA_6, 2 },
-	{ SEG_TYPE_NAME_RAID6_RS_6, 2 },
-	{ SEG_TYPE_NAME_RAID6_0_6,  2 },
-	{ SEG_TYPE_NAME_RAID6_N_6,  2 },
+	{ SEG_TYPE_NAME_RAID0,      0, SEG_RAID0 },
+	{ SEG_TYPE_NAME_RAID0_META, 0, SEG_RAID0_META },
+	{ SEG_TYPE_NAME_RAID1,      0, SEG_RAID1 | SEG_AREAS_MIRRORED },
+	{ SEG_TYPE_NAME_RAID10,     0, SEG_RAID10 | SEG_AREAS_MIRRORED },
+	{ SEG_TYPE_NAME_RAID4,      1, SEG_RAID4 },
+	{ SEG_TYPE_NAME_RAID5,      1, SEG_RAID5 }, /* is raid5_ls */
+	{ SEG_TYPE_NAME_RAID5_N,    1, SEG_RAID5_N },
+	{ SEG_TYPE_NAME_RAID5_LA,   1, SEG_RAID5_LA },
+	{ SEG_TYPE_NAME_RAID5_LS,   1, SEG_RAID5_LS },
+	{ SEG_TYPE_NAME_RAID5_RA,   1, SEG_RAID5_RA },
+	{ SEG_TYPE_NAME_RAID5_RS,   1, SEG_RAID5_RS },
+	{ SEG_TYPE_NAME_RAID6,      2, SEG_RAID6 }, /* is raid6_zr */
+	{ SEG_TYPE_NAME_RAID6_NC,   2, SEG_RAID6_NC },
+	{ SEG_TYPE_NAME_RAID6_NR,   2, SEG_RAID6_NR },
+	{ SEG_TYPE_NAME_RAID6_ZR,   2, SEG_RAID6_ZR },
+	{ SEG_TYPE_NAME_RAID6_LA_6, 2, SEG_RAID6_LA_6 },
+	{ SEG_TYPE_NAME_RAID6_LS_6, 2, SEG_RAID6_LS_6 },
+	{ SEG_TYPE_NAME_RAID6_RA_6, 2, SEG_RAID6_RA_6 },
+	{ SEG_TYPE_NAME_RAID6_RS_6, 2, SEG_RAID6_RS_6 },
+	{ SEG_TYPE_NAME_RAID6_N_6,  2, SEG_RAID6_N_6 },
 };
 
 static struct segment_type *_init_raid_segtype(struct cmd_context *cmd,

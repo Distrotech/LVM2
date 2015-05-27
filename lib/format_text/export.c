@@ -519,6 +519,9 @@ static int _print_segment(struct formatter *f, struct volume_group *vg,
 	outsize(f, (uint64_t) seg->len * vg->extent_size,
 		"extent_count = %u", seg->len);
 
+	if (seg->reshape_len)
+		outsize(f, (uint64_t) seg->reshape_len * vg->extent_size,
+			"reshape_count = %u", seg->reshape_len);
 	outnl(f);
 	outf(f, "type = \"%s\"", seg->segtype->name);
 
@@ -595,12 +598,11 @@ static int _print_lv(struct formatter *f, struct logical_volume *lv)
 	struct tm *local_tm;
 	time_t ts;
 
-#if 1
-	/* FIXME: HM: workaround for empty metadata lvs with raid0 */
+#if 0
+	/* HM FIXME: workaround for empty metadata lvs with raid0 */
 	if (!dm_list_size(&lv->segments))
 		return 1;
 #endif
-
 	outnl(f);
 	outf(f, "%s {", lv->name);
 	_inc_indent(f);
