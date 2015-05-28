@@ -19,11 +19,77 @@
 #include "lvmlockd-client.h"
 
 static daemon_handle _lvmlockd;
-static int _lvmlockd_active;
-static int _lvmlockd_connected;
-
 static const char *_lvmlockd_socket = NULL;
 static struct cmd_context *_lvmlockd_cmd = NULL;
+static int _use_lvmlockd;         /* is 1 if command is configured to use lvmlockd */
+static int _lvmlockd_connected;   /* is 1 if command is connected to lvmlockd */
+
+void lvmlockd_set_socket(const char *sock)
+{
+	_lvmlockd_socket = sock;
+}
+
+/*
+ * Set directly from global/use_lvmlockd
+ */
+void lvmlockd_set_use(int use)
+{
+	_use_lvmlockd = use;
+}
+
+/*
+ * Returns the value of global/use_lvmlockd being used by the command.
+ */
+int lvmlockd_use(void)
+{
+	return _use_lvmlockd;
+}
+
+/*
+ * The command continues even if init and/or connect fail,
+ * because the command is allowed to use local VGs without lvmlockd,
+ * and is allowed to read lockd VGs without locks from lvmlockd.
+ */
+void lvmlockd_init(struct cmd_context *cmd)
+{
+	if (!_use_lvmlockd) {
+		/* Should never happen, don't call init when not using lvmlockd. */
+		log_error("Should not initialize lvmlockd with use_lvmlockd=0.");
+	}
+
+	if (!!access(LVMLOCKD_PIDFILE, F_OK))
+		log_warn("lvmlockd process not found using %s.", LVMLOCKD_PIDFILE);
+
+	_lvmlockd_cmd = cmd;
+}
+
+void lvmlockd_connect(void)
+{
+	if (!_use_lvmlockd) {
+		/* Should never happen, don't call connect when not using lvmlockd. */
+		log_error("Should not connect to lvmlockd with use_lvmlockd=0.");
+	}
+
+	if (_lvmlockd_connected) {
+		/* Should never happen, only call connect once. */
+		log_error("lvmlockd is already connected.");
+	}
+
+	if (!_lvmlockd_socket) {
+		log_error("lvmlockd connect failed: no path to socket.");
+		return;
+	}
+
+	_lvmlockd = lvmlockd_open(_lvmlockd_socket);
+
+	if (_lvmlockd.socket_fd >= 0 && !_lvmlockd.error) {
+		log_debug("Successfully connected to lvmlockd on fd %d.", _lvmlockd.socket_fd);
+		_lvmlockd_connected = 1;
+	} else {
+		log_error("lvmlockd connect failed: fd %d error %d.",
+			  _lvmlockd.socket_fd, _lvmlockd.error);
+	}
+}
 
 void lvmlockd_disconnect(void)
 {
@@ -31,84 +97,6 @@ void lvmlockd_disconnect(void)
 		daemon_close(_lvmlockd);
 	_lvmlockd_connected = 0;
 	_lvmlockd_cmd = NULL;
-}
-
-void lvmlockd_init(struct cmd_context *cmd)
-{
-	if (!_lvmlockd_active && !access(LVMLOCKD_PIDFILE, F_OK))
-		log_warn("lvmlockd is not running.");
-	if (!_lvmlockd_active)
-		return;
-	_lvmlockd_cmd = cmd;
-}
-
-static void _lvmlockd_connect(void)
-{
-	if (!_lvmlockd_active || !_lvmlockd_socket || _lvmlockd_connected)
-		return;
-
-	_lvmlockd = lvmlockd_open(_lvmlockd_socket);
-
-	if (_lvmlockd.socket_fd >= 0 && !_lvmlockd.error) {
-		log_debug("Successfully connected to lvmlockd on fd %d.",
-			  _lvmlockd.socket_fd);
-		_lvmlockd_connected = 1;
-	}
-}
-
-void lvmlockd_connect_or_warn(void)
-{
-	if (!_lvmlockd_active || _lvmlockd_connected)
-		return;
-
-	_lvmlockd_connect();
-
-	if (!_lvmlockd_connected) {
-		log_warn("Failed to connect to lvmlockd: %s.",
-			 strerror(_lvmlockd.error));
-	}
-}
-
-/*
- * in command setup:
- *
- * 1. if use_lvmlockd is set in config,
- *    lvmlockd_set_active() sets _lvmlockd_active = 1
- *
- * 2. lvmlockd_init() sees _lvmlockd_active, and sets _lvmlockd_cmd
- *
- * 3. lvmlockd_connect_or_warn()/_lvmlockd_connect() see _lvmlockd_active,
- *    create connection and if successful set _lvmlockd_connected = 1
- *
- * in command processing:
- *
- * 1. lock function calls lvmlockd_connected() which returns
- *    _lvmlockd_connected
- *
- * 2. if lvmlockd_connected() returns 0, lock function fails
- */
-
-int lvmlockd_connected(void)
-{
-	if (_lvmlockd_connected)
-		return 1;
-
-	return 0;
-}
-
-int lvmlockd_active(void)
-{
-	return _lvmlockd_active;
-}
-
-void lvmlockd_set_active(int active)
-{
-	_lvmlockd_active = active;
-}
-
-void lvmlockd_set_socket(const char *sock)
-{
-	_lvmlockd_socket = sock;
 }
 
 /* Translate the result strings from lvmlockd to bit flags. */
@@ -247,9 +235,9 @@ static int _lockd_request(struct cmd_context *cmd,
 	if (!strcmp(mode, "na"))
 		return 1;
 
-	if (!_lvmlockd_active)
+	if (!_use_lvmlockd)
 		return 1;
-	if (!lvmlockd_connected())
+	if (!_lvmlockd_connected)
 		return 0;
 
 	/* cmd and pid are passed for informational and debugging purposes */
@@ -498,9 +486,9 @@ static int _init_vg_dlm(struct cmd_context *cmd, struct volume_group *vg)
 	int result;
 	int ret;
 
-	if (!_lvmlockd_active)
+	if (!_use_lvmlockd)
 		return 1;
-	if (!lvmlockd_connected())
+	if (!_lvmlockd_connected)
 		return 0;
 
 	reply = _lockd_send("init_vg",
@@ -572,9 +560,9 @@ static int _init_vg_sanlock(struct cmd_context *cmd, struct volume_group *vg)
 	int result;
 	int ret;
 
-	if (!_lvmlockd_active)
+	if (!_use_lvmlockd)
 		return 1;
-	if (!lvmlockd_connected())
+	if (!_lvmlockd_connected)
 		return 0;
 
 	if (!_create_sanlock_lv(cmd, vg, lock_lv_name)) {
@@ -703,9 +691,9 @@ static int _free_vg_sanlock(struct cmd_context *cmd, struct volume_group *vg)
 	int result;
 	int ret;
 
-	if (!_lvmlockd_active)
+	if (!_use_lvmlockd)
 		return 1;
-	if (!lvmlockd_connected())
+	if (!_lvmlockd_connected)
 		return 0;
 
 	if (!vg->lock_args || !strlen(vg->lock_args)) {
@@ -842,9 +830,9 @@ int lockd_start_vg(struct cmd_context *cmd, struct volume_group *vg)
 
 	memset(uuid, 0, sizeof(uuid));
 
-	if (!_lvmlockd_active)
+	if (!_use_lvmlockd)
 		return 1;
-	if (!lvmlockd_connected())
+	if (!_lvmlockd_connected)
 		return 0;
 
 	/* Skip starting the vg lockspace when the vg lock is skipped. */
@@ -929,9 +917,9 @@ int lockd_stop_vg(struct cmd_context *cmd, struct volume_group *vg)
 	if (!is_lockd_type(vg->lock_type))
 		return 1;
 
-	if (!_lvmlockd_active)
+	if (!_use_lvmlockd)
 		return 1;
-	if (!lvmlockd_connected())
+	if (!_lvmlockd_connected)
 		return 0;
 
 	log_debug("lockd_stop_vg %s lock_type %s", vg->name,
@@ -974,9 +962,9 @@ int lockd_start_wait(struct cmd_context *cmd)
 	int result;
 	int ret;
 
-	if (!_lvmlockd_active)
+	if (!_use_lvmlockd)
 		return 1;
-	if (!lvmlockd_connected())
+	if (!_lvmlockd_connected)
 		return 0;
 
 	reply = _lockd_send("start_wait",
@@ -1580,9 +1568,9 @@ int lockd_vg_update(struct volume_group *vg)
 	if (!is_lockd_type(vg->lock_type))
 		return 1;
 
-	if (!_lvmlockd_active)
+	if (!_use_lvmlockd)
 		return 1;
-	if (!lvmlockd_connected())
+	if (!_lvmlockd_connected)
 		return 0;
 
 	reply = _lockd_send("vg_update",
@@ -1789,9 +1777,9 @@ static int _init_lv_sanlock(struct cmd_context *cmd, struct volume_group *vg,
 	int result;
 	int ret;
 
-	if (!_lvmlockd_active)
+	if (!_use_lvmlockd)
 		return 1;
-	if (!lvmlockd_connected())
+	if (!_lvmlockd_connected)
 		return 0;
 
  retry:
@@ -1864,9 +1852,9 @@ static int _free_lv_sanlock(struct cmd_context *cmd, struct volume_group *vg,
 	int result;
 	int ret;
 
-	if (!_lvmlockd_active)
+	if (!_use_lvmlockd)
 		return 1;
-	if (!lvmlockd_connected())
+	if (!_lvmlockd_connected)
 		return 0;
 
 	reply = _lockd_send("free_lv",
@@ -2203,9 +2191,9 @@ const char *lockd_running_lock_type(struct cmd_context *cmd)
 	const char *lock_type = NULL;
 	int result;
 
-	if (!_lvmlockd_active)
+	if (!_use_lvmlockd)
 		return NULL;
-	if (!lvmlockd_connected())
+	if (!_lvmlockd_connected)
 		return NULL;
 
 	reply = _lockd_send("running_lm",
