@@ -95,13 +95,12 @@ static inline int is_lockd_type(const char *lock_type)
 
 /* lvmlockd connection and communication */
 
-void lvmlockd_init(struct cmd_context *);
-void lvmlockd_set_active(int);
-void lvmlockd_set_socket(const char *);
+void lvmlockd_set_socket(const char *sock);
+void lvmlockd_set_use(int use);
+int lvmlockd_use(void);
+void lvmlockd_init(struct cmd_context *cmd);
+void lvmlockd_connect(void);
 void lvmlockd_disconnect(void);
-void lvmlockd_connect_or_warn(void);
-int lvmlockd_connected(void);
-int lvmlockd_active(void);
 
 /* vgcreate/vgremove use init/free */
 
@@ -148,18 +147,23 @@ const char *lockd_running_lock_type(struct cmd_context *cmd);
 
 #else /* LVMLOCKD_SUPPORT */
 
-#define lvmlockd_init(cmd)          do { } while (0)
-#define lvmlockd_set_active(int)    do { } while (0)
-#define lvmlockd_set_socket(str)    do { } while (0)
-#define lvmlockd_disconnect()       do { } while (0)
-#define lvmlockd_connect_or_warn()  do { } while (0)
-
-static inline int lvmlockd_connected(void)
+static inline void lvmlockd_set_socket(const char *sock)
 {
-	return 0;
 }
 
-static inline int lvmlockd_active(void)
+static inline void lvmlockd_init(struct cmd_context *cmd)
+{
+}
+
+static inline void lvmlockd_disconnect(void)
+{
+}
+
+static inline void lvmlockd_connect(void)
+{
+}
+
+static inline int lvmlockd_use(void)
 {
 	return 0;
 }
