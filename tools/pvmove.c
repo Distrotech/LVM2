@@ -847,12 +847,12 @@ int pvmove(struct cmd_context *cmd, int argc, char **argv)
 		return ECMD_FAILED;
 	}
 
-	if (lvmlockd_active() && !lvmpolld_use()) {
+	if (lvmlockd_use() && !lvmpolld_use()) {
 		log_error("Enable lvmpolld when using lvmlockd.");
 		return ECMD_FAILED;
 	}
 
-	if (lvmlockd_active() && !argc) {
+	if (lvmlockd_use() && !argc) {
 		/*
 		 * TODO: move process_each_vg from polldaemon up to here,
 		 * then we can remove this limitation.

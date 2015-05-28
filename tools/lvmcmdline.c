@@ -1111,7 +1111,9 @@ static int _get_settings(struct cmd_context *cmd)
 		
 	if (!arg_count(cmd, sysinit_ARG)) {
 		lvmetad_connect_or_warn();
-		lvmlockd_connect_or_warn();
+
+		if (lvmlockd_use())
+			lvmlockd_connect();
 	}
 
 	if (arg_count(cmd, nosuffix_ARG))
