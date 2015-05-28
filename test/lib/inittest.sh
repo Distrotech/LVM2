@@ -107,6 +107,15 @@ test -n "$LVM_TEST_LVMPOLLD" && {
 	aux prepare_lvmpolld
 }
 
+if test -n "$LVM_TEST_LVMLOCKD" ; then
+	if test -n "$LVM_TEST_LOCK_TYPE_SANLOCK" ; then
+		aux prepare_lvmlockd_sanlock
+	fi
+	if test -n "$LVM_TEST_LOCK_TYPE_DLM" ; then
+		aux prepare_lvmlockd_dlm
+	fi
+fi
+
 echo "<======== Processing test: \"$TESTNAME\" ========>"
 
 set -vx

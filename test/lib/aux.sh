@@ -176,6 +176,83 @@ lvmpolld_dump() {
 	(echo 'request="dump"'; echo '##') | lvmpolld_talk "$@"
 }
 
+prepare_lvmlockd_sanlock() {
+	if pgrep lvmlockd ; then
+		echo "Cannot run while existing lvmlockd process exists"
+		exit 1
+	fi
+
+	if pgrep sanlock ; then
+		echo "Cannot run while existing sanlock process exists"
+		exit 1
+	fi
+
+	lvmconf "local/host_id = 1"
+	create_sanlock_conf
+
+	# FIXME: use 'systemctl start sanlock' once sysconfig options work
+	sanlock daemon -U sanlock -G sanlock -w 0
+	sleep 1
+	if ! pgrep sanlock; then
+		echo "Failed to start sanlock"
+		exit 1
+	fi
+
+	lvmlockd
+	sleep 1
+	if ! pgrep lvmlockd; then
+		echo "Failed to start lvmlockd"
+		exit 1
+	fi
+
+# FIXME: make this work
+	alias vgcreate="vgcreate --lock-type sanlock"
+}
+
+prepare_lvmlockd_dlm() {
+	if pgrep lvmlockd ; then
+		echo "Cannot run while existing lvmlockd process exists"
+		exit 1
+	fi
+
+	if pgrep dlm_controld ; then
+		echo "Cannot run while existing dlm_controld process exists"
+		exit 1
+	fi
+
+	if pgrep corosync; then
+		echo "Cannot run while existing corosync process exists"
+		exit 1
+	fi
+
+	create_corosync_conf
+	create_dlm_conf
+
+	systemctl start corosync
+	sleep 1
+	if ! pgrep corosync; then
+		echo "Failed to start corosync"
+		exit 1
+	fi
+
+	systemctl start dlm
+	sleep 1
+	if ! pgrep dlm_controld; then
+		echo "Failed to start dlm"
+		exit 1
+	fi
+
+	lvmlockd
+	sleep 1
+	if ! pgrep lvmlockd ; then
+		echo "Failed to start lvmlockd"
+		exit 1
+	fi
+
+# FIXME: make this work
+	alias vgcreate="vgcreate --lock-type dlm"
+}
+
 teardown_devs_prefixed() {
 	local prefix=$1
 	local stray=${2:-0}
@@ -804,6 +881,49 @@ mkdev_md5sum() {
 	md5sum "$DM_DEV_DIR/$1/$2" > "md5.$1-$2"
 }
 
+SANLOCK_CONF="/etc/sysconfig/sanlock"
+create_sanlock_conf() {
+	if test -a $SANLOCK_CONF; then
+		if ! grep "created by lvm test suite" $SANLOCK_CONF; then
+			rm $SANLOCK_CONF
+		else
+			mv $SANLOCK_CONF $SANLOCK_CONF.prelvmtest
+		fi
+	fi
+
+	cp lib/test-sanlock-conf $SANLOCK_CONF
+	echo "created new $SANLOCK_CONF"
+}
+
+COROSYNC_CONF="/etc/corosync/corosync.conf"
+COROSYNC_NODE=`hostname`
+create_corosync_conf() {
+	if test -a $COROSYNC_CONF; then
+		if ! grep "created by lvm test suite" $COROSYNC_CONF; then
+			rm $COROSYNC_CONF
+		else
+			mv $COROSYNC_CONF $COROSYNC_CONF.prelvmtest
+		fi
+	fi
+
+	sed -e "s/@LOCAL_NODE@/$(COROSYNC_NODE)/" lib/test-corosync-conf > $COROSYNC_CONF
+	echo "created new $COROSYNC_CONF"
+}
+
+DLM_CONF="/etc/dlm/dlm.conf"
+create_dlm_conf() {
+	if test -a $DLM_CONF; then
+		if ! grep "created by lvm test suite" $DLM_CONF; then
+			rm $DLM_CONF
+		else
+			mv $DLM_CONF $DLM_CONF.prelvmtest
+		fi
+	fi
+
+	cp lib/test-dlm-conf $DLM_CONF
+	echo "created new $DLM_CONF"
+}
+
 generate_config() {
 	if test -n "$profile_name"; then
 		config_values=PROFILE_VALUES_$profile_name
@@ -817,6 +937,9 @@ generate_config() {
 	LVM_TEST_LOCKING=${LVM_TEST_LOCKING:-1}
 	LVM_TEST_LVMETAD=${LVM_TEST_LVMETAD:-0}
 	LVM_TEST_LVMPOLLD=${LVM_TEST_LVMPOLLD:-0}
+	LVM_TEST_LVMLOCKD=${LVM_TEST_LVMLOCKD:-0}
+	LVM_TEST_LOCK_TYPE_SANLOCK=${LVM_TEST_LOCK_TYPE_SANLOCK:-0}
+	LVM_TEST_LOCK_TYPE_DLM=${LVM_TEST_LOCK_TYPE_DLM:-0}
 	if test "$DM_DEV_DIR" = "/dev"; then
 	    LVM_VERIFY_UDEV=${LVM_VERIFY_UDEV:-0}
 	else
@@ -859,6 +982,7 @@ global/thin_dump_executable = "$LVM_TEST_THIN_DUMP_CMD"
 global/thin_repair_executable = "$LVM_TEST_THIN_REPAIR_CMD"
 global/use_lvmetad = $LVM_TEST_LVMETAD
 global/use_lvmpolld = $LVM_TEST_LVMPOLLD
+global/use_lvmlockd = $LVM_TEST_LVMLOCKD
 log/activation = 1
 log/file = "$TESTDIR/debug.log"
 log/indent = 1
