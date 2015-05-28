@@ -677,14 +677,15 @@ static int _process_config(struct cmd_context *cmd)
 		return 0;
 	}
 
-	lvmlockd_disconnect();
+	lvmlockd_disconnect(); /* start over when tool context is refreshed */
 	lvmlockd_socket = getenv("LVM_LVMLOCKD_SOCKET");
 	if (!lvmlockd_socket)
 		lvmlockd_socket = DEFAULT_RUN_DIR "/lvmlockd.socket";
 
 	lvmlockd_set_socket(lvmlockd_socket);
-	lvmlockd_set_active(!!use_lvmlockd);
-	lvmlockd_init(cmd);
+	lvmlockd_set_use(use_lvmlockd);
+	if (use_lvmlockd)
+		lvmlockd_init(cmd);
 
 	return 1;
 }
