@@ -817,6 +817,9 @@ generate_config() {
 	LVM_TEST_LOCKING=${LVM_TEST_LOCKING:-1}
 	LVM_TEST_LVMETAD=${LVM_TEST_LVMETAD:-0}
 	LVM_TEST_LVMPOLLD=${LVM_TEST_LVMPOLLD:-0}
+	LVM_TEST_LVMLOCKD=${LVM_TEST_LVMLOCKD:-0}
+	LVM_TEST_LOCK_TYPE_SANLOCK=${LVM_TEST_LOCK_TYPE_SANLOCK:-0}
+	LVM_TEST_LOCK_TYPE_DLM=${LVM_TEST_LOCK_TYPE_DLM:-0}
 	if test "$DM_DEV_DIR" = "/dev"; then
 	    LVM_VERIFY_UDEV=${LVM_VERIFY_UDEV:-0}
 	else
@@ -859,6 +862,7 @@ global/thin_dump_executable = "$LVM_TEST_THIN_DUMP_CMD"
 global/thin_repair_executable = "$LVM_TEST_THIN_REPAIR_CMD"
 global/use_lvmetad = $LVM_TEST_LVMETAD
 global/use_lvmpolld = $LVM_TEST_LVMPOLLD
+global/use_lvmlockd = $LVM_TEST_LVMLOCKD
 log/activation = 1
 log/file = "$TESTDIR/debug.log"
 log/indent = 1
