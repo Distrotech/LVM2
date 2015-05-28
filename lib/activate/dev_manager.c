@@ -430,7 +430,7 @@ static int _ignore_blocked_mirror_devices(struct device *dev,
 		next = dm_get_next_target(dmt, next, &s, &l,
 					  &target_type, &params);
 		if ((s == start) && (l == length)) {
-			if (strcmp(target_type, "mirror"))
+			if (strcmp(target_type, SEG_TYPE_NAME_MIRROR))
 				goto_out;
 
 			if (((p = strstr(params, " block_on_error")) &&
@@ -541,7 +541,7 @@ int device_is_usable(struct device *dev, struct dev_usable_check_params check)
 		next = dm_get_next_target(dmt, next, &start, &length,
 					  &target_type, &params);
 
-		if (check.check_blocked && target_type && !strcmp(target_type, "mirror")) {
+		if (check.check_blocked && target_type && !strcmp(target_type, SEG_TYPE_NAME_MIRROR)) {
 			if (ignore_lvm_mirrors()) {
 				log_debug_activation("%s: Scanning mirror devices is disabled.", dev_name(dev));
 				goto out;

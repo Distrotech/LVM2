@@ -34,3 +34,17 @@ struct segment_type *get_segtype_from_string(struct cmd_context *cmd,
 
 	return segtype;
 }
+
+struct segment_type *get_segtype_from_flag(struct cmd_context *cmd,
+					   uint64_t flag)
+{
+	struct segment_type *segtype;
+
+	dm_list_iterate_items(segtype, &cmd->segtypes)
+		if (flag & segtype->flags)
+			return segtype;
+
+	log_warn("WARNING: Unrecognised segment type flag %lX", flag);
+
+	return NULL;
+}

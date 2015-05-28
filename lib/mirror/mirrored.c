@@ -139,7 +139,7 @@ static int _mirrored_text_export(const struct lv_segment *seg, struct formatter 
 	if (seg->region_size)
 		outf(f, "region_size = %" PRIu32, seg->region_size);
 
-	return out_areas(f, seg, "mirror");
+	return out_areas(f, seg, SEG_TYPE_NAME_MIRROR);
 }
 
 #ifdef DEVMAPPER_SUPPORT
@@ -462,7 +462,7 @@ static int _mirrored_target_present(struct cmd_context *cmd,
 
 	if (!_mirrored_checked) {
 		_mirrored_checked = 1;
-		_mirrored_present = target_present(cmd, "mirror", 1);
+		_mirrored_present = target_present(cmd, SEG_TYPE_NAME_MIRROR, 1);
 
 		/*
 		 * block_on_error available as "block_on_error" log
@@ -478,7 +478,7 @@ static int _mirrored_target_present(struct cmd_context *cmd,
 		 */
 		/* FIXME Move this into libdevmapper */
 
-		if (target_version("mirror", &maj, &min, &patchlevel) &&
+		if (target_version(SEG_TYPE_NAME_MIRROR, &maj, &min, &patchlevel) &&
 		    maj == 1 &&
 		    ((min >= 1) ||
 		     (min == 0 && driver_version(vsn, sizeof(vsn)) &&
@@ -572,7 +572,7 @@ static int _mirrored_modules_needed(struct dm_pool *mem,
 		return 0;
 	}
 
-	if (!str_list_add(mem, modules, "mirror")) {
+	if (!str_list_add(mem, modules, SEG_TYPE_NAME_MIRROR)) {
 		log_error("mirror string list allocation failed");
 		return 0;
 	}
@@ -619,7 +619,7 @@ struct segment_type *init_segtype(struct cmd_context *cmd)
 		return_NULL;
 
 	segtype->ops = &_mirrored_ops;
-	segtype->name = "mirror";
+	segtype->name = SEG_TYPE_NAME_MIRROR;
 	segtype->flags = SEG_MIRROR | SEG_AREAS_MIRRORED;
 
 #ifdef DEVMAPPER_SUPPORT

@@ -160,6 +160,8 @@ struct segtype_handler {
 
 struct segment_type *get_segtype_from_string(struct cmd_context *cmd,
 					     const char *str);
+struct segment_type *get_segtype_from_flag(struct cmd_context *cmd,
+					   uint64_t flag);
 
 struct segtype_library;
 int lvm_register_segtype(struct segtype_library *seglib,
@@ -179,6 +181,8 @@ struct segment_type *init_unknown_segtype(struct cmd_context *cmd,
 #ifdef RAID_INTERNAL
 int init_raid_segtypes(struct cmd_context *cmd, struct segtype_library *seglib);
 #endif
+
+#define SEG_TYPE_NAME_MIRROR		"mirror"
 
 /* RAID specific seg and segtype checks */
 #define SEG_TYPE_NAME_LINEAR		"linear"
@@ -223,8 +227,10 @@ int init_raid_segtypes(struct cmd_context *cmd, struct segtype_library *seglib);
 #define segtype_is_raid6_la_6(segtype)	(((segtype)->flags & SEG_RAID6_LA_6) ? 1 : 0)
 #define segtype_is_raid6_ra_6(segtype)	(((segtype)->flags & SEG_RAID6_RA_6) ? 1 : 0)
 #define segtype_is_raid6_n_6(segtype)	(((segtype)->flags & SEG_RAID6_N_6) ? 1 : 0)
+#define segtype_is_raid6_zr(segtype)	(((segtype)->flags & SEG_RAID6_ZR) ? 1 : 0)
 #define segtype_is_any_raid6(segtype)	(((segtype)->flags & \
-					 (SEG_RAID6_ZR|SEG_RAID6_NC|SEG_RAID6_NR|SEG_RAID6_N_6)) ? 1 : 0)
+					 (SEG_RAID6_ZR|SEG_RAID6_NC|SEG_RAID6_NR| \
+					  SEG_RAID6_LS_6|SEG_RAID6_LA_6|SEG_RAID6_RS_6|SEG_RAID6_RA_6|SEG_RAID6_N_6)) ? 1 : 0)
 #define segtype_is_striped_raid(segtype)	(segtype_is_raid(segtype) && !segtype_is_raid1(segtype))
 
 #define seg_is_raid0(seg)		segtype_is_raid0((seg)->segtype)
@@ -246,6 +252,7 @@ int init_raid_segtypes(struct cmd_context *cmd, struct segtype_library *seglib);
 #define seg_is_raid6_la_6(seg)		segtype_is_raid6_la_6((seg)->segtype)
 #define seg_is_raid6_ra_6(seg)		segtype_is_raid6_ra_6((seg)->segtype)
 #define seg_is_raid6_n_6(seg)		segtype_is_raid6_n_6((seg)->segtype)
+#define seg_is_raid6_zr(seg)		segtype_is_raid6_zr((seg)->segtype)
 #define seg_is_striped_raid(seg)	segtype_is_striped_raid((seg)->segtype)
 
 #ifdef REPLICATOR_INTERNAL

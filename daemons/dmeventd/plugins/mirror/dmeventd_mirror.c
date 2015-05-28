@@ -17,6 +17,7 @@
 #include "libdevmapper-event.h"
 #include "dmeventd_lvm.h"
 #include "defaults.h"
+#include "segtype.h"
 
 #include <syslog.h> /* FIXME Replace syslog with multilog */
 /* FIXME Missing openlog? */
@@ -169,7 +170,7 @@ void process_event(struct dm_task *dmt,
 			continue;
 		}
 
-		if (strcmp(target_type, "mirror")) {
+		if (strcmp(target_type, SEG_TYPE_NAME_MIRROR)) {
 			syslog(LOG_INFO, "%s has unmirrored portion.", device);
 			continue;
 		}

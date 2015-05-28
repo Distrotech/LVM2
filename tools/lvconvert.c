@@ -237,22 +237,11 @@ static int _check_conversion_type(struct cmd_context *cmd, const char *type_str)
 	if (!type_str || !*type_str)
 		return 1;
 
-#if 0
-	/* HM FIXME: TESTME to convert from raid1 to mirror */
-	if (!strcmp(type_str, "mirror")) {
-		if (!arg_count(cmd, mirrors_ARG)) {
-			log_error("--type mirror requires -m/--mirrors");
-			return 0;
-		}
-		return 1;
-	}
-#endif
-
 	/* FIXME: Check thin-pool and thin more thoroughly! */
 	if (!strcmp(type_str, "snapshot") ||
 	    !strcmp(type_str, "linear") ||
 	    !strcmp(type_str, "striped") ||
-	    !strcmp(type_str, "mirror") || /* HM FIXME: TESTME to convert raid1 to mirror */
+	    !strcmp(type_str, SEG_TYPE_NAME_MIRROR) ||
 	    !strncmp(type_str, "raid", 4) ||
 	    !strcmp(type_str, "cache-pool") || !strcmp(type_str, "cache") ||
 	    !strcmp(type_str, "thin-pool") || !strcmp(type_str, "thin"))
@@ -270,7 +259,7 @@ static int _snapshot_type_requested(struct cmd_context *cmd, const char *type_st
 static int _mirror_or_raid_type_requested(struct cmd_context *cmd, const char *type_str) {
 	return (arg_count(cmd, mirrors_ARG) ||
 		!strncmp(type_str, "raid", 4) ||
-		!strcmp(type_str, "mirror"));
+		!strcmp(type_str, SEG_TYPE_NAME_MIRROR));
 }
 
 static int _read_pool_params(struct cmd_context *cmd, int *pargc, char ***pargv,

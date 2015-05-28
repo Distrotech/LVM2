@@ -152,7 +152,7 @@ static const char *_lv_type_names[] = {
 	[LV_TYPE_PRIVATE] =				"private",
 	[LV_TYPE_LINEAR] =				"linear",
 	[LV_TYPE_STRIPED] =				"striped",
-	[LV_TYPE_MIRROR] =				"mirror",
+	[LV_TYPE_MIRROR] =				SEG_TYPE_NAME_MIRROR,
 	[LV_TYPE_RAID] =				"raid",
 	[LV_TYPE_THIN] =				"thin",
 	[LV_TYPE_CACHE] =				"cache",
@@ -3287,7 +3287,7 @@ static struct lv_segment *_convert_seg_to_mirror(struct lv_segment *seg,
 		return NULL;
 	}
 
-	if (!(newseg = alloc_lv_segment(get_segtype_from_string(seg->lv->vg->cmd, "mirror"),
+	if (!(newseg = alloc_lv_segment(get_segtype_from_string(seg->lv->vg->cmd, SEG_TYPE_NAME_MIRROR),
 					seg->lv, seg->le, seg->len, 0,
 					seg->status, seg->stripe_size,
 					log_lv,
@@ -3494,7 +3494,7 @@ int lv_add_mirror_lvs(struct logical_volume *lv,
 		return 0;
 	}
 
-	mirror_segtype = get_segtype_from_string(lv->vg->cmd, "mirror");
+	mirror_segtype = get_segtype_from_string(lv->vg->cmd, SEG_TYPE_NAME_MIRROR);
 	if (seg->segtype != mirror_segtype)
 		if (!(seg = _convert_seg_to_mirror(seg, region_size, NULL)))
 			return_0;

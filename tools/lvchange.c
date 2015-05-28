@@ -373,7 +373,7 @@ static int lvchange_resync(struct cmd_context *cmd, struct logical_volume *lv)
 
 		if (!_reactivate_lv(lv, active, exclusive)) {
 			log_error("Failed to reactivate %s to resynchronize "
-				  "mirror", lv->name);
+				  SEG_TYPE_NAME_MIRROR, lv->name);
 			return 0;
 		}
 

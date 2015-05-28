@@ -84,7 +84,7 @@ static int _cluster_mirror_is_available(struct logical_volume *lv)
        struct cmd_context *cmd = lv->vg->cmd;
        const struct segment_type *segtype;
 
-       if (!(segtype = get_segtype_from_string(cmd, "mirror")))
+       if (!(segtype = get_segtype_from_string(cmd, SEG_TYPE_NAME_MIRROR)))
                return_0;
 
        if (!segtype->ops->target_present)
@@ -1670,7 +1670,7 @@ int fixup_imported_mirrors(struct volume_group *vg)
 	dm_list_iterate_items(lvl, &vg->lvs) {
 		dm_list_iterate_items(seg, &lvl->lv->segments) {
 			if (seg->segtype !=
-			    get_segtype_from_string(vg->cmd, "mirror"))
+			    get_segtype_from_string(vg->cmd, SEG_TYPE_NAME_MIRROR))
 				continue;
 
 			if (seg->log_lv && !add_seg_to_segs_using_this_lv(seg->log_lv, seg))
@@ -1698,7 +1698,7 @@ static int _add_mirrors_that_preserve_segments(struct logical_volume *lv,
 	if (!(parallel_areas = build_parallel_areas_from_lv(lv, 1, 0)))
 		return_0;
 
-	if (!(segtype = get_segtype_from_string(cmd, "mirror")))
+	if (!(segtype = get_segtype_from_string(cmd, SEG_TYPE_NAME_MIRROR)))
 		return_0;
 
 	adjusted_region_size = adjusted_mirror_region_size(lv->vg->extent_size,
@@ -1983,7 +1983,7 @@ int add_mirror_log(struct cmd_context *cmd, struct logical_volume *lv,
 	if (!(parallel_areas = build_parallel_areas_from_lv(lv, 0, 0)))
 		return_0;
 
-	if (!(segtype = get_segtype_from_string(cmd, "mirror")))
+	if (!(segtype = get_segtype_from_string(cmd, SEG_TYPE_NAME_MIRROR)))
 		return_0;
 
 	if (activation() && segtype->ops->target_present &&
@@ -2056,7 +2056,7 @@ int add_mirror_images(struct cmd_context *cmd, struct logical_volume *lv,
 	if (!(parallel_areas = build_parallel_areas_from_lv(lv, 0, 0)))
 		return_0;
 
-	if (!(segtype = get_segtype_from_string(cmd, "mirror")))
+	if (!(segtype = get_segtype_from_string(cmd, SEG_TYPE_NAME_MIRROR)))
 		return_0;
 
 	ah = allocate_extents(lv->vg, NULL, segtype,
