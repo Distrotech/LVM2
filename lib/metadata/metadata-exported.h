@@ -413,8 +413,7 @@ struct lv_segment {
 	uint32_t writebehind;   /* For RAID (RAID1 only) */
 	uint32_t min_recovery_rate; /* For RAID */
 	uint32_t max_recovery_rate; /* For RAID */
-	uint32_t data_offset; /* For RAID, data offset in sectors on each data component image
-				 overloaded by setting 1 to cause emmiting 0 offset */
+	uint32_t data_offset; /* For RAID, data offset in sectors on each data component image */
 	uint32_t area_count;
 	uint32_t area_len;
 	uint32_t chunk_size;	/* For snapshots/thin_pool.  In sectors. */
@@ -423,7 +422,7 @@ struct lv_segment {
 	struct logical_volume *merge_lv; /* thin, merge descendent lv into this ancestor */
 	struct logical_volume *cow;
 	struct dm_list origin_list;
-	uint32_t region_size;	/* For mirrors, replicators - in sectors */
+	uint32_t region_size;	/* For mirrors, raid, replicators - in sectors */
 	uint32_t extents_copied;
 	struct logical_volume *log_lv;
 	struct lv_segment *pvmove_source_seg;
@@ -827,7 +826,7 @@ struct lvcreate_params {
 	int32_t major; /* all */
 	int32_t minor; /* all */
 	int log_count; /* mirror */
-	int nosync; /* mirror */
+	int nosync; /* mirror, raid */
 	int pool_metadata_spare; /* pools */
 	int type;   /* type arg is given */
 	int temporary; /* temporary LV */

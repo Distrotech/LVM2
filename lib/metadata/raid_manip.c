@@ -3960,11 +3960,12 @@ static int _convert_linear_or_raid0_to_raid0145(struct logical_volume *lv,
 		}
 
 PFLA("linear/raid1/4/5 new_image_count=%u stripe_size=%u", new_image_count, seg->stripe_size);
-		return _lv_raid_change_image_count(lv, new_segtype, new_image_count, allocate_pvs);
+		return _lv_raid_change_image_count(lv, new_segtype, new_image_count, allocate_pvs) ? 2 : 0;
 	}
 
 	return 1;
 }
+
 /*
  * Report current number of redundant disks for @total_images and @segtype 
  */
@@ -4210,6 +4211,7 @@ PFLA("segtype=%s new_segtype_tmp=%s", seg->segtype->name, new_segtype_tmp->name)
 	if (sigint_caught())
 		return_0;
 
+
 	/* Now archive metadata after the user has confirmed */
 	if (!archive(lv->vg))
 		return_0;
@@ -4258,10 +4260,16 @@ PFLA("segtype=%s new_segtype_tmp=%s", seg->segtype->name, new_segtype_tmp->name)
 	/*
 	 * Linear/raid0 <-> raid0/1/4/5 conversions
 	 */
-	if (!_convert_linear_or_raid0_to_raid0145(lv, new_segtype_tmp,
-						  new_image_count, new_stripes, new_stripe_size,
-						  allocate_pvs))
+	switch (_convert_linear_or_raid0_to_raid0145(lv, new_segtype_tmp,
+						     new_image_count, new_stripes, new_stripe_size,
+						     allocate_pvs)) {
+	case 0:
 		goto err;
+	case 2:
+		return 1;
+	default:
+		break;
+	}
 
 
 	/****************************************************************************/
