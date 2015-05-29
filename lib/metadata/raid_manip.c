@@ -1425,41 +1425,10 @@ static int _lv_free_reshape_space(struct logical_volume *lv)
 	return 1;
 }
 
-/* Return length of unsigned @idx as a string */
-static unsigned _unsigned_str_len(unsigned idx)
-{
-	unsigned r = 0;
-
-	do  {
-		r++;
-	} while ((idx /= 10));
-
-	return r;
-}
-
-/* Create an rimage string suffix with @idx appended */
-static const char *_generate_rimage_suffix(struct logical_volume *lv, unsigned idx)
-{
-	const char *type = "_rimage";
-	char *suffix;
-	size_t len = strlen(type) + _unsigned_str_len(idx) + 1;
-
-	if (!(suffix = dm_pool_alloc(lv->vg->vgmem, len))) {
-		log_error("Failed to allocate name suffix.");
-		return 0;
-	}
-
-	if (dm_snprintf(suffix, len, "%s%u", type, idx) < 0)
-		return_0;
-
-	return suffix;
-}
-
 /* Insert RAID layer on top of @lv with suffix counter @idx */
-static int _insert_raid_layer_for_lv(struct logical_volume *lv, const char *sfx, unsigned idx)
+static int _insert_raid_layer_for_lv(struct logical_volume *lv, const char *suffix, unsigned idx)
 {
 	uint64_t flags = RAID | LVM_READ | LVM_WRITE;
-	const char *suffix = sfx ?: _generate_rimage_suffix(lv, idx);
 
 	if (!insert_layer_for_lv(lv->vg->cmd, lv, flags, suffix))
 		return 0;
