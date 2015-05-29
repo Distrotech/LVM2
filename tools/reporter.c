@@ -629,6 +629,10 @@ static int _report(struct cmd_context *cmd, int argc, char **argv,
 	/* Check PV specifics and do extra changes/actions if needed. */
 	_check_pv_list(cmd, argc, argv, &report_type, &args_are_pvs);
 
+	/*
+	 * Needed for a current listing of the global VG namespace.
+	 * (And all VGs must be searched and read to match tags.)
+	 */
 	if ((!argc || arg_tag_count(argc, argv)) && !lockd_gl(cmd, "sh", 0))
 		return_ECMD_FAILED;
 

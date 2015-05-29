@@ -82,7 +82,11 @@ static int _pvchange_single(struct cmd_context *cmd, struct volume_group *vg,
 		}
 	}
 
-	/* Convert sh to ex.  gl only needed for orphans. */
+	/*
+	 * Needed to change a property on an orphan PV.
+	 * i.e. the global lock is only needed for orphans.
+	 * Convert sh to ex.
+	 */
 	if (is_orphan(pv) && !lockd_gl(cmd, "ex", 0))
 		return_ECMD_FAILED;
 
@@ -195,6 +199,7 @@ int pvchange(struct cmd_context *cmd, int argc, char **argv)
 		goto out;
 	}
 
+	/* Needed for a current listing of the global VG namespace. */
 	if (!lockd_gl(cmd, "sh", 0))
 		return_ECMD_FAILED;
 
