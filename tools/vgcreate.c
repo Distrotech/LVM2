@@ -140,10 +140,24 @@ int vgcreate(struct cmd_context *cmd, int argc, char **argv)
 				clustered_message, *clustered_message ? 'v' : 'V', vg->name,
 				vg->system_id ? " with system ID " : "", vg->system_id ? : "");
 
-	/* Start the VG lockspace because it will likely be used right away. */
-	if (!lockd_start_vg(cmd, vg))
-		log_error("Failed to start locking");
+	/*
+	 * Start the VG lockspace because it will likely be used right away.
+	 * Optionally wait for the start to complete so the VG can be fully
+	 * used after this command completes (otherwise, the VG can only be
+	 * read without locks until the lockspace is done starting.)
+	 */
+	if (is_lockd_type(vg->lock_type)) {
+		const char *start_opt = arg_str_value(cmd, lockopt_ARG, NULL);
 
+		if (!lockd_start_vg(cmd, vg)) {
+			log_error("Failed to start locking");
+			goto out;
+		}
+
+		if (start_opt && !strcmp(start_opt, "wait"))
+			lockd_start_wait(cmd);
+	}
+out:
 	release_vg(vg);
 	return ECMD_PROCESSED;
 
