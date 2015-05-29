@@ -94,6 +94,10 @@ int vgremove(struct cmd_context *cmd, int argc, char **argv)
 		return EINVALID_CMD_LINE;
 	}
 
+	/*
+	 * Needed to change the global VG namespace,
+	 * and to change the set of orphan PVs.
+	 */
 	if (!lockd_gl(cmd, "ex", LDGL_UPDATE_NAMES))
 		return ECMD_FAILED;
 
