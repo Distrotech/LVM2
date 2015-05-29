@@ -5436,6 +5436,7 @@ PFLA("current_le=%u seg->le=%u seg->len=%u seg->area_len=%u", current_le, seg->l
 				  lv->name, current_le);
 			return 0;
 		}
+PFL();
 
 		/* Find next segment end */
 		/* FIXME Unnecessary nesting! */
@@ -5445,6 +5446,7 @@ PFLA("current_le=%u seg->le=%u seg->len=%u seg->area_len=%u", current_le, seg->l
 				  use_pvmove_parent_lv ? seg->pvmove_source_seg : NULL,
 				  &spvs->len,
 				  0, 0, -1, 0, _add_pvs, (void *) spvs)) {
+PFL();
 			return_NULL;
 		}
 
