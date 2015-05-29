@@ -98,6 +98,7 @@ int lvscan(struct cmd_context *cmd, int argc, char **argv)
 		return EINVALID_CMD_LINE;
 	}
 
+	/* Needed for a current listing of the global VG namespace. */
 	if (!lockd_gl(cmd, "sh", 0))
 		return_ECMD_FAILED;
 
