@@ -165,6 +165,7 @@ int vgextend(struct cmd_context *cmd, int argc, char **argv)
 	 */
 	cmd->handles_missing_pvs = 1;
 
+	/* Needed to change the set of orphan PVs. */
 	if (!lockd_gl(cmd, "ex", 0))
 		return_ECMD_FAILED;
 
