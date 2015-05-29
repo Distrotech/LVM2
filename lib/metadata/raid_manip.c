@@ -736,6 +736,9 @@ static int _extract_image_component(struct lv_segment *seg,
 	if (!(lv->name = _generate_raid_name(lv, "extracted", -1)))
 		return_0;
 
+	if (!replace_lv_with_error_segment(lv))
+		return_0;
+
 	*extracted_lv = lv;
 
 	return 1;
@@ -776,6 +779,34 @@ static int _extract_image_component_pair(struct lv_segment *seg, uint32_t idx,
 	return 1;
 }
 
+/* Remove sublvs fo @type from @lv starting at @idx and put them on @removal_list */
+static int _extract_image_component_list(struct lv_segment *seg,
+					uint64_t type, uint32_t idx,
+					struct dm_list *removal_list)
+{
+	uint32_t s;
+	unsigned i;
+	struct lv_list *lvl_array;
+
+	if (idx >= seg->area_count) {
+		log_error(INTERNAL_ERROR "area index too large for segment");
+		return 0;
+	}
+
+	if (!(lvl_array = dm_pool_alloc(seg_lv(seg, 0)->vg->vgmem, sizeof(*lvl_array) * (seg->area_count - idx))))
+		return_0;
+
+	for (i = 0, s = idx; s < seg->area_count; s++) {
+		if (!_extract_image_component(seg, type, s, &lvl_array[i].lv))
+				return 0;
+
+		dm_list_add(removal_list, &lvl_array[i].list);
+		i++;
+	}
+
+	return 1;
+}
+
 /* Add new @lvs to @lv at @area_offset */
 static int _add_image_component_list(struct lv_segment *seg, int delete_from_list,
 				     uint64_t lv_flags, struct dm_list *lvs, uint32_t area_offset)
@@ -802,34 +833,6 @@ static int _add_image_component_list(struct lv_segment *seg, int delete_from_lis
 			log_error("Failed to add sublv %s", lvl->lv->name);
 			return 0;
 		}
-	}
-
-	return 1;
-}
-
-/* Remove sublvs fo @type from @lv starting at @idx and put them on @removal_list */
-static int _remove_image_component_list(struct lv_segment *seg,
-					uint64_t type, uint32_t idx,
-					struct dm_list *removal_list)
-{
-	uint32_t s;
-	unsigned i;
-	struct lv_list *lvl_array;
-
-	if (idx >= seg->area_count) {
-		log_error(INTERNAL_ERROR "area index too large for segment");
-		return 0;
-	}
-
-	if (!(lvl_array = dm_pool_alloc(seg_lv(seg, 0)->vg->vgmem, sizeof(*lvl_array) * (seg->area_count - idx))))
-		return_0;
-
-	for (i = 0, s = idx; s < seg->area_count; s++) {
-		if (!_extract_image_component(seg, type, s, &lvl_array[i].lv))
-				return 0;
-
-		dm_list_add(removal_list, &lvl_array[i].list);
-		i++;
 	}
 
 	return 1;
@@ -941,12 +944,12 @@ uint32_t raid_rmeta_extents_delta(struct cmd_context *cmd,
  * _alloc_rmeta_for_lv
  * @lv
  *
- * Allocate a RAID metadata device for the given LV (which is or will
+ * Allocate  RAID metadata device for the given LV (which is or will
  * be the associated RAID data device).  The new metadata device must
  * be allocated from the same PV(s) as the data device.
  */
 static int _alloc_rmeta_for_lv(struct logical_volume *data_lv,
-		struct logical_volume **meta_lv)
+			       struct logical_volume **meta_lv)
 {
 	struct dm_list allocatable_pvs;
 	struct alloc_handle *ah;
@@ -965,7 +968,7 @@ static int _alloc_rmeta_for_lv(struct logical_volume *data_lv,
 
 	(void) dm_strncpy(base_name, data_lv->name, sizeof(base_name));
 	if ((p = strstr(base_name, "_mimage_")) ||
-			(p = strstr(base_name, "_rimage_")))
+	    (p = strstr(base_name, "_rimage_")))
 		*p = '\0';
 
 	if (!get_pv_list_for_lv(data_lv->vg->cmd->mem,
@@ -994,10 +997,11 @@ static int _alloc_rmeta_for_lv(struct logical_volume *data_lv,
 }
 
 /*
- * Allocate metadata devs for all @new_data_devs and link them to list @new_meta_lvs
+ * HM Allocate metadata devs for all @new_data_devs and link them to list @new_meta_lvs
  */
 static int _alloc_rmeta_devs_for_rimage_devs(struct logical_volume *lv,
-					     struct dm_list *new_data_lvs, struct dm_list *new_meta_lvs)
+					     struct dm_list *new_data_lvs,
+					     struct dm_list *new_meta_lvs)
 {
 	uint32_t a = 0, raid_devs = 0;
 	struct dm_list *l;
@@ -1035,18 +1039,22 @@ static int _alloc_rmeta_devs_for_rimage_devs(struct logical_volume *lv,
  A*/
 static int _alloc_rmeta_devs_for_lv(struct logical_volume *lv, struct dm_list *meta_lvs)
 {
-	uint32_t count = lv_raid_image_count(lv), s;
+	uint32_t s;
 	struct lv_list *lvl_array;
 	struct dm_list data_lvs;
 	struct lv_segment *seg = first_seg(lv);
 
 	dm_list_init(&data_lvs);
 
+	if (!(seg->meta_areas = dm_pool_zalloc(lv->vg->vgmem,
+					       seg->area_count * sizeof(*seg->meta_areas))))
+		return 0;
+
 PFLA("seg->meta_areas=%p", seg->meta_areas);
-	if (!(lvl_array = dm_pool_alloc(lv->vg->vgmem, count * sizeof(*lvl_array))))
+	if (!(lvl_array = dm_pool_alloc(lv->vg->vgmem, seg->area_count * sizeof(*lvl_array))))
 		return_0;
 
-	for (s = 0; s < count; s++) {
+	for (s = 0; s < seg->area_count; s++) {
 		lvl_array[s].lv = seg_lv(seg, s);
 		dm_list_add(&data_lvs, &lvl_array[s].list);
 	}
@@ -1418,23 +1426,21 @@ static int _lv_free_reshape_space(struct logical_volume *lv)
 }
 
 
-/* Correct LV names for @data_lvs in case of a linear @lv */
-static int _correct_data_lv_names(struct logical_volume *lv, uint32_t count, struct dm_list *data_lvs)
+/*
+ * Correct LV names for @data_lvs in case of a linear @lv
+ * iby incrementing them, because the linear LV will
+ * becomme "rimage_0" during the conversion
+ */
+static int _increment_data_lv_name_suffixes(struct logical_volume *lv, uint32_t count, struct dm_list *data_lvs)
 {
-	struct dm_list *l;
-	struct lv_list *lvl, *lvl_n;
+	struct lv_list *lvl;
 
-	dm_list_iterate(l, data_lvs) {
-		lvl = dm_list_item(l, struct lv_list);
+	dm_list_iterate_items(lvl, data_lvs) {
+		if (&lvl->list != dm_list_last(data_lvs))
+			lvl->lv->name = ((struct lv_list *) lvl->list.n)->lv->name;
 
-		if (l == dm_list_last(data_lvs)) {
-			if (!(lvl->lv->name = _generate_raid_name(lv, "rimage", count)))
-				return_0;
-			continue;
-		}
-
-		lvl_n = dm_list_item(l->n, struct lv_list);
-		lvl->lv->name = lvl_n->lv->name;
+		else if (!(lvl->lv->name = _generate_raid_name(lv, "rimage", count)))
+			return_0;
 	}
 
 	return 1;
@@ -1695,14 +1701,16 @@ PFLA("seg->segtype->flags=%llX lv_flags=%llX", (long long unsigned) seg->segtype
 		return_0;
 PFL();
 	/*
-	 * If linear, we must correct data LV names.  They are off-by-one
-	 * because the linear volume hasn't taken its proper name of "_rimage_0"
-	 * yet.  This action must be done before '_clear_lvs' because it
+	 * If linear, we must correct data LV names incrementing their suffixes by one;
+	 * they are off-by-one because the linear volume hasn't taken its proper name
+	 * of "_rimage_0" yet.
+	 *
+	 * This action must be done before '_clear_lvs' because it
 	 * commits the LVM metadata before clearing the LVs.
 	 */
 	if (linear) {
 PFL();
-		if (!_correct_data_lv_names(lv, count, &data_lvs))
+		if (!_increment_data_lv_name_suffixes(lv, count, &data_lvs))
 			return 0;
 	    	if (!_convert_linear_to_raid(lv))
 			return 0;
@@ -1753,7 +1761,7 @@ PFL();
 	/* Set segment areas for data sub_lvs */
 	log_debug_metadata("Adding new data LVs");
 	if (!_add_image_component_list(seg, 0, lv_flags, &data_lvs, old_count)) {
-		if (!_remove_image_component_list(seg, RAID_META, add_all_rmeta ? 0 : old_count, &meta_lvs))
+		if (!_extract_image_component_list(seg, RAID_META, add_all_rmeta ? 0 : old_count, &meta_lvs))
 			return 0;
 
 		seg->area_count = old_count;
@@ -1811,8 +1819,8 @@ PFLA("lv->le_count=%u", lv->le_count);
 
 PFL();
 	if (!lv_update_and_reload_origin(lv)) {
-		if (!_remove_image_component_list(seg, RAID_META, add_all_rmeta ? 0 : old_count, &meta_lvs) ||
-		    !_remove_image_component_list(seg, RAID_IMAGE, old_count, &data_lvs))
+		if (!_extract_image_component_list(seg, RAID_META, add_all_rmeta ? 0 : old_count, &meta_lvs) ||
+		    !_extract_image_component_list(seg, RAID_IMAGE, old_count, &data_lvs))
 			return 0;
 
 		goto fail;
@@ -2051,7 +2059,7 @@ PFL();
 	 */
 	if (segtype_is_raid0(segtype) &&
 	    seg->meta_areas &&
-	    !_remove_image_component_list(seg, RAID_META, 0, &removal_list))
+	    !_extract_image_component_list(seg, RAID_META, 0, &removal_list))
 		return 0;
 PFL();
 
@@ -2136,7 +2144,7 @@ static int _raid0_add_or_remove_metadata_lvs(struct logical_volume *lv, int upda
 
 	if (seg->meta_areas) {
 		log_debug_metadata("Extracting metadata LVs");
-		if (!_remove_image_component_list(seg, RAID_META, 0, &removal_mlvs))
+		if (!_extract_image_component_list(seg, RAID_META, 0, &removal_mlvs))
 			return 0;
 PFL();
 		seg->meta_areas = NULL;
@@ -2148,10 +2156,6 @@ PFL();
 		struct dm_list meta_lvs;
 
 		dm_list_init(&meta_lvs);
-
-		if (!(seg->meta_areas = dm_pool_zalloc(lv->vg->vgmem,
-						       seg->area_count * sizeof(*seg->meta_areas))))
-			return 0;
 
 		if (!_alloc_rmeta_devs_for_lv(lv, &meta_lvs))
 			return 0;
@@ -2502,34 +2506,15 @@ static int _convert_mirror_to_raid1(struct logical_volume *lv,
 {
 	uint32_t s;
 	struct lv_segment *seg = first_seg(lv);
-	struct lv_list lvl_array[seg->area_count], *lvl;
 	struct dm_list meta_lvs;
-	struct lv_segment_area *meta_areas;
 	char *new_name;
 
 	dm_list_init(&meta_lvs);
 
-	if (!(meta_areas = dm_pool_zalloc(lv->vg->vgmem,
-					  lv_mirror_count(lv) * sizeof(*meta_areas)))) {
-		log_error("Failed to allocate meta areas memory.");
+	/* Allocate metadata devs for all mimage ones */
+	log_debug_metadata("Allocating metadata LVs");
+	if (!_alloc_rmeta_devs_for_lv(lv, &meta_lvs))
 		return 0;
-	}
-#if 0
-	/* HM FIXME: has been called in lvconvert already */
-	if (!archive(lv->vg))
-		return_0;
-#endif
-	for (s = 0; s < seg->area_count; s++) {
-		log_debug_metadata("Allocating new metadata LV for %s",
-				   seg_lv(seg, s)->name);
-		if (!_alloc_rmeta_for_lv(seg_lv(seg, s), &(lvl_array[s].lv))) {
-			log_error("Failed to allocate metadata LV for %s in %s",
-				  seg_lv(seg, s)->name, lv->name);
-			return 0;
-		}
-
-		dm_list_add(&meta_lvs, &(lvl_array[s].list));
-	}
 
 	log_debug_metadata("Clearing newly allocated metadata LVs");
 	if (!_clear_lvs(&meta_lvs)) {
@@ -2543,28 +2528,13 @@ static int _convert_mirror_to_raid1(struct logical_volume *lv,
 			log_error("Failed to remove mirror log");
 			return 0;
 		}
+
+		seg->log_lv = NULL;
 	}
 
-	seg->meta_areas = meta_areas;
-	s = 0;
-
-	dm_list_iterate_items(lvl, &meta_lvs) {
-		log_debug_metadata("Adding %s to %s", lvl->lv->name, lv->name);
-
-		/* Images are known to be in-sync */
-		lvl->lv->status &= ~LV_REBUILD;
-		first_seg(lvl->lv)->status &= ~LV_REBUILD;
-		lv_set_hidden(lvl->lv);
-
-		if (!set_lv_segment_area_lv(seg, s, lvl->lv, 0,
-					    lvl->lv->status)) {
-			log_error("Failed to add %s to %s",
-				  lvl->lv->name, lv->name);
-			return 0;
-		}
-
-		s++;
-	}
+	log_debug_metadata("Adding metadata LVs");
+	if (!_add_image_component_list(seg, 0, 0, &meta_lvs, 0))
+		return 0;
 
 	for (s = 0; s < seg->area_count; ++s) {
 		if (!(new_name = _generate_raid_name(lv, "rimage", s)))
@@ -2603,7 +2573,6 @@ static int _convert_raid1_to_mirror(struct logical_volume *lv,
 	char *new_name;
 	struct lv_segment *seg = first_seg(lv);
 	struct dm_list removal_mlvs;
-	struct lv_list *lvl_array;
 
 	if (image_count > DEFAULT_MIRROR_MAX_IMAGES) {
 		log_error("Unable to convert mirror LV %s/%s with %u images",
@@ -2615,24 +2584,11 @@ static int _convert_raid1_to_mirror(struct logical_volume *lv,
 
 	dm_list_init(&removal_mlvs);
 
-	/* Allocate for number of metadata LVs */
-	if (!(lvl_array = dm_pool_alloc(lv->vg->vgmem, seg->area_count * sizeof(*lvl_array))))
-		return_0;
-
 	/* Remove rmeta LVs */
 	if (seg->meta_areas) {
-		for (s = 0; s < seg->area_count; s++) {
-			struct logical_volume *mlv = lvl_array[s].lv = seg_metalv(seg, s);
-
-			dm_list_add(&removal_mlvs, &lvl_array[s].list);
-			if (!(new_name = _generate_raid_name(mlv, "extracted", -1)))
-				return_0;
-			log_debug_metadata("Extracting and Renaming %s to %s", mlv->name, new_name);
-			if (!_remove_and_set_error_target(mlv, seg))
-				return 0;
-
-			mlv->name = new_name;
-		}
+		log_debug_metadata("Extracting and renaming metadata LVs");
+		if (!_extract_image_component_list(seg, RAID_META, 0, &removal_mlvs))
+			return 0;
 
 		seg->meta_areas = NULL;
 	}
@@ -3285,10 +3241,12 @@ PFLA("new_dev_count=%u _data_rimages_count(seg, new_dev_count)=%u new_len=%u", n
 			if (sigint_caught())
 				return_0;
 
+#if 0
 			if (!force) {
 				log_warn("WARNING: Can't remove stripes without --force option");
 				return 0;
 			}
+#endif
 
 			/*
 			 * Allocate free backward out of place reshape space at the end of all data image LVs
@@ -4329,6 +4287,9 @@ PFLA("segtype=%s new_segtype_tmp=%s", seg->segtype->name, new_segtype_tmp->name)
 	/*
 	 * Start with special conversions, _convert_raid_to_raid() is not capable of (yet)
 	 */
+	if (seg_is_raid1(seg) && segtype_is_raid1(new_segtype_tmp) &&
+	    new_image_count != seg->area_count)
+		return _lv_raid_change_image_count(lv, new_segtype_tmp, new_image_count, allocate_pvs);
 
 	/*
 	 * Check, if raid0/linear with 1 image conversions
@@ -4690,7 +4651,6 @@ try_again:
 		return 0;
 	}
 
-	/* HM FIXME: TESTME */
 	/* The new metadata LV(s) must be cleared before being added to the array */
 	log_debug_metadata("Clearing newly allocated replacement metadata LV");
 	if (!_clear_lvs(&new_meta_lvs))
