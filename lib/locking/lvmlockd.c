@@ -138,8 +138,8 @@ static void _flags_str_to_lockd_flags(const char *flags_str, uint32_t *lockd_fla
 static int _lockd_result(daemon_reply reply, int *result, uint32_t *lockd_flags)
 {
 	int reply_result;
-	const char *flags_str;
-	const char *lock_type;
+	const char *flags_str = NULL;
+	const char *lock_type = NULL;
 
 	if (reply.error) {
 		log_error("lockd_result reply error %d", reply.error);
@@ -162,15 +162,13 @@ static int _lockd_result(daemon_reply reply, int *result, uint32_t *lockd_flags)
 
 	*result = reply_result;
 
-	if (!lockd_flags)
-		goto out;
+	if (lockd_flags) {
+		if ((flags_str = daemon_reply_str(reply, "result_flags", NULL)))
+			_flags_str_to_lockd_flags(flags_str, lockd_flags);
+	}
 
-	flags_str = daemon_reply_str(reply, "result_flags", NULL);
-	if (flags_str)
-		_flags_str_to_lockd_flags(flags_str, lockd_flags);
-
- out:
-	log_debug("lockd_result %d %s lm %s", reply_result, flags_str, lock_type);
+	log_debug("lockd_result %d flags %s lm %s", reply_result,
+		  flags_str ? flags_str : "none", lock_type);
 	return 1;
 }
 
