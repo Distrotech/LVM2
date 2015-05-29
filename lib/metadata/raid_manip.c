@@ -23,6 +23,7 @@
 #include "lvm-string.h"
 #include "lvm-signal.h"
 
+/* HM FIXME: REMOVEME: devel output */
 #if 0
 #include "dump.h"
 #endif
@@ -2578,8 +2579,7 @@ static int _convert_mirror_to_raid1(struct logical_volume *lv,
 
 	log_debug_metadata("Setting new segtype for %s", lv->name);
 	seg->segtype = new_segtype;
-	lv->status &= ~MIRROR;
-	lv->status &= ~MIRRORED;
+	lv->status &= ~(MIRROR | MIRRORED);
 	lv->status |= RAID;
 	seg->status |= RAID;
 
@@ -2637,12 +2637,6 @@ static int _convert_raid1_to_mirror(struct logical_volume *lv,
 		seg->meta_areas = NULL;
 	}
 
-	/* Add mirrored mirror_log LVs */
-	if (!add_mirror_log(lv->vg->cmd, lv, 1, seg->region_size, allocatable_pvs, lv->vg->alloc)) {
-		log_error("Unable to add mirror log to %s/%s", lv->vg->name, lv->name);
-		return 0;
-	}
-
 	for (s = 0; s < seg->area_count; ++s) {
 		struct logical_volume *dlv = seg_lv(seg, s);
 
@@ -2660,6 +2654,12 @@ static int _convert_raid1_to_mirror(struct logical_volume *lv,
 	lv->status |= (MIRROR | MIRRORED);
 	lv->status &= ~RAID;
 	seg->status &= ~RAID;
+
+	/* Add mirrored mirror_log LVs */
+	if (!add_mirror_log(lv->vg->cmd, lv, 1, seg->region_size, allocatable_pvs, lv->vg->alloc)) {
+		log_error("Unable to add mirror log to %s/%s", lv->vg->name, lv->name);
+		return 0;
+	}
 
 	if (!lv_update_and_reload(lv))
 		return_0;
@@ -3856,15 +3856,19 @@ PFLA("seg->segtype=%s new_segtype->name=%s", seg->segtype->name, new_segtype->na
 } /* _convert_raid_to_raid() */
 /******* END: raid <-> raid conversion *******/
 
+
+/****************************************************************************/
+/* Special case raid check/convert functions */
+
 /*
- * Linear/raid0 <-> raid0/1/4/5 conversions of @lv defined by @new_segtype
+ * Linear/raid0 (1 image) <-> raid0/4/5 conversions of @lv defined by @new_segtype
  */
-static int _convert_linear_or_raid0_to_raid0145(struct logical_volume *lv,
-						const struct segment_type *new_segtype,
-						uint32_t new_image_count,
-						uint32_t new_stripes,
-						uint32_t new_stripe_size,
-						struct dm_list *allocate_pvs)
+static int _check_linear_or_raid0_from_to_raid0145(struct logical_volume *lv,
+						   const struct segment_type *new_segtype,
+						   uint32_t new_image_count,
+						   uint32_t new_stripes,
+						   uint32_t new_stripe_size,
+						   struct dm_list *allocate_pvs)
 {
 	int convert;
 	struct lv_segment *seg = first_seg(lv);
@@ -3877,7 +3881,7 @@ static int _convert_linear_or_raid0_to_raid0145(struct logical_volume *lv,
 
 	/* linear -> raid4/5 with 2 images */
 	else if ((convert = (seg_is_linear(seg) &&
-			       (segtype_is_raid4(new_segtype) || segtype_is_any_raid5(new_segtype))))) {
+			     (segtype_is_raid4(new_segtype) || segtype_is_any_raid5(new_segtype))))) {
 		new_image_count = 2;
 
 	/* raid0 with _one_ image -> raid1/4/5 with 2 images */
@@ -3933,6 +3937,7 @@ static int _convert_linear_or_raid0_to_raid0145(struct logical_volume *lv,
 		return lv_update_and_reload(lv);
 
 #if 0
+	/* HM FIXME: CODEME: */
 	/* raid10 with N > 2 images -> raid10 with M images */
 	} else if ((convert = (seg_is_raid10(seg) && seg->segtype == new_segtype &&
 		   new_image_count != seg->area_count))) {
@@ -3960,10 +3965,104 @@ static int _convert_linear_or_raid0_to_raid0145(struct logical_volume *lv,
 		}
 
 PFLA("linear/raid1/4/5 new_image_count=%u stripe_size=%u", new_image_count, seg->stripe_size);
-		return _lv_raid_change_image_count(lv, new_segtype, new_image_count, allocate_pvs) ? 2 : 0;
+		return _lv_raid_change_image_count(lv, new_segtype, new_image_count, allocate_pvs);
 	}
 
-	return 1;
+	return 2; /* Indicate that no conversion happened */
+}
+
+/****************************************************************************/
+/*
+ * Mirror <-> RAID1 conversion
+ */
+static int _check_mirror_from_to_raid(struct logical_volume *lv,
+				      int yes,
+				      const struct segment_type *new_segtype,
+				      struct dm_list *allocate_pvs)
+{
+	int r;
+	struct lv_segment *seg = first_seg(lv);
+
+	/*
+	 * Mirror -> RAID1 conversion
+	 */
+	if (seg_is_mirror(seg) && segtype_is_raid1(new_segtype))
+		r = _convert_mirror_to_raid1(lv, new_segtype);
+
+	/*
+	 * RAID1 -> Mirror conversion
+	 */
+	/*
+	 * FIXME: support this conversion or don't invite users to switch back to "mirror"?
+	 *        I find this at least valuable in case of an erroneous conversion to raid1
+	 */
+	else if (seg_is_raid1(seg) && segtype_is_mirror(new_segtype)) {
+		if (!yes && yes_no_prompt("WARNING: Do you really want to convert %s/%s to "
+					  "non-recommended \"%s\" type? [y/n]: ",
+				  lv->vg->name, lv->name, SEG_TYPE_NAME_MIRROR) == 'n') {
+			log_warn("Logical volume %s/%s NOT converted to \"%s\"",
+				  lv->vg->name, lv->name, SEG_TYPE_NAME_MIRROR);
+			return 0;
+		}
+		if (sigint_caught())
+			return_0;
+
+		r = _convert_raid1_to_mirror(lv, new_segtype, allocate_pvs);
+
+	} else
+		return 2; /* Indicate no conversion to caller */
+
+	return r;
+}
+
+/*
+ * raid0 <-> raid10 comversion
+ *
+ * md raid10 "near" is a stripe on top of stripes number of 2-way mirrors
+ */
+/* HM FIXME: move to _raid_takeover() rather than special case here */
+/* HM FIXME: support far and offset formats */
+static int _check_raid0_to_from_raid10(struct logical_volume *lv,
+				       struct segment_type *new_segtype,
+				       struct dm_list *allocate_pvs)
+{
+	struct lv_segment *seg = first_seg(lv);
+
+	if (segtype_is_raid10(new_segtype)) {
+		if (seg_is_striped(seg) || seg_is_any_raid0(seg)) {
+			if (seg_is_striped(seg) &&
+			    !_convert_striped_to_raid0(lv, 1, 0))
+				return 0;
+
+			return _lv_raid_change_image_count(lv, new_segtype, lv_raid_image_count(lv) * 2, allocate_pvs);
+
+		}
+
+		return 3; /* Indicate that conversion is not possible */
+	}
+
+	if (seg_is_raid10(seg)) {
+		if (segtype_is_striped(new_segtype) || segtype_is_any_raid0(new_segtype)) {
+			struct segment_type *final_segtype;
+
+			if (segtype_is_striped(new_segtype)) {
+				final_segtype = new_segtype;
+				if (!(new_segtype = get_segtype_from_flag(lv->vg->cmd, SEG_RAID0)))
+					return_0;
+			} else
+				final_segtype = NULL;
+
+			if (!_lv_raid_change_image_count(lv, new_segtype, lv_raid_image_count(lv) / 2, allocate_pvs))
+				return 0;
+
+			return _convert_raid0_to_striped(lv, final_segtype);
+
+		}
+
+		return 3; /* Indicate that conversion is not possible */
+	}
+
+	return 2; /* Indicate that no conversion happened */
 }
 
 /*
@@ -4038,6 +4137,16 @@ static void _seg_get_redundancy(const struct segment_type *segtype, unsigned tot
  *  - keep ti->len small on initial disk adding reshape and grow after it has finished
  *    in order to avoid bio_endio in the targets map method?
  */
+#define _CHECK_RET(r)	\
+	switch (r) {		\
+	case 0:			\
+	case 1:			\
+		return r;	\
+	case 2:			\
+		break;		\
+	case 3:			\
+		goto err;	\
+	}
 int lv_raid_convert(struct logical_volume *lv,
 		    const struct segment_type *new_segtype,
 		    int yes, int force,
@@ -4217,126 +4326,36 @@ PFLA("segtype=%s new_segtype_tmp=%s", seg->segtype->name, new_segtype_tmp->name)
 		return_0;
 
 
-	/****************************************************************************/
-	/* linear/raid0 with 1 image/raid1 with N images -> raid1 with M images (N != M ) */
-	if ((seg_is_linear(seg) || (seg_is_any_raid0(seg) && seg->area_count == 1) || seg_is_raid1(seg)) &&
-	    segtype_is_raid1(new_segtype_tmp)) {
-PFLA("segtype=%s new_segtype_tmp=%s", seg->segtype->name, new_segtype_tmp->name);
-
-		if (!(new_segtype_tmp = get_segtype_from_string(lv->vg->cmd, SEG_TYPE_NAME_RAID1)))
-			return_0;
-		new_image_count = new_image_count > 1 ? new_image_count : 2;
-
-		return _lv_raid_change_image_count(lv, new_segtype_tmp, new_image_count, allocate_pvs);
-	}
-
-	/* raid1 with N > 1 images to raid0 with 1 image/linear */
-	if (seg_is_raid1(seg) &&
-	    (segtype_is_striped(new_segtype_tmp) || segtype_is_any_raid0(new_segtype_tmp)) && new_image_count == 1) {
-	    	if (segtype_is_striped(new_segtype_tmp)) {
-			final_segtype = new_segtype_tmp;
-			if (!(new_segtype_tmp = get_segtype_from_flag(lv->vg->cmd, SEG_RAID0)))
-				return_0;
-		} else
-			final_segtype = NULL;
-		
-		if (!yes && yes_no_prompt("WARNING: Do you really want to convert %s/%s to %s? [y/n]: ",
-					   lv->vg->name, lv->name,
-					   final_segtype ? _get_segtype_name(final_segtype, 1) : new_segtype->name) == 'n') {
-			log_warn("Logical volume %s/%s NOT converted", lv->vg->name, lv->name);
-			return 0;
-		}
-		if (sigint_caught())
-			return_0;
-
-		if (!_lv_raid_change_image_count(lv, new_segtype_tmp, new_image_count, allocate_pvs))
-			return 0;
-
-		return _convert_raid0_to_striped(lv, final_segtype);
-	}
-
-
-	/****************************************************************************/
 	/*
-	 * Linear/raid0 <-> raid0/1/4/5 conversions
+	 * Start with special conversions, _convert_raid_to_raid() is not capable of (yet)
 	 */
-	switch (_convert_linear_or_raid0_to_raid0145(lv, new_segtype_tmp,
-						     new_image_count, new_stripes, new_stripe_size,
-						     allocate_pvs)) {
-	case 0:
-		goto err;
-	case 2:
-		return 1;
-	default:
-		break;
-	}
-
-
-	/****************************************************************************/
-	/*
-	 * Mirror -> RAID1 conversion
-	 */
-	if (seg_is_mirror(seg) && segtype_is_raid1(new_segtype_tmp))
-		return _convert_mirror_to_raid1(lv, new_segtype_tmp);
 
 	/*
-	 * RAID1 -> Mirror conversion
+	 * Check, if raid0/linear with 1 image conversions
+	 * to raid0/1/4/5 or vice-versa are requested
 	 */
+	r = _check_linear_or_raid0_from_to_raid0145(lv, new_segtype_tmp,
+						    new_image_count, new_stripes, new_stripe_size,
+						    allocate_pvs);
+	_CHECK_RET(r);
+
+
 	/*
-	 * FIXME: support this conversion or don't invite users to switch back to "mirror"?
-	 *        I find this at least valuable in case of an erroneous conversion to raid1
+	 * Check, if mirror <-> raid1 conversions are requested
 	 */
-	if (seg_is_raid1(seg) && segtype_is_mirror(new_segtype_tmp)) {
-		if (!yes && yes_no_prompt("WARNING: Do you really want to convert %s/%s to "
-					  "non-recommended \"mirror\" type? [y/n]: ",
-				  lv->vg->name, lv->name) == 'n') {
-			log_warn("Logical volume %s/%s NOT converted to \"mirror\"", lv->vg->name, lv->name);
-			return 0;
-		}
-		if (sigint_caught())
-			return_0;
-
-		return _convert_raid1_to_mirror(lv, new_segtype_tmp, allocate_pvs);
-	}
+	r = _check_mirror_from_to_raid(lv, yes, new_segtype_tmp, allocate_pvs);
+	_CHECK_RET(r);
 
 
-	/****************************************************************************/
 	/*
-	 * RAID0 <-> RAID10 comversion
-	 *
-	 * MD RAID10 "near" is a stripe on top of stripes number of 2-way mirrors
+	 * Check, if raid0 <-> raid10 comversion are requested
 	 */
-	/* HM FIXME: move to _raid_takeover() rather than special case here */
-	/* HM FIXME: support far and offset formats */
-	if (segtype_is_raid10(new_segtype_tmp)) {
-		if (seg_is_striped(seg) || seg_is_any_raid0(seg)) {
-			if (seg_is_striped(seg) &&
-			    !_convert_striped_to_raid0(lv, 1, 0))
-				return 0;
+	r = _check_raid0_to_from_raid10(lv, new_segtype_tmp, allocate_pvs);
+	_CHECK_RET(r);
 
-			return _lv_raid_change_image_count(lv, new_segtype_tmp, lv_raid_image_count(lv) * 2, allocate_pvs);
-
-		} else
-			goto err;
-	}
-
-	if (seg_is_raid10(seg)) {
-		if (segtype_is_striped(new_segtype) || segtype_is_any_raid0(new_segtype_tmp)) {
-			if (segtype_is_striped(new_segtype)) {
-				final_segtype = new_segtype_tmp;
-				if (!(new_segtype_tmp = get_segtype_from_flag(lv->vg->cmd, SEG_RAID0)))
-					return_0;
-			} else
-				final_segtype = NULL;
-
-			if (!_lv_raid_change_image_count(lv, new_segtype_tmp, lv_raid_image_count(lv) / 2, allocate_pvs))
-				return 0;
-
-			return _convert_raid0_to_striped(lv, final_segtype);
-
-		} else
-			goto err;
-	}
+	/*
+	 * End special conversions
+	 */
 
 
 	/****************************************************************************/
@@ -4368,7 +4387,6 @@ PFLA("segtype=%s new_segtype_tmp=%s", seg->segtype->name, new_segtype_tmp->name)
 
 	}
 
-	/****************************************************************************/
 	/*
 	 * All the rest of the raid conversions...
 	 */
