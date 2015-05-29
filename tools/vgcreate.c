@@ -50,6 +50,10 @@ int vgcreate(struct cmd_context *cmd, int argc, char **argv)
 	if (!vgcreate_params_validate(cmd, &vp_new))
 	    return EINVALID_CMD_LINE;
 
+	/*
+	 * Needed to change the global VG namespace,
+	 * and to change the set of orphan PVs.
+	 */
 	if (!lockd_gl_create(cmd, "ex", vp_new.lock_type))
 		return ECMD_FAILED;
 
