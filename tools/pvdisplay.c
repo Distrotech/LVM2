@@ -107,6 +107,7 @@ int pvdisplay(struct cmd_context *cmd, int argc, char **argv)
 		}
 	}
 
+	/* Needed for a current listing of the global VG namespace. */
 	if (!lockd_gl(cmd, "sh", 0))
 		return_ECMD_FAILED;
 
