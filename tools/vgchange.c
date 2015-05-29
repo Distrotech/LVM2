@@ -1021,10 +1021,12 @@ static int lockd_vgchange(struct cmd_context *cmd, int argc, char **argv)
 
 	if (!argc || arg_tag_count(argc, argv) || arg_is_set(cmd, lockstart_ARG)) {
 		/*
-		 * The first two standard conditions want the current
-		 * list of all vg names.  The lockstart condition takes
-		 * the gl to serialize with any other host that tries to
-		 * remove the VG while this tries to start it.
+		 * Needed for a current listing of the global VG namespace.
+		 * (And all VGs must be searched and read to match tags.)
+		 *
+		 * The lockstart condition takes the global lock to serialize
+		 * with any other host that tries to remove the VG while this
+		 * tries to start it.
 		 */
 		if (!lockd_gl(cmd, "sh", 0))
 			return_ECMD_FAILED;
@@ -1033,12 +1035,14 @@ static int lockd_vgchange(struct cmd_context *cmd, int argc, char **argv)
 		   arg_is_set(cmd, uuid_ARG) ||
 		   arg_is_set(cmd, locktype_ARG)) {
 		/*
-		 * VG names, uuids and system_ids are the three things that
-		 * other hosts cache related to local vg's, so we use the
-		 * name-change counter in the global lock to indicate that
-		 * one of these global VG identifiers has changed so other
-		 * hosts will update these cached values in VG's that they
-		 * otherwise ignore (because they have foreign system_ids).
+		 * This is a special case where taking the global lock is
+		 * helpful to detect changes to local VGs from other hosts.  VG
+		 * names, uuids and system_ids are the three things that other
+		 * hosts cache related to local VGs, so we use the VG namespace
+		 * change detection of the global lock to indicate that one of
+		 * these global VG properties has changed so other hosts will
+		 * update these cached values in VGs that they otherwise ignore
+		 * (because they have foreign system_ids).
 		 */
 		if (!lockd_gl(cmd, "ex", LDGL_UPDATE_NAMES))
 			return_ECMD_FAILED;

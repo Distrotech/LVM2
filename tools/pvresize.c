@@ -36,7 +36,11 @@ static int _pvresize_single(struct cmd_context *cmd,
 	}
 	params->total++;
 
-	/* Convert sh to ex.  gl is only needed for orphans. */
+	/*
+	 * Needed to change a property on an orphan PV.
+	 * i.e. the global lock is only needed for orphans.
+	 * Convert sh to ex.
+	 */
 	if (is_orphan(pv) && !lockd_gl(cmd, "ex", 0))
 		return_ECMD_FAILED;
 
@@ -80,6 +84,7 @@ int pvresize(struct cmd_context *cmd, int argc, char **argv)
 
 	handle->custom_handle = &params;
 
+	/* Needed for a current listing of the global VG namespace. */
 	if (!lockd_gl(cmd, "sh", 0))
 		return_ECMD_FAILED;
 
