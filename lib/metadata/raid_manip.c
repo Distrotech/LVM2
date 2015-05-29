@@ -1425,27 +1425,6 @@ static int _lv_free_reshape_space(struct logical_volume *lv)
 	return 1;
 }
 
-
-/*
- * Correct LV names for @data_lvs in case of a linear @lv
- * iby incrementing them, because the linear LV will
- * becomme "rimage_0" during the conversion
- */
-static int _increment_data_lv_name_suffixes(struct logical_volume *lv, uint32_t count, struct dm_list *data_lvs)
-{
-	struct lv_list *lvl;
-
-	dm_list_iterate_items(lvl, data_lvs) {
-		if (&lvl->list != dm_list_last(data_lvs))
-			lvl->lv->name = ((struct lv_list *) lvl->list.n)->lv->name;
-
-		else if (!(lvl->lv->name = _generate_raid_name(lv, "rimage", count)))
-			return_0;
-	}
-
-	return 1;
-}
-
 /* Return length of unsigned @idx as a string */
 static unsigned _unsigned_str_len(unsigned idx)
 {
@@ -1682,6 +1661,20 @@ PFL();
 		if (!_alloc_rmeta_for_linear(lv, &meta_lvs))
 			return 0;
 
+	    	if (!_convert_linear_to_raid(lv))
+			return 0;
+
+		/* Need access to the new first segment after the linear -> raid1 conversion */
+		seg = first_seg(lv);
+
+		/* If we convert to raid1 via "lvconvert -mN", set segtype */
+		if (old_count != new_count &&
+		    segtype == seg->segtype &&
+		    !(segtype = get_segtype_from_string(lv->vg->cmd, SEG_TYPE_NAME_RAID1)))
+			return 0;
+
+		seg->segtype = segtype;
+
 	/*
 	 * In case this is a conversion from raid0 to raid4/5/6,
 	 * add the metadata image LVs for the raid0 rimage LVs
@@ -1699,33 +1692,6 @@ PFLA("seg->segtype->flags=%llX lv_flags=%llX", (long long unsigned) seg->segtype
 	/* Allocate the additional meta and data lvs requested */
 	if (!_alloc_image_components(lv, 1, pvs, count, &meta_lvs, &data_lvs))
 		return_0;
-PFL();
-	/*
-	 * If linear, we must correct data LV names incrementing their suffixes by one;
-	 * they are off-by-one because the linear volume hasn't taken its proper name
-	 * of "_rimage_0" yet.
-	 *
-	 * This action must be done before '_clear_lvs' because it
-	 * commits the LVM metadata before clearing the LVs.
-	 */
-	if (linear) {
-PFL();
-		if (!_increment_data_lv_name_suffixes(lv, count, &data_lvs))
-			return 0;
-	    	if (!_convert_linear_to_raid(lv))
-			return 0;
-
-		/* Need access to the new first segment after the linear -> raid1 conversion */
-		seg = first_seg(lv);
-
-		/* If we convert to raid1 via "lvconvert -mN", set segtype */
-		if (old_count != new_count &&
-		    segtype == seg->segtype &&
-		    !(segtype = get_segtype_from_string(lv->vg->cmd, SEG_TYPE_NAME_RAID1)))
-			return 0;
-
-		seg->segtype = segtype;
-	}
 PFL();
 	/* Metadata LVs must be cleared before being added to the array */
 	log_debug_metadata("Clearing newly allocated metadata LVs");
@@ -2497,6 +2463,43 @@ int lv_raid_merge(struct logical_volume *image_lv)
 }
 
 /*
+ * Rename all data sub LVs of @lv to mirror
+ * or raid name depending on @direction
+ */
+enum mirror_raid_conv { mirror_to_raid1 = 0, raid1_to_mirror };
+static int _rename_data_lvs(struct logical_volume *lv, enum mirror_raid_conv direction)
+{
+	uint32_t s;
+	char *p;
+	struct lv_segment *seg = first_seg(lv);
+	static struct {
+		char type_char;
+		uint64_t set_flag;
+		uint64_t reset_flag;
+	} conv[] = {
+		{ 'r', RAID_IMAGE  , MIRROR_IMAGE },
+		{ 'm', MIRROR_IMAGE, RAID_IMAGE }
+	};
+
+	for (s = 0; s < seg->area_count; ++s) {
+		struct logical_volume *dlv = seg_lv(seg, s);
+
+		if (!(p = strstr(dlv->name, "image_"))) {
+			log_error(INTERNAL_ERROR "name lags image part");
+			return 0;
+		}
+
+		*(p-1) = conv[direction].type_char;
+		log_debug_metadata("data lv renamed to %s", dlv->name);
+
+		dlv->status &= ~conv[direction].reset_flag;
+		dlv->status |= conv[direction].set_flag;
+	}
+
+	return 1;
+}
+
+/*
  * Convert @lv with "mirror" mapping to "raid1".
  *
  * Returns: 1 on success, 0 on failure
@@ -2504,10 +2507,8 @@ int lv_raid_merge(struct logical_volume *image_lv)
 static int _convert_mirror_to_raid1(struct logical_volume *lv,
 				    const struct segment_type *new_segtype)
 {
-	uint32_t s;
 	struct lv_segment *seg = first_seg(lv);
 	struct dm_list meta_lvs;
-	char *new_name;
 
 	dm_list_init(&meta_lvs);
 
@@ -2536,14 +2537,9 @@ static int _convert_mirror_to_raid1(struct logical_volume *lv,
 	if (!_add_image_component_list(seg, 0, 0, &meta_lvs, 0))
 		return 0;
 
-	for (s = 0; s < seg->area_count; ++s) {
-		if (!(new_name = _generate_raid_name(lv, "rimage", s)))
-			return_0;
-		log_debug_metadata("Renaming %s to %s", seg_lv(seg, s)->name, new_name);
-		seg_lv(seg, s)->name = new_name;
-		seg_lv(seg, s)->status &= ~MIRROR_IMAGE;
-		seg_lv(seg, s)->status |= RAID_IMAGE;
-	}
+	/* Rename all data sub lvs for "*_rimage_*" to "*_mimage_*" */
+	if (!_rename_data_lvs(lv, mirror_to_raid1))
+		return 0;
 
 	init_mirror_in_sync(1);
 
@@ -2568,9 +2564,7 @@ static int _convert_raid1_to_mirror(struct logical_volume *lv,
 				    const struct segment_type *new_segtype,
 				    struct dm_list *allocatable_pvs)
 {
-	uint32_t s;
 	uint32_t image_count = lv_raid_image_count(lv);
-	char *new_name;
 	struct lv_segment *seg = first_seg(lv);
 	struct dm_list removal_mlvs;
 
@@ -2593,17 +2587,9 @@ static int _convert_raid1_to_mirror(struct logical_volume *lv,
 		seg->meta_areas = NULL;
 	}
 
-	for (s = 0; s < seg->area_count; ++s) {
-		struct logical_volume *dlv = seg_lv(seg, s);
-
-		if (!(new_name = _generate_raid_name(lv, "mimage", s)))
-			return_0;
-		log_debug_metadata("Renaming %s to %s", dlv->name, new_name);
-		dlv->name = new_name;
-		dlv->status &= ~RAID_IMAGE;
-		dlv->status |= MIRROR_IMAGE;
-	}
-
+	/* Rename all data sub lvs for "*_rimage_*" to "*_mimage_*" */
+	if (!_rename_data_lvs(lv, raid1_to_mirror))
+		return 0;
 
 	log_debug_metadata("Setting new segtype %s for %s", new_segtype->name, lv->name);
 	seg->segtype = new_segtype;
