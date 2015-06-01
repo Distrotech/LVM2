@@ -1086,13 +1086,16 @@ int lockd_gl_create(struct cmd_context *cmd, const char *def_mode, const char *v
 	uint32_t lockd_flags;
 	int result;
 
+	/* A specific lock mode was given on the command line. */
 	if (cmd->lock_gl_mode) {
 		mode = cmd->lock_gl_mode;
-		if (mode && def_mode && strcmp(mode, "enable") &&
-		    (_mode_compare(mode, def_mode) < 0) &&
-		    !find_config_tree_bool(cmd, global_allow_override_lock_modes_CFG, NULL)) {
-			log_error("Disallowed lock-gl mode \"%s\"", mode);
-			return 0;
+		if (mode && def_mode && strcmp(mode, "enable") && (_mode_compare(mode, def_mode) < 0)) {
+			if (!find_config_tree_bool(cmd, global_allow_override_lock_modes_CFG, NULL)) {
+				log_error("Disallowed lock-gl mode \"%s\"", mode);
+				return 0;
+			} else {
+				log_warn("WARNING: overriding default global lock mode.");
+			}
 		}
 	}
 
@@ -1266,13 +1269,16 @@ int lockd_gl(struct cmd_context *cmd, const char *def_mode, uint32_t flags)
 	uint32_t lockd_flags;
 	int result;
 
+	/* A specific lock mode was given on the command line. */
 	if (!(flags & LDGL_MODE_NOARG) && cmd->lock_gl_mode) {
 		mode = cmd->lock_gl_mode;
-		if (mode && def_mode &&
-		    (_mode_compare(mode, def_mode) < 0) &&
-		    !find_config_tree_bool(cmd, global_allow_override_lock_modes_CFG, NULL)) {
-			log_error("Disallowed lock-gl mode \"%s\"", mode);
-			return 0;
+		if (mode && def_mode && (_mode_compare(mode, def_mode) < 0)) {
+			if (!find_config_tree_bool(cmd, global_allow_override_lock_modes_CFG, NULL)) {
+				log_error("Disallowed lock-gl mode \"%s\"", mode);
+				return 0;
+			} else {
+				log_warn("WARNING: overriding default global lock mode.");
+			}
 		}
 	}
 
@@ -1470,15 +1476,18 @@ int lockd_vg(struct cmd_context *cmd, const char *vg_name, const char *def_mode,
 	*lockd_state = 0;
 
 	/*
+	 * A specific lock mode was given on the command line.
 	 * LDVG_MODE_NOARG disables getting the mode from --lock-vg arg.
 	 */
 	if (!(flags & LDVG_MODE_NOARG) && cmd->lock_vg_mode) {
 		mode = cmd->lock_vg_mode;
-		if (mode && def_mode &&
-		    (_mode_compare(mode, def_mode) < 0) &&
-		    !find_config_tree_bool(cmd, global_allow_override_lock_modes_CFG, NULL)) {
-			log_error("Disallowed lock-vg mode \"%s\"", mode);
-			return 0;
+		if (mode && def_mode && (_mode_compare(mode, def_mode) < 0)) {
+			if (!find_config_tree_bool(cmd, global_allow_override_lock_modes_CFG, NULL)) {
+				log_error("Disallowed lock-vg mode \"%s\"", mode);
+				return 0;
+			} else {
+				log_warn("WARNING: overriding default VG lock mode.");
+			}
 		}
 	}
 
@@ -1721,10 +1730,14 @@ int lockd_lv_name(struct cmd_context *cmd, struct volume_group *vg,
 		return 0;
 	}
 
-	if (cmd->lock_lv_mode && (_mode_compare(cmd->lock_lv_mode, "sh") < 0) &&
-	    !find_config_tree_bool(cmd, global_allow_override_lock_modes_CFG, NULL)) {
-		log_error("Disallowed lock-lv mode \"%s\"", cmd->lock_lv_mode);
-		return 0;
+	/* A specific lock mode was given on the command line. */
+	if (cmd->lock_lv_mode && (_mode_compare(cmd->lock_lv_mode, "sh") < 0)) {
+		if (!find_config_tree_bool(cmd, global_allow_override_lock_modes_CFG, NULL)) {
+			log_error("Disallowed lock-lv mode \"%s\"", cmd->lock_lv_mode);
+			return 0;
+		} else {
+			log_warn("WARNING: overriding default LV lock mode.");
+		}
 	}
 
 	if (cmd->lock_lv_mode)
