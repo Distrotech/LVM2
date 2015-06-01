@@ -593,52 +593,54 @@ deactivated, or activated exclusively to run lvextend.
 
 .SS recover from lost PV holding sanlock locks
 
-In a sanlock VG, the locks are stored on a PV within the VG.  If this PV
-is lost, the locks need to be reconstructed as follows:
+A number of special manual steps must be performed to restore sanlock
+locks if the PV holding the locks is lost.  Contact the LVM group for
+help with this process.
 
-1. Enable the unsafe lock modes option in lvm.conf so that default locking requirements can be overriden.
 
-\&
-
-.nf
-allow_override_lock_modes = 1
-.fi
-
-2. Remove missing PVs and partial LVs from the VG.
-
-\&
-
-.nf
-vgreduce --removemissing --force --lock-gl na --lock-vg na <vg>
-.fi
-
-3. If step 2 does not remove the internal/hidden "lvmlock" lv, it should be removed.
-
-\&
-
-.nf
-lvremove --lock-vg na --lock-lv na <vg>/lvmlock
-.fi
-
-4. Change the lock type to none.
-
-\&
-
-.nf
-vgchange --lock-type none --force --lock-gl na --lock-vg na <vg>
-.fi
-
-5. VG space is needed to recreate the locks.  If there is not enough space, vgextend the vg.
-
-6. Change the lock type back to sanlock.  This creates a new internal
-lvmlock lv, and recreates locks.
-
-\&
-
-.nf
-vgchange --lock-type sanlock <vg>
-.fi
-
+.\" TODO: This is not clean or safe enough to suggest using without help.
+.\"
+.\" .SS recover from lost PV holding sanlock locks
+.\"
+.\" In a sanlock VG, the locks are stored on a PV within the VG.  If this PV
+.\" is lost, the locks need to be reconstructed as follows:
+.\"
+.\" 1. Enable the unsafe lock modes option in lvm.conf so that default locking requirements can be overriden.
+.\"
+.\" .nf
+.\" allow_override_lock_modes = 1
+.\" .fi
+.\"
+.\" 2. Remove missing PVs and partial LVs from the VG.
+.\"
+.\" Warning: this is a dangerous operation.  Read the man page
+.\" for vgreduce first, and try running with the test option.
+.\" Verify that the only missing PV is the PV holding the sanlock locks.
+.\"
+.\" .nf
+.\" vgreduce --removemissing --force --lock-gl na --lock-vg na <vg>
+.\" .fi
+.\"
+.\" 3. If step 2 does not remove the internal/hidden "lvmlock" lv, it should be removed.
+.\"
+.\" .nf
+.\" lvremove --lock-vg na --lock-lv na <vg>/lvmlock
+.\" .fi
+.\"
+.\" 4. Change the lock type to none.
+.\"
+.\" .nf
+.\" vgchange --lock-type none --force --lock-gl na --lock-vg na <vg>
+.\" .fi
+.\"
+.\" 5. VG space is needed to recreate the locks.  If there is not enough space, vgextend the vg.
+.\"
+.\" 6. Change the lock type back to sanlock.  This creates a new internal
+.\" lvmlock lv, and recreates locks.
+.\"
+.\" .nf
+.\" vgchange --lock-type sanlock <vg>
+.\" .fi
 
 .SS locking system failures
 
