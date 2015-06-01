@@ -1084,6 +1084,7 @@ int lockd_gl_create(struct cmd_context *cmd, const char *def_mode, const char *v
 {
 	const char *mode = NULL;
 	uint32_t lockd_flags;
+	int retries = 0;
 	int result;
 
 	/* A specific lock mode was given on the command line. */
@@ -1111,12 +1112,22 @@ int lockd_gl_create(struct cmd_context *cmd, const char *def_mode, const char *v
 		return 0;
 	}
 
+ req:
 	if (!_lockd_request(cmd, "lock_gl",
 			      NULL, vg_lock_type, NULL, NULL, NULL, mode, NULL,
 			      &result, &lockd_flags)) {
 		/* No result from lvmlockd, it is probably not running. */
 		log_error("Locking failed for global lock");
 		return 0;
+	}
+
+	if (result == -EAGAIN) {
+		if (retries < find_config_tree_int(cmd, global_lock_retries_CFG, NULL)) {
+			log_warn("Retrying %s global lock", mode);
+			sleep(1);
+			retries++;
+			goto req;
+		}
 	}
 
 	/*
@@ -1267,6 +1278,7 @@ int lockd_gl(struct cmd_context *cmd, const char *def_mode, uint32_t flags)
 	const char *mode = NULL;
 	const char *opts = NULL;
 	uint32_t lockd_flags;
+	int retries = 0;
 	int result;
 
 	/* A specific lock mode was given on the command line. */
@@ -1294,6 +1306,7 @@ int lockd_gl(struct cmd_context *cmd, const char *def_mode, uint32_t flags)
 		return 0;
 	}
 
+ req:
 	if (!_lockd_request(cmd, "lock_gl",
 			    NULL, NULL, NULL, NULL, NULL, mode, opts,
 			    &result, &lockd_flags)) {
@@ -1319,6 +1332,15 @@ int lockd_gl(struct cmd_context *cmd, const char *def_mode, uint32_t flags)
 
 		log_error("Locking failed for global lock");
 		return 0;
+	}
+
+	if (result == -EAGAIN) {
+		if (retries < find_config_tree_int(cmd, global_lock_retries_CFG, NULL)) {
+			log_warn("Retrying %s global lock", mode);
+			sleep(1);
+			retries++;
+			goto req;
+		}
 	}
 
 	/*
@@ -1436,6 +1458,7 @@ int lockd_vg(struct cmd_context *cmd, const char *vg_name, const char *def_mode,
 {
 	const char *mode = NULL;
 	uint32_t lockd_flags;
+	int retries = 0;
 	int result;
 	int ret;
 
@@ -1526,6 +1549,15 @@ int lockd_vg(struct cmd_context *cmd, const char *vg_name, const char *def_mode,
 		 */
 		*lockd_state |= LDST_FAIL_REQUEST;
 		return 1;
+	}
+
+	if (result == -EAGAIN) {
+		if (retries < find_config_tree_int(cmd, global_lock_retries_CFG, NULL)) {
+			log_warn("Retrying %s lock on VG %s", mode, vg_name);
+			sleep(1);
+			retries++;
+			goto req;
+		}
 	}
 
 	switch (result) {
