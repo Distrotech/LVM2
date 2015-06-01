@@ -959,8 +959,7 @@ static int _alloc_rmeta_for_lv(struct logical_volume *data_lv,
 
 	if (!get_pv_list_for_lv(data_lv->vg->cmd->mem,
 				data_lv, &allocatable_pvs)) {
-		log_error("Failed to build list of PVs for %s",
-				data_lv->vg->name, data_lv->name);
+		log_error("Failed to build list of PVs for %s", display_lvname(data_lv));
 		return 0;
 	}
 
@@ -2294,7 +2293,7 @@ int lv_raid_split_and_track(struct logical_volume *lv,
 		return_0;
 
 	log_print_unless_silent("Use 'lvconvert --merge %s' to merge back into %s",
-				lv->vg->name, seg_lv(seg, s)->name, lv->name);
+				display_lvname(seg_lv(seg, s)), lv->name);
 	return 1;
 }
 
@@ -2382,7 +2381,7 @@ int lv_raid_merge(struct logical_volume *image_lv)
 		return_0;
 
 	log_print_unless_silent("%s successfully merged back into %s",
-				vg->name, image_lv->name, vg->name, lv->name);
+				display_lvname(image_lv), display_lvname(lv));
 	return 1;
 }
 
@@ -3966,6 +3965,188 @@ static void _seg_get_redundancy(const struct segment_type *segtype, unsigned tot
 		*nr = 0;
 }
 
+
+/****************************************************************************/
+/* Construction site of dispatch jump table solution */
+
+typedef int (*dispatch_fn)(struct logical_volume *lv, int yes, int force,
+			const struct segment_type *new_segtype,
+			unsigned new_image_count, const unsigned new_stripes,
+			unsigned new_stripe_size, struct dm_list *allocate_pvs);
+
+static unsigned _dispatch_fn_idx(const struct segment_type *segtype)
+{
+	static uint64_t _segtype_to_idx[] = {
+		0, /* linear, seg->area_count = 1 */
+		SEG_AREAS_STRIPED,
+		SEG_MIRROR,
+		SEG_RAID0,
+		SEG_RAID0_META,
+		SEG_RAID1,
+		SEG_RAID4|SEG_RAID5_LS|SEG_RAID5_LA|SEG_RAID5_LS|SEG_RAID5_RS|SEG_RAID5_RA|SEG_RAID6_N_6,
+		SEG_RAID6_LS_6|SEG_RAID6_LA_6|SEG_RAID6_RS_6|SEG_RAID6_RA_6| \
+		SEG_RAID6_NC|SEG_RAID6_NR|SEG_RAID6_ZR|SEG_RAID6_N_6|SEG_RAID5_LS,
+	};
+	unsigned r = ARRAY_SIZE(_segtype_to_idx);
+
+	while (r-- > 0)
+		if (segtype->flags & _segtype_to_idx[r])
+			return r;
+
+	/* segtype has to be linear */
+	return 0;
+}
+
+/* Error dispatch handler for @lv: logs what's (im)possible to convert to */
+static int _noop(struct logical_volume *lv, int yes, int force,
+		const struct segment_type *new_segtype,
+		unsigned new_image_count, const unsigned new_stripes,
+		unsigned new_stripe_size, struct dm_list *allocate_pvs)
+{
+	log_warn("Logical volume %s already has type %s", display_lvname(lv), lvseg_name(first_seg(lv)));
+
+	return 0;
+}
+
+/* Error dispatch handler for @lv: logs what's (im)possible to convert to */
+static int _error(struct logical_volume *lv, int yes, int force,
+		const struct segment_type *new_segtype,
+		unsigned new_image_count, const unsigned new_stripes,
+		unsigned new_stripe_size, struct dm_list *allocate_pvs)
+{
+	struct lv_segment *seg = first_seg(lv);
+
+	/* FIXME: enhance message */
+	log_error("Converting the segment type for %s (directly) from %s to %s"
+		  " is not supported.", display_lvname(lv),
+		  lvseg_name(seg), new_segtype->name);
+	seg->segtype = new_segtype;
+	_log_possible_conversion_types(lv);
+
+	return 0;
+}
+
+/* Linear <-> mirror dispatch handler for @lv */
+#define DF(name) static int name(struct logical_volume *lv, int yes, int force, \
+		const struct segment_type *new_segtype,				\
+		unsigned new_image_count, const unsigned new_stripes,		\
+		unsigned new_stripe_size, struct dm_list *allocate_pvs) 	\
+{										\
+	log_warn("TODO");							\
+										\
+	return 0;								\
+}
+
+/* TODO: conversion functions! */
+/* Linear <-> mirror dispatch handler for @lv */
+static int _dummy(struct logical_volume *lv, int yes, int force,
+		const struct segment_type *new_segtype,
+		unsigned new_image_count, const unsigned new_stripes,
+		unsigned new_stripe_size, struct dm_list *allocate_pvs)
+{
+	log_warn("TODO");
+
+	return 0;
+}
+
+/* HM FIXME: All DF macro instances need coding! */
+/* Linear -> */
+DF(_l_r0)
+DF(_l_r0m)
+DF(_l_r1)
+DF(_l_r45)
+DF(_l_r10)
+
+/* Striped -> */
+DF(_s_r0)
+DF(_s_r0m)
+DF(_s_r45)
+DF(_s_r6)
+DF(_s_r10)
+
+/* Mirror -> */
+DF(_m_r1)
+DF(_m_r45)
+DF(_m_r6)
+DF(_m_r10)
+
+/* raid0 -> */
+DF(_r0_l)
+DF(_r0_m)
+DF(_r0_r0m)
+DF(_r0_s)
+DF(_r0_r1)
+DF(_r0_r45)
+DF(_r0_r6)
+DF(_r0_r10)
+
+/* raid0_meta -> */
+DF(_r0m_l)
+DF(_r0m_m)
+DF(_r0m_s)
+DF(_r0m_r1)
+DF(_r0m_r45)
+DF(_r0m_r6)
+DF(_r0m_r10)
+
+/* raid1 -> */
+DF(_r1_l)
+DF(_r1_m)
+DF(_r1_s)
+DF(_r1_r1)
+DF(_r1_r0)
+DF(_r1_r0m)
+DF(_r1_r45)
+DF(_r1_r6)
+DF(_r1_r10)
+
+/* raid45 -> */
+DF(_r45_l)
+DF(_r45_s)
+DF(_r45_m)
+DF(_r45_r0)
+DF(_r45_r0m)
+DF(_r45_r1)
+DF(_r45_r45)
+DF(_r45_r6)
+DF(_r45_r10)
+
+/* raid6 -> */
+DF(_r6_s)
+DF(_r6_r0)
+DF(_r6_r0m)
+DF(_r6_r45)
+DF(_r6_r6)
+DF(_r6_r10)
+
+/* raid10 -> */
+DF(_r10_l)
+DF(_r10_s)
+DF(_r10_m)
+DF(_r10_r0)
+DF(_r10_r0m)
+DF(_r10_r1)
+DF(_r10_r45)
+DF(_r10_r6)
+
+static dispatch_fn _dispatch_fn_table[9][9] = {
+	/* from |, to ->    linear  striped   mirror   raid0    raid0_meta  raid1    raid4/5     raid6  raid10 */
+	/*      v */
+	/* linear      */ { _noop,   _error,  _error,  _l_r0,   _l_r0m,     _l_r1,   _l_r45,    _error,  _l_r10   },
+	/* striped     */ { _error,  _noop,   _error,  _s_r0,   _s_r0m,     _error,  _s_r45,    _s_r6,   _s_r10   },
+	/* mirror      */ { _error,  _error,  _noop,   _error,  _error,     _m_r1,   _m_r45,    _m_r6,   _m_r10   },
+	/* raid0       */ { _r0_l,   _r0_s,   _r0_m,   _noop,   _r0_r0m,    _r0_r1,  _r0_r45,   _r0_r6,  _r0_r10  },
+	/* raid0_meta  */ { _r0m_l,  _r0m_s,  _r0m_m,  _r0m_r1, _noop,      _r0m_r1, _r0m_r45,  _r0m_r6, _r0m_r10 },
+	/* raid1       */ { _r1_l,   _r1_s,   _r1_m,   _r1_r0,  _r1_r0m,    _r1_r1,  _r1_r45,   _r1_r6,  _r1_r10  },
+	/* raid4/5     */ { _r45_l,  _r45_s,  _r45_m,  _r45_r0, _r45_r0m,   _r45_r1, _r45_r45,  _r45_r6, _r45_r10 },
+	/* raid6       */ { _error,  _r6_s,   _error,  _r6_r0,  _r6_r0m,    _error,  _r6_r45,   _r6_r6,  _r6_r10  },
+	/* raid10      */ { _r10_l,  _r10_s,  _r10_m,  _r10_r0, _r10_r0m,   _r10_r1, _r10_r45,  _r10_r6, _error   },
+};
+
+/* END Construction site of dispatch jump table solution */
+/****************************************************************************/
+
+
 /*
  * lv_raid_convert
  * @lv
@@ -4067,7 +4248,7 @@ int lv_raid_convert(struct logical_volume *lv,
 	    !segtype_is_raid(new_segtype))
 		goto err;
 
-	/* Can't convert from linear to raid6 directly! */
+	/* Can't convert from linear to raid6 directly! (Early catch) */
 	if (seg_is_linear(seg) &&
 	    segtype_is_any_raid6(new_segtype))
 		goto err;
@@ -4078,7 +4259,7 @@ int lv_raid_convert(struct logical_volume *lv,
 	/* Define new stripe size if not passed in */
 	new_stripe_size = new_stripe_size ?: seg->stripe_size;
 
-	segtype_change = seg->segtype != new_segtype;
+	segtype_change = (seg->segtype != new_segtype);
 	stripe_size_change = !seg->stripe_size && seg->stripe_size != new_stripe_size;
 	if (segtype_change && stripe_size_change) {
 		log_error("Can't change raid type and stripe size at once on %s",
@@ -4086,20 +4267,21 @@ int lv_raid_convert(struct logical_volume *lv,
 		return 0;
 	}
 
-	/* @lv has to be active */
+	/* @lv has to be active to perform raid conversion operatons */
 	if (!lv_is_active(lv)) {
 		log_error("%s must be active to perform this operation.",
 			  display_lvname(lv));
 		return 0;
 	}
 
-	/* In case of clustered VG, @lv has to be active locally */
+	/* If clustered VG, @lv has to be active locally */
 	if (vg_is_clustered(lv->vg) && !lv_is_active_exclusive_locally(lv)) {
 		log_error("%s must be active exclusive locally to"
 			  " perform this operation.", display_lvname(lv));
 		return 0;
 	}
 
+	/* Can'nt perfom any raid conversions on out of sync LVs */
 	if (!_raid_in_sync(lv)) {
 		log_error("Unable to convert %s while it is not in-sync",
 			  display_lvname(lv));
@@ -4178,7 +4360,6 @@ PFLA("cur_redundancy=%u new_redundancy=%u", cur_redundancy, new_redundancy);
 		y = 1;
 
 
-PFLA("segtype=%s new_segtype_tmp=%s", seg->segtype->name, new_segtype_tmp->name);
 	/****************************************************************************/
 	/* No --type arg */
 	/* Linear/raid0 with 1 image to raid1 via "-mN" option */
@@ -4209,6 +4390,11 @@ PFLA("segtype=%s new_segtype_tmp=%s", seg->segtype->name, new_segtype_tmp->name)
 	if (sigint_caught())
 		return_0;
 
+#if 0
+PFLA("segtype=%s new_segtype_tmp=%s", seg->segtype->name, new_segtype_tmp->name);
+	return _dispatch_fn_table[_dispatch_fn_idx(seg->segtype)][_dispatch_fn_idx(new_segtype)](lv, yes, force,
+			new_segtype, new_image_count, new_stripes, new_stripe_size, allocate_pvs);
+#endif
 
 	/* Now archive metadata after the user has confirmed */
 	if (!archive(lv->vg))
