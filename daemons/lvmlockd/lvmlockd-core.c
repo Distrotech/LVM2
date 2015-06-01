@@ -243,11 +243,12 @@ static int worker_wake;                 /* wake the thread without adding work *
  */
 #define LOG_LINE_SIZE 256
 #define LOG_DUMP_SIZE DUMP_BUF_SIZE
+#define LOG_SYSLOG_PRIO LOG_WARNING
 static char log_dump[LOG_DUMP_SIZE];
 static unsigned int log_point;
 static unsigned int log_wrap;
 static pthread_mutex_t log_mutex;
-static int syslog_priority = LOG_WARNING;
+static int syslog_priority = LOG_SYSLOG_PRIO;
 
 /*
  * Structure pools to avoid repeated malloc/free.
@@ -278,6 +279,50 @@ static int alloc_new_structs; /* used for initializing in setup_structs */
 static int add_lock_action(struct action *act);
 static int str_to_lm(const char *str);
 static void clear_lockspace_inactive(char *name);
+
+static int _syslog_name_to_num(const char *name)
+{
+	if (!strcmp(name, "emerg"))
+		return LOG_EMERG;
+	if (!strcmp(name, "alert"))
+		return LOG_ALERT;
+	if (!strcmp(name, "crit"))
+		return LOG_CRIT;
+	if (!strcmp(name, "err") || !strcmp(name, "error"))
+		return LOG_ERR;
+	if (!strcmp(name, "warning") || !strcmp(name, "warn"))
+		return LOG_WARNING;
+	if (!strcmp(name, "notice"))
+		return LOG_NOTICE;
+	if (!strcmp(name, "info"))
+		return LOG_INFO;
+	if (!strcmp(name, "debug"))
+		return LOG_DEBUG;
+	return LOG_WARNING;
+}
+
+static const char *_syslog_num_to_name(int num)
+{
+	switch (num) {
+	case LOG_EMERG:
+		return "emerg";
+	case LOG_ALERT:
+		return "alert";
+	case LOG_CRIT:
+		return "crit";
+	case LOG_ERR:
+		return "err";
+	case LOG_WARNING:
+		return "warning";
+	case LOG_NOTICE:
+		return "notice";
+	case LOG_INFO:
+		return "info";
+	case LOG_DEBUG:
+		return "debug";
+	}
+	return "unknown";
+}
 
 static uint64_t monotime(void)
 {
@@ -5401,8 +5446,8 @@ static void usage(char *prog, FILE *file)
 	fprintf(file, "        Set path to the pid file. [%s]\n", LVMLOCKD_PIDFILE);
 	fprintf(file, "  --socket-path | -s <path>\n");
 	fprintf(file, "        Set path to the socket to listen on. [%s]\n", LVMLOCKD_SOCKET);
-	fprintf(file, "  --log-config | -l <str>\n");
-	fprintf(file, "        Set log config.\n");
+	fprintf(file, "  --syslog-priority | -S err|warning|debug\n");
+	fprintf(file, "        Write log messages from this level up to syslog. [%s]\n", _syslog_num_to_name(LOG_SYSLOG_PRIO));
 	fprintf(file, "  --gl-type | -g <str>\n");
 	fprintf(file, "        Set global lock type to be dlm|sanlock.\n");
 	fprintf(file, "  --host-id | -i <num>\n");
@@ -5427,17 +5472,18 @@ int main(int argc, char *argv[])
 	ds.name = "lvmlockd";
 
 	static struct option long_options[] = {
-		{"help",        no_argument,       0, 'h' },
-		{"version",     no_argument,       0, 'V' },
-		{"test",        no_argument,       0, 'T' },
-		{"foreground",  no_argument,       0, 'f' },
-		{"daemon-debug",no_argument,       0, 'D' },
-		{"pid-file",    required_argument, 0, 'p' },
-		{"socket-path", required_argument, 0, 's' },
-		{"gl-type",     required_argument, 0, 'g' },
-		{"host-id",     required_argument, 0, 'i' },
-		{"host-id-file",required_argument, 0, 'F' },
-		{"adopt",       required_argument, 0, 'A' },
+		{"help",            no_argument,       0, 'h' },
+		{"version",         no_argument,       0, 'V' },
+		{"test",            no_argument,       0, 'T' },
+		{"foreground",      no_argument,       0, 'f' },
+		{"daemon-debug",    no_argument,       0, 'D' },
+		{"pid-file",        required_argument, 0, 'p' },
+		{"socket-path",     required_argument, 0, 's' },
+		{"gl-type",         required_argument, 0, 'g' },
+		{"host-id",         required_argument, 0, 'i' },
+		{"host-id-file",    required_argument, 0, 'F' },
+		{"adopt",           required_argument, 0, 'A' },
+		{"syslog-priority", required_argument, 0, 'S' },
 		{0, 0, 0, 0 }
 	};
 
@@ -5495,6 +5541,9 @@ int main(int argc, char *argv[])
 			break;
 		case 'A':
 			adopt_opt = atoi(optarg);
+			break;
+		case 'S':
+			syslog_priority = _syslog_name_to_num(optarg);
 			break;
 		case '?':
 		default:
