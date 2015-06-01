@@ -23,6 +23,7 @@ static const char *_lvmlockd_socket = NULL;
 static struct cmd_context *_lvmlockd_cmd = NULL;
 static int _use_lvmlockd;         /* is 1 if command is configured to use lvmlockd */
 static int _lvmlockd_connected;   /* is 1 if command is connected to lvmlockd */
+static int _lvmlockd_init_failed; /* used to suppress further warnings */
 
 void lvmlockd_set_socket(const char *sock)
 {
@@ -57,8 +58,17 @@ void lvmlockd_init(struct cmd_context *cmd)
 		log_error("Should not initialize lvmlockd with use_lvmlockd=0.");
 	}
 
-	if (!!access(LVMLOCKD_PIDFILE, F_OK))
-		log_warn("lvmlockd process not found using %s.", LVMLOCKD_PIDFILE);
+	if (!_lvmlockd_socket) {
+		log_warn("WARNING: lvmlockd socket location is not configured.");
+		_lvmlockd_init_failed = 1;
+	}
+
+	if (!!access(LVMLOCKD_PIDFILE, F_OK)) {
+		log_warn("WARNING: lvmlockd process is not running.");
+		_lvmlockd_init_failed = 1;
+	} else {
+		_lvmlockd_init_failed = 0;
+	}
 
 	_lvmlockd_cmd = cmd;
 }
@@ -75,10 +85,8 @@ void lvmlockd_connect(void)
 		log_error("lvmlockd is already connected.");
 	}
 
-	if (!_lvmlockd_socket) {
-		log_error("lvmlockd connect failed: no path to socket.");
+	if (_lvmlockd_init_failed)
 		return;
-	}
 
 	_lvmlockd = lvmlockd_open(_lvmlockd_socket);
 
@@ -86,8 +94,7 @@ void lvmlockd_connect(void)
 		log_debug("Successfully connected to lvmlockd on fd %d.", _lvmlockd.socket_fd);
 		_lvmlockd_connected = 1;
 	} else {
-		log_error("lvmlockd connect failed: fd %d error %d.",
-			  _lvmlockd.socket_fd, _lvmlockd.error);
+		log_warn("WARNING: lvmlockd connect failed.");
 	}
 }
 
