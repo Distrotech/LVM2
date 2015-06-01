@@ -1930,12 +1930,14 @@ PFLA("stripes_ARG=%u stripes_long_ARG=%u", arg_count(lv->vg->cmd, stripes_ARG), 
 	if (!_lvconvert_validate_thin(lv, lp))
 		return_0;
 
+#if 0
 	if (!_is_valid_raid_conversion(seg->segtype, lp->segtype)) {
 		log_error("Unable to convert %s/%s from %s to %s",
 			  lv->vg->name, lv->name,
 			  lvseg_name(seg), lp->segtype->name);
 		return 0;
 	}
+#endif
 
 	/* Change number of RAID1 images */
 	if (arg_count(cmd, mirrors_ARG) || arg_count(cmd, splitmirrors_ARG)) {
