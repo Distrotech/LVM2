@@ -1186,10 +1186,16 @@ int vgchange(struct cmd_context *cmd, int argc, char **argv)
 
 	/* Wait for lock-start ops that were initiated in vgchange_lockstart. */
 
-	if (arg_is_set(cmd, lockstart_ARG) && arg_is_set(cmd, lockopt_ARG)) {
+	if (arg_is_set(cmd, lockstart_ARG)) {
 		const char *start_opt = arg_str_value(cmd, lockopt_ARG, NULL);
-		if (!strcmp(start_opt, "wait") || !strcmp(start_opt, "autowait"))
+
+		if (!start_opt || !strcmp(start_opt, "wait") || !strcmp(start_opt, "autowait")) {
+			log_print_unless_silent("Starting locking.  Waiting until locks are ready...");
 			lockd_start_wait(cmd);
+
+		} else if (!strcmp(start_opt, "nowait")) {
+			log_print_unless_silent("Starting locking.  VG is read-only until locks are ready.");
+		}
 	}
 
 	return ret;
