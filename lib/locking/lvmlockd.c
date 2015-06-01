@@ -1029,9 +1029,17 @@ static int _mode_compare(const char *m1, const char *m2)
  */
 
 /*
- * lockd_gl_create() is used by vgcreate to acquire and/or create the
- * global lock.  vgcreate will have a lock_type for the new vg which
- * lockd_gl_create() can provide in the lock-gl call.
+ * lockd_gl_create() is a variation of lockd_gl() used only by vgcreate.
+ * It handles the case that when using sanlock, the global lock does
+ * not exist until after the first vgcreate is complete, since the global
+ * lock exists on storage within an actual VG.  So, the first vgcreate
+ * needs special logic to detect this bootstrap case.
+ *
+ * When the vgcreate is not creating the first VG, then lockd_gl_create()
+ * behaves the same as lockd_gl().
+ *
+ * vgcreate will have a lock_type for the new VG which lockd_gl_create()
+ * can provide in the lock-gl call.
  *
  * lockd_gl() and lockd_gl_create() differ in the specific cases where
  * ENOLS (no lockspace found) is overriden.  In the vgcreate case, the
@@ -1190,6 +1198,60 @@ int lockd_gl_create(struct cmd_context *cmd, const char *def_mode, const char *v
 	return 1;
 }
 
+/*
+ * The global lock protects:
+ *
+ * - The global VG namespace.  Two VGs cannot have the same name.
+ *   Used by any command that creates or removes a VG name,
+ *   e.g. vgcreate, vgremove, vgrename, vgsplit, vgmerge.
+ *
+ * - The set of orphan PVs.
+ *   Used by any command that changes a non-PV device into an orphan PV,
+ *   an orphan PV into a device, a non-orphan PV (in a VG) into an orphan PV
+ *   (not in a VG), or an orphan PV into a non-orphan PV,
+ *   e.g. pvcreate, pvremove, vgcreate, vgremove, vgextend, vgreduce.
+ *
+ * - The properties of orphan PVs.  It is possible to make changes to the
+ *   properties of an orphan PV, e.g. pvresize, pvchange.
+ *
+ * These are things that cannot be protected by a VG lock alone, since
+ * orphan PVs do not belong to a real VG (an artificial VG does not
+ * apply since a sanlock lock only exists on real storage.)
+ *
+ * If a command will change any of the things above, it must first acquire
+ * the global lock in exclusive mode.
+ *
+ * If command is reading any of the things above, it must acquire the global
+ * lock in shared mode.  A number of commands read the things above, including:
+ *
+ * - Reporting/display commands which show all VGs.  Any command that
+ *   will iterate through the entire VG namespace must first acquire the
+ *   global lock shared so that it has an accurate view of the namespace.
+ *
+ * - A command where a tag name is used to identify what to process.
+ *   A tag requires reading all VGs to check if they match the tag.
+ *
+ * In these cases, the global lock must be acquired before the list of
+ * all VGs is created.
+ *
+ * The global lock is not generally unlocked explicitly in the code.
+ * When the command disconnects from lvmlockd, lvmlockd automatically
+ * releases the locks held by the command.  The exception is if a command
+ * will continue running for a long time while not needing the global lock,
+ * e.g. commands that poll to report progress.
+ *
+ * Acquiring the global lock also updates the local lvmetad cache if
+ * necessary.  lockd_gl() first acquires the lock via lvmlockd, then
+ * before returning to the caller, it checks that the global information
+ * (e.g. VG namespace, set of orphans) is up to date in lvmetad.  If
+ * not, it scans disks and updates the lvmetad cache before returning
+ * to the caller.  It does this checking using a version number associated
+ * with the global lock.  The version number is incremented each time
+ * a change is made to the state associated with the global lock, and
+ * if the local version number is lower than the version number in the
+ * lock, then the local lvmetad state must be updated.
+ */
+
 int lockd_gl(struct cmd_context *cmd, const char *def_mode, uint32_t flags)
 {
 	const char *mode = NULL;
@@ -1333,6 +1395,27 @@ int lockd_gl(struct cmd_context *cmd, const char *def_mode, uint32_t flags)
  * The result of the VG lock operation needs to be saved in lockd_state
  * because the result needs to be passed into vg_read so it can be
  * assessed in combination with vg->lock_state.
+ *
+ * The VG lock protects the VG metadata on disk from concurrent access
+ * among hosts.  The VG lock also ensures that the local lvmetad cache
+ * contains the latest version of the VG metadata from disk.  (Since
+ * another host may have changed the VG since it was last read.)
+ *
+ * The VG lock must be acquired before the VG is read, i.e. before vg_read().
+ * The result from lockd_vg() is saved in the "lockd_state" variable, and
+ * this result is passed into vg_read().  After vg_read() reads the VG,
+ * it checks if the VG lock_type (sanlock or dlm) requires a lock to be
+ * held, and if so, it verifies that the lock was correctly acquired by
+ * looking at lockd_state.  If vg_read() sees that the VG is a local VG,
+ * i.e. lock_type is not sanlock or dlm, then no lock is required, and it
+ * ignores lockd_state (which would indicate no lock was found.)
+ *
+ * When acquiring the VG lock, lvmlockd checks if the local cached copy
+ * of the VG metadata in lvmetad is up to date.  If not, it invalidates
+ * the VG cached in lvmetad.  This would happen if another host changed
+ * the VG since it was last read.  When lvm commands read the VG from
+ * lvmetad, they will check if the metadata is invalid, and if so they
+ * will reread it from disk, and update the copy in lvmetad.
  */
 
 int lockd_vg(struct cmd_context *cmd, const char *vg_name, const char *def_mode,
@@ -1557,6 +1640,17 @@ out:
 	return ret;
 }
 
+/*
+ * This must be called before a new version of the VG metadata is
+ * written to disk.  For local VGs, this is a no-op, but for lockd
+ * VGs, this notifies lvmlockd of the new VG seqno.  lvmlockd must
+ * know the latest VG seqno so that it can save it within the lock's
+ * LVB.  The VG seqno in the VG lock's LVB is used by other hosts to
+ * detect when their cached copy of the VG metadata is stale, i.e.
+ * the cached VG metadata has a lower seqno than the seqno seen in
+ * the VG lock.
+ */
+
 int lockd_vg_update(struct volume_group *vg)
 {
 	daemon_reply reply;
@@ -1735,6 +1829,20 @@ static int _lockd_lv_thin(struct cmd_context *cmd, struct logical_volume *lv,
  * If the lock request is not directed to another LV, and the LV has no
  * lock_type set, it means that the LV has no lock, and no locking is done
  * for it.
+ *
+ * An LV lock is acquired before the LV is activated, and released
+ * after the LV is deactivated.  If the LV lock cannot be acquired,
+ * it means that the LV is active on another host and the activation
+ * fails.  Commands that modify an inactive LV also acquire the LV lock.
+ *
+ * In non-lockd VGs, this is a no-op.
+ *
+ * In lockd VGs, normal LVs each have their own lock, but other
+ * LVs do not have their own lock, e.g. the lock for a thin LV is
+ * acquired on the thin pool LV, and a thin LV does not have a lock
+ * of its own.  A cache pool LV does not have a lock of its own.
+ * When the cache pool LV is linked to an origin LV, the lock of
+ * the orgin LV protects the combined origin + cache pool.
  */
 
 int lockd_lv(struct cmd_context *cmd, struct logical_volume *lv,
