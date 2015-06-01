@@ -158,8 +158,15 @@ int vgcreate(struct cmd_context *cmd, int argc, char **argv)
 			goto out;
 		}
 
-		if (start_opt && !strcmp(start_opt, "wait"))
+		if (!start_opt || !strcmp(start_opt, "wait")) {
+			/* It is OK if the user does Ctrl-C to cancel the wait. */
+			log_print_unless_silent("Starting locking.  Waiting until locks are ready...");
 			lockd_start_wait(cmd);
+
+		} else if (!strcmp(start_opt, "nowait")) {
+			log_print_unless_silent("Starting locking.  VG is read-only until locks are ready.");
+		}
+
 	}
 out:
 	release_vg(vg);
