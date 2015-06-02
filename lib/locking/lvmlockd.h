@@ -151,6 +151,10 @@ static inline void lvmlockd_set_socket(const char *sock)
 {
 }
 
+static inline void lvmlockd_set_use(int use)
+{
+}
+
 static inline void lvmlockd_init(struct cmd_context *cmd)
 {
 }
