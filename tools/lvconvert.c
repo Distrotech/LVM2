@@ -2645,6 +2645,8 @@ static int _lvconvert_pool(struct cmd_context *cmd,
 	const char *old_name;
 	const char *lock_free_meta_name = NULL;
 	const char *lock_free_data_name = NULL;
+	struct id *lock_free_meta_id;
+	struct id *lock_free_data_id;
 	struct lv_segment *seg;
 	struct volume_group *vg = pool_lv->vg;
 	struct logical_volume *data_lv;
@@ -2995,10 +2997,13 @@ static int _lvconvert_pool(struct cmd_context *cmd,
 				lock_free_meta_name = c + 1;
 			else
 				lock_free_meta_name = lp->pool_metadata_name;
+
+			lock_free_meta_id = &lp->pool_metadata_lv->lvid.id[1];
 		}
 
 		if (segtype_is_cache_pool(lp->segtype)) {
 			lock_free_data_name = pool_lv->name;
+			lock_free_data_id = &pool_lv->lvid.id[1];
 			pool_lv->lock_type = NULL;
 			pool_lv->lock_args = NULL;
 		} else  {
@@ -3071,19 +3076,19 @@ out:
 					"cache" : "thin");
 
 	if (lock_free_meta_name) {
-		if (!lockd_lv_name(cmd, pool_lv->vg, lock_free_meta_name, NULL, "un", LDLV_PERSISTENT)) {
+		if (!lockd_lv_name(cmd, pool_lv->vg, lock_free_meta_name, lock_free_meta_id, NULL, "un", LDLV_PERSISTENT)) {
 			log_error("Failed to unlock pool metadata LV %s/%s",
 				  pool_lv->vg->name, lock_free_meta_name);
 		}
-		lockd_free_lv(cmd, pool_lv->vg, lock_free_meta_name, NULL);
+		lockd_free_lv(cmd, pool_lv->vg, lock_free_meta_name, lock_free_meta_id, NULL);
 	}
 
 	if (lock_free_data_name) {
-		if (!lockd_lv_name(cmd, pool_lv->vg, lock_free_data_name, NULL, "un", LDLV_PERSISTENT)) {
+		if (!lockd_lv_name(cmd, pool_lv->vg, lock_free_data_name, lock_free_data_id, NULL, "un", LDLV_PERSISTENT)) {
 			log_error("Failed to unlock pool data LV %s/%s",
 				  pool_lv->vg->name, lock_free_data_name);
 		}
-		lockd_free_lv(cmd, pool_lv->vg, lock_free_data_name, NULL);
+		lockd_free_lv(cmd, pool_lv->vg, lock_free_data_name, lock_free_data_id, NULL);
 	}
 
 	return r;
