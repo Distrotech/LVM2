@@ -2817,7 +2817,19 @@ int vg_write(struct volume_group *vg)
 	struct dm_list *mdah;
         struct pv_to_create *pv_to_create;
 	struct metadata_area *mda;
+	struct lv_list *lvl;
 	int revert = 0, wrote = 0;
+
+	dm_list_iterate_items(lvl, &vg->lvs) {
+		if (lvl->lv->lock_args && !strcmp(lvl->lv->lock_args, "pending")) {
+			if (!lockd_init_lv_args(vg->cmd, vg, lvl->lv->name, &lvl->lv->lvid.id[1],
+					        lvl->lv->lock_type, &lvl->lv->lock_args)) {
+				log_error("Cannot allocate lock for new LV.");
+				return 0;
+			}
+			lvl->lv->new_lock_args = 1;
+		}
+	}
 
 	if (!vg_validate(vg))
 		return_0;
@@ -3020,6 +3032,14 @@ int vg_commit(struct volume_group *vg)
 void vg_revert(struct volume_group *vg)
 {
 	struct metadata_area *mda;
+	struct lv_list *lvl;
+
+	dm_list_iterate_items(lvl, &vg->lvs) {
+		if (lvl->lv->new_lock_args) {
+			lockd_free_lv(vg->cmd, vg, lvl->lv->name, &lvl->lv->lvid.id[1], lvl->lv->lock_args);
+			lvl->lv->new_lock_args = 0;
+		}
+	}
 
 	release_vg(vg->vg_precommitted);  /* VG is no longer needed */
 	vg->vg_precommitted = NULL;
