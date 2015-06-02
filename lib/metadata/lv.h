@@ -51,6 +51,7 @@ struct logical_volume {
 	struct dm_list segs_using_this_lv;
 
 	uint64_t timestamp;
+	unsigned new_lock_args:1;
 	const char *hostname;
 	const char *lock_type;
 	const char *lock_args;
