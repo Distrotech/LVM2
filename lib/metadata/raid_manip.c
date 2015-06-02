@@ -1970,7 +1970,7 @@ PFL();
 		seg->region_size = 0;
 
 PFL();
-	/* Reshape adding image component pairs -> change sizes accordingly */
+	/* Reshape removing image component pairs -> change sizes accordingly */
 	if (reshape_disks) {
 		uint32_t minus_extents = (old_count - new_count) * (lv->le_count / _data_rimages_count(seg, old_count));
 
@@ -3001,6 +3001,9 @@ static int _reshaped_state(struct logical_volume *lv, const unsigned dev_count,
 	return kernel_devs < dev_count ? 2 : 3;
 }
 
+static int _lv_change_image_count(struct logical_volume *lv, const struct segment_type *new_segtype,
+				  uint32_t new_image_count,
+				  struct dm_list *allocate_pvs, struct dm_list *removal_lvs);
 /*
  * Reshape logical volume @lv by adding/removing stripes
  * (absolute new stripes given in @new_stripes), changing
@@ -3008,7 +3011,6 @@ static int _reshaped_state(struct logical_volume *lv, const unsigned dev_count,
  * Any PVs listed in @allocate_pvs will be tried for
  * allocation of new stripes.
  */
-
 static int _raid_reshape(struct logical_volume *lv,
 			    const struct segment_type *new_segtype,
 			    int yes, int force,
@@ -3018,12 +3020,15 @@ static int _raid_reshape(struct logical_volume *lv,
 {
 	int r;
 	int flag_cleared, update_and_reload = 1, too_few = 0;
-	uint32_t new_len;
+	uint32_t new_len, s;
 	struct lv_segment *seg = first_seg(lv);
 	unsigned old_dev_count = seg->area_count;
 	unsigned new_dev_count = new_stripes + seg->segtype->parity_devs;
 	unsigned devs_health, devs_in_sync;
+	struct dm_list removal_lvs;
 	struct lvinfo info = { 0 };
+
+	dm_list_init(&removal_lvs);
 
 PFLA("old_dev_count=%u new_dev_count=%u", old_dev_count, new_dev_count);
 	if (seg->segtype == new_segtype &&
@@ -3098,7 +3103,7 @@ PFL();
 			return 0;
 		}
 
-		new_len = _data_rimages_count(seg, new_dev_count) * (seg->len / _data_rimages_count(seg, seg->area_count));
+		new_len = _data_rimages_count(seg, new_dev_count) * (seg->len / _data_rimages_count(seg, old_dev_count));
 		log_warn("WARNING: Adding stripes to active%s logical volume %s will grow "
 			 "it from %u to %u extents!\n"
 			 "You may want to run \"lvresize -l%u %s\" to shrink it after\n"
@@ -3120,10 +3125,8 @@ PFL();
 		if (!_lv_alloc_reshape_space(lv, alloc_begin, allocate_pvs))
 			return 0;
 
-		if (!_lv_raid_change_image_count(lv, new_segtype, new_dev_count, allocate_pvs))
+		if (!_lv_change_image_count(lv, new_segtype, new_dev_count, allocate_pvs, NULL))
 			return 0;
-
-		update_and_reload = 0;
 
 		if (seg->segtype != new_segtype)
 			log_warn("Ignoring layout change on device adding reshape");
@@ -3134,8 +3137,6 @@ PFL();
 
 	/* Handle disk removal reshaping */
 	} else if (old_dev_count > new_dev_count) {
-		uint32_t s;
-
 		switch (_reshaped_state(lv, new_dev_count, &devs_health, &devs_in_sync)) {
 		case 3:
 			/*
@@ -3153,7 +3154,7 @@ PFL();
 			}
 
 			new_len = _data_rimages_count(seg, new_dev_count) *
-				  (seg->len / _data_rimages_count(seg, seg->area_count));
+				  (seg->len / _data_rimages_count(seg, old_dev_count));
 PFLA("new_dev_count=%u _data_rimages_count(seg, new_dev_count)=%u new_len=%u", new_dev_count, _data_rimages_count(seg, new_dev_count), new_len);
 			log_warn("WARNING: Removing stripes from active%s logical volume %s will shrink "
 				 "it from %u to %u extents!\n"
@@ -3162,7 +3163,7 @@ PFLA("new_dev_count=%u _data_rimages_count(seg, new_dev_count)=%u new_len=%u", n
 				 "If that leaves the logical volume larger than %u extents, grow the filesystem etc. as well",
 				 info.open_count ? " and open" : "",
 				 display_lvname(lv), seg->len, new_len,
-				 seg->len * _data_rimages_count(seg, seg->area_count) / _data_rimages_count(seg, new_dev_count),
+				 seg->len * _data_rimages_count(seg, old_dev_count) / _data_rimages_count(seg, new_dev_count),
 				 display_lvname(lv), new_len);
 			log_warn("WARNING: You have to run \"lvconvert --stripes %u %s\" again after the reshapa has finished",
 				 new_stripes, display_lvname(lv));
@@ -3209,9 +3210,15 @@ PFLA("new_dev_count=%u _data_rimages_count(seg, new_dev_count)=%u new_len=%u", n
 		 	*
 		 	*/
 PFL();
+#if 0
 			if (!_lv_raid_change_image_count(lv, new_segtype, new_dev_count, allocate_pvs))
 				return 0;
+#else
+			if (!_lv_change_image_count(lv, new_segtype, new_dev_count, allocate_pvs, &removal_lvs))
+				return 0;
 
+#endif
+#if 0
 			if (!vg_write(lv->vg) || !vg_commit(lv->vg)) {
 				log_error("Failed to write reshaped %s", display_lvname(lv));
 				return 0;
@@ -3220,6 +3227,7 @@ PFL();
 			backup(lv->vg);
 
 			update_and_reload = 0;
+#endif
 			break;
 
 		default:
@@ -3244,6 +3252,9 @@ PFLA("new_segtype=%s seg->area_count=%u", new_segtype->name, seg->area_count);
 
 	if (update_and_reload) {
 		if (!lv_update_and_reload_origin(lv))
+			return_0;
+
+		if (!dm_list_empty(&removal_lvs) && !_eliminate_extracted_lvs(lv->vg, &removal_lvs))
 			return_0;
 PFL();
 		/* HM FIXME: i don't like the flow doing this here and in _raid_add_images on addition of component images */
@@ -4013,23 +4024,28 @@ static void _seg_get_redundancy(const struct segment_type *segtype, unsigned tot
  * allocating from list @allocate_pvs and putting any removed
  * LVs on the @removal_lvs list
  */
-static int _lv_change_image_count(struct logical_volume *lv, uint32_t new_image_count,
+static int _lv_change_image_count(struct logical_volume *lv, const struct segment_type *new_segtype,
+				  uint32_t new_image_count,
 				  struct dm_list *allocate_pvs, struct dm_list *removal_lvs)
 {
 	struct lv_segment *seg = first_seg(lv);
 	struct dm_list meta_lvs, data_lvs;
+	int reshape_disks = seg_is_striped_raid(seg) && !seg_is_any_raid0(seg) &&
+			    is_same_level(seg->segtype, new_segtype);
+	uint32_t old_count = seg->area_count, s;
 
+PFLA("reshape_disks=%u", reshape_disks);
 	dm_list_init(&meta_lvs);
 	dm_list_init(&data_lvs);
 
-	if (seg->area_count == new_image_count) {
+	if (old_count == new_image_count) {
 		log_warn("raid1^logical volume %s already has requested number of mirrors", display_lvname(lv));
 		return 0;
 
-	} else if (seg->area_count < new_image_count) {
+	} else if (old_count < new_image_count) {
 		/* Allocate an additional meta and data LVs pair */
 		log_debug_metadata("Allocating additional data and metadata LV pair for %s", display_lvname(lv));
-		if (!_alloc_image_components(lv, 1, allocate_pvs, new_image_count - seg->area_count,
+		if (!_alloc_image_components(lv, 1, allocate_pvs, new_image_count - old_count,
 					     &meta_lvs, &data_lvs)) {
 			log_error("Failed to allocate additional data and metadata LV pair for %s", display_lvname(lv));
 			return_0;
@@ -4049,10 +4065,39 @@ static int _lv_change_image_count(struct logical_volume *lv, uint32_t new_image_
 		}
 
 		log_debug_metadata("Adding new data and metadata LVs to %s", display_lvname(lv));
-		if (!_add_image_component_list(seg, 1, 0, &meta_lvs, seg->area_count) ||
-		    !_add_image_component_list(seg, 1, LV_REBUILD, &data_lvs, seg->area_count)) {
+		if (!_add_image_component_list(seg, 1, 0, &meta_lvs, old_count) ||
+		    !_add_image_component_list(seg, 1, LV_REBUILD, &data_lvs, old_count)) {
 			log_error("Failed to add new data and metadata LVs to %s", display_lvname(lv));
 			return_0;
+		} 
+
+		if (reshape_disks) {
+			uint32_t plus_extents = (new_image_count - old_count) *
+						(lv->le_count / _data_rimages_count(seg, old_count));
+PFL();
+			/*
+		 	* Reshape adding image component pairs:
+		 	*
+		 	* - reset rebuild flag on new image LVs
+		 	* - set delta disks plus flag on new image LVs
+		 	*/
+			for (s = old_count; s < new_image_count; s++) {
+PFL();
+				seg_lv(seg, s)->status &= ~LV_REBUILD;
+				seg_lv(seg, s)->status |= LV_RESHAPE_DELTA_DISKS_PLUS;
+			}
+PFL();
+			/* Reshape adding image component pairs -> change sizes accordingly */
+PFLA("lv->le_count=%u data_rimages=%u plus_extents=%u", lv->le_count, _data_rimages_count(seg, old_count), plus_extents);
+			lv->le_count += plus_extents;
+			lv->size = lv->le_count * lv->vg->extent_size;
+			seg->len += plus_extents;
+			seg->area_len += plus_extents;
+			seg->reshape_len = seg->reshape_len / _data_rimages_count(seg, old_count) *
+						      _data_rimages_count(seg, new_image_count);
+			if (old_count == 2 && !seg->stripe_size)
+				seg->stripe_size = DEFAULT_STRIPESIZE;
+PFLA("lv->le_count=%u", lv->le_count);
 		}
 
 	} else {
@@ -4061,7 +4106,7 @@ static int _lv_change_image_count(struct logical_volume *lv, uint32_t new_image_
 			return 0;
 		}
 
-		/* Extract all image and any metadata lvs past new_count */
+		/* Extract all image and any metadata lvs past new_image_count */
 		log_debug_metadata("Extracting data and metadata LVs from %s", display_lvname(lv));
 		if (!_raid_extract_images(lv, new_image_count, allocate_pvs,
 					  0 /* shift */, removal_lvs, removal_lvs)) {
@@ -4074,6 +4119,21 @@ static int _lv_change_image_count(struct logical_volume *lv, uint32_t new_image_
 		if (!_realloc_meta_and_data_seg_areas(lv, seg, new_image_count)) {
 			log_error("Failed to reallocate data and metadata areas arrays of %s", display_lvname(lv));
 			return 0;
+		}
+
+		/* Reshape removing image component pairs -> change sizes accordingly */
+		if (reshape_disks) {
+			uint32_t minus_extents = (old_count - new_image_count) *
+						 (lv->le_count / _data_rimages_count(seg, old_count));
+
+PFLA("lv->le_count=%u data_rimages=%u minus_extents=%u", lv->le_count, _data_rimages_count(seg, old_count), minus_extents);
+			lv->le_count -= minus_extents;
+			lv->size = lv->le_count * lv->vg->extent_size;
+			seg->len -= minus_extents;
+			seg->area_len -= minus_extents;
+			seg->reshape_len = seg->reshape_len / _data_rimages_count(seg, old_count) *
+						      	_data_rimages_count(seg, new_image_count);
+PFLA("lv->le_count=%u", lv->le_count);
 		}
 	}
 
@@ -4304,7 +4364,7 @@ PFLA("seg->area_count=%u new_image_count=%u", seg->area_count, new_image_count);
 	}
 
 	/* Allocate the additional meta and data lvs requested */
-	if (!_lv_change_image_count(lv, new_image_count, allocate_pvs, NULL))
+	if (!_lv_change_image_count(lv, new_segtype, new_image_count, allocate_pvs, NULL))
 		return 0;
 
 	seg->segtype = new_segtype;
@@ -4361,7 +4421,7 @@ DFH(helper_striped_r456)
 		seg = first_seg(lv);
 	}
 
-	if (!_lv_change_image_count(lv, new_image_count, allocate_pvs, NULL))
+	if (!_lv_change_image_count(lv, new_segtype, new_image_count, allocate_pvs, NULL))
 		return 0;
 
 	/* If this is any raid5 conversion request -> enforce raid5_n, because we convert from striped */
@@ -4407,7 +4467,7 @@ DFH(helper_s_r0_r10)
 	    !_raid0_add_or_remove_metadata_lvs(lv, 0 /* !update_and_reload */, NULL))
 		return 0;
 
-	if (!_lv_change_image_count(lv, seg->area_count * 2, allocate_pvs, NULL))
+	if (!_lv_change_image_count(lv, new_segtype, seg->area_count * 2, allocate_pvs, NULL))
 		return 0;
 
 	log_debug_metadata("Reordering areas for raid0 -> raid10 takeover");
@@ -4452,6 +4512,11 @@ DFH(helper_m_r45)
 
 	if (!_lv_is_synced(lv))
 		return 0;
+
+	if (!_lv_free_reshape_space(lv)) {
+		log_error(INTERNAL_ERROR "Failed to free reshape space");
+		return 0;
+	}
 
 	if (segtype_is_mirror(new_segtype)) {
 		if (!(seg->segtype = get_segtype_from_flag(lv->vg->cmd, SEG_RAID1)))
@@ -4636,11 +4701,16 @@ DFH(helper_r14510_l)
 	if (!_lv_is_synced(lv))
 		return 0;
 
+	if (!_lv_free_reshape_space(lv)) {
+		log_error(INTERNAL_ERROR "Failed to free reshape space");
+		return 0;
+	}
+
 	if (!(seg->segtype = get_segtype_from_flag(lv->vg->cmd, SEG_RAID1)))
 		return_0;
 
 	/* Reduce image count to one */
-	if (!_lv_change_image_count(lv, 1, allocate_pvs, &removal_lvs))
+	if (!_lv_change_image_count(lv, new_segtype, 1, allocate_pvs, &removal_lvs))
 		return 0;
 
 	if (!_convert_raid_to_linear(lv, &removal_lvs))
@@ -4708,7 +4778,7 @@ DFH(helper_r145_r1_r6)
 	if (!_lv_is_synced(lv))
 		return 0;
 
-	if (!_lv_change_image_count(lv, new_image_count, allocate_pvs, &removal_lvs))
+	if (!_lv_change_image_count(lv, new_segtype, new_image_count, allocate_pvs, &removal_lvs))
 		return 0;
 
 	first_seg(lv)->segtype = new_segtype;
@@ -4750,6 +4820,11 @@ DFH(helper_r145_r4510)
 
 	if (new_image_count && new_image_count != 2)
 		log_error("Ignoring new image count for %s", display_lvname(lv));
+
+	if (!_lv_free_reshape_space(lv)) {
+		log_error(INTERNAL_ERROR "Failed to free reshape space");
+		return 0;
+	}
 
 	if ((!seg_is_raid1(seg) && !seg_is_any_raid5(seg)) && segtype_is_any_raid5(new_segtype)) {
 		if (!(seg->segtype = get_segtype_from_flag(lv->vg->cmd, SEG_RAID5_N)))
@@ -4803,8 +4878,13 @@ DFH(_r456_r0_striped)
 
 	dm_list_init(&removal_lvs);
 
+	if (!_lv_free_reshape_space(lv)) {
+		log_error(INTERNAL_ERROR "Failed to free reshape space");
+		return 0;
+	}
+
 	/* Remove meta and data lvs requested */
-	if (!_lv_change_image_count(lv, new_image_count, allocate_pvs, &removal_lvs))
+	if (!_lv_change_image_count(lv, new_segtype, new_image_count, allocate_pvs, &removal_lvs))
 		return 0;
 
 	if (!(seg->segtype = get_segtype_from_flag(lv->vg->cmd, SEG_RAID0_META)))
@@ -4957,7 +5037,7 @@ DFH(_r6_r45)
 	dm_list_init(&removal_lvs);
 
 	/* Remove meta and data lvs requested */
-	if (!_lv_change_image_count(lv, new_image_count, allocate_pvs, &removal_lvs))
+	if (!_lv_change_image_count(lv, new_segtype, new_image_count, allocate_pvs, &removal_lvs))
 		return 0;
 
 	if (!(seg->segtype = get_segtype_from_flag(lv->vg->cmd, _raid_seg_flag_6_to_5(seg)))) {
@@ -5020,7 +5100,7 @@ DFH(helper_r10_s_r0)
 	_raid10_reorder_seg_areas(seg, 0);
 
 	/* Remove the last half of the meta and data image pairs */
-	if (!_lv_change_image_count(lv, seg->area_count / 2, allocate_pvs, &removal_lvs))
+	if (!_lv_change_image_count(lv, new_segtype, seg->area_count / 2, allocate_pvs, &removal_lvs))
 		return 0;
 
 	if (!segtype_is_any_raid0(new_segtype)) {
@@ -5203,7 +5283,6 @@ int lv_raid_convert(struct logical_volume *lv,
 	struct lv_segment *seg = first_seg(lv);
 	struct segment_type *new_segtype_tmp = (struct segment_type *) new_segtype;
 	const struct segment_type *segtype = seg->segtype;
-	const struct segment_type *final_segtype = NULL;
 	struct segment_type *striped_segtype;
 	struct lvinfo info = { 0 };
 	struct dm_list removal_lvs;
@@ -5380,10 +5459,11 @@ PFLA("cur_redundancy=%u new_redundancy=%u", cur_redundancy, new_redundancy);
 
 	
 #if 1
+PFLA("stripes=%u", stripes);
 	/*
 	 * Staying on the same level -> reshape required to change #stripes (i.e. # of disks)
 	 */
-	if (is_same_level(seg->segtype, new_segtype) && stripes && seg->area_count != stripes)
+	if (is_same_level(seg->segtype, new_segtype) && stripes && _data_rimages_count(seg, seg->area_count) != stripes)
 		return _raid_reshape(lv, new_segtype, yes, force, stripes, new_stripe_size, allocate_pvs);
 
 	/*
