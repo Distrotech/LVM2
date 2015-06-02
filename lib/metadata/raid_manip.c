@@ -274,14 +274,16 @@ static int _extract_image_component(struct lv_segment *seg,
 				    uint64_t type, uint32_t idx,
 				    struct logical_volume **extracted_lv);
 static int _convert_raid_to_linear(struct logical_volume *lv,
-				  struct dm_list *removal_list)
+				   struct dm_list *removal_list)
 {
+	unsigned i = 0;
 	struct lv_list *lvl_array, *lvl;
 	struct logical_volume *lv_tmp;
 	struct lv_segment *seg = first_seg(lv);
 
-	if (!seg_is_mirrored(seg) &&
-	    !(seg_is_any_raid0(seg) || seg_is_raid4(seg) || seg_is_any_raid5(seg))) {
+PFL();
+	if (!seg_is_mirrored(seg) && !seg_is_any_raid0(seg) &&
+	    !seg_is_raid4(seg) && !seg_is_any_raid5(seg)) {
 		log_error(INTERNAL_ERROR
 			  "Unable to remove RAID layer from segment type %s",
 			  lvseg_name(seg));
@@ -296,14 +298,15 @@ static int _convert_raid_to_linear(struct logical_volume *lv,
 		return 0;
 	}
 
-	if (!(lvl_array = dm_pool_alloc(lv->vg->vgmem, 2 * sizeof(*lvl))))
+	if (!(lvl_array = dm_pool_alloc(lv->vg->vgmem,
+					(seg->meta_areas ? 2 : 1) * sizeof(*lvl))))
 		return_0;
 
 	if (seg->meta_areas) {
-		if (!_extract_image_component(seg, RAID_META, 0, &lvl_array[0].lv))
+		if (!_extract_image_component(seg, RAID_META, 0, &lvl_array[i].lv))
 			return 0;
 
-		dm_list_add(removal_list, &(lvl_array[0].list));
+		dm_list_add(removal_list, &(lvl_array[i++].list));
 		seg->meta_areas = NULL;
 	}
 PFL();
@@ -311,8 +314,8 @@ PFL();
 	lv_tmp = seg_lv(seg, 0);
 	lv_tmp->status &= ~RAID_IMAGE;
 	lv_set_visible(lv_tmp);
-	lvl_array[1].lv = lv_tmp;
-	dm_list_add(removal_list, &(lvl_array[1].list));
+	lvl_array[i].lv = lv_tmp;
+	dm_list_add(removal_list, &(lvl_array[i].list));
 PFL();
 	if (!remove_layer_from_lv(lv, lv_tmp))
 		return_0;
@@ -599,16 +602,16 @@ PFLA("name=%s", name);
 /*
  * Eliminate the extracted LVs on @removal_list from @vg incl. vg write, commit and backup 
  */
-static int _eliminate_extracted_lvs(struct volume_group *vg, struct dm_list *removal_list)
+static int _eliminate_extracted_lvs(struct volume_group *vg, struct dm_list *removal_lvs)
 {
-	if (dm_list_empty(removal_list))
+	if (!removal_lvs || dm_list_empty(removal_lvs))
 		return 1;
 
 	sync_local_dev_names(vg->cmd);
 
 PFL();
-	if (!dm_list_empty(removal_list)) {
-		if (!_deactivate_and_remove_lvs(vg, removal_list))
+	if (!dm_list_empty(removal_lvs)) {
+		if (!_deactivate_and_remove_lvs(vg, removal_lvs))
 			return 0;
 
 		if (!vg_write(vg) || !vg_commit(vg))
@@ -1401,7 +1404,7 @@ static int _lv_free_reshape_space(struct logical_volume *lv)
  * Convert linear @lv to raid by making the linear lv
  * the one data sub lv of a new top-level lv
  */
-static struct lv_segment *_convert_linear_to_raid(struct logical_volume *lv)
+static struct lv_segment *_convert_linear_to_raid1(struct logical_volume *lv)
 {
 	struct lv_segment *seg = first_seg(lv);
 	uint64_t flags = RAID | LVM_READ | LVM_WRITE;
@@ -1429,22 +1432,15 @@ static int _reset_flags_passed_to_kernel(struct logical_volume *lv, int *flag_cl
 {
 	uint32_t s;
 	struct lv_segment *seg = first_seg(lv);
+	uint64_t reset_flags = LV_REBUILD | LV_RESHAPE_DELTA_DISKS_PLUS | LV_RESHAPE_DELTA_DISKS_MINUS;
 
 	*flag_cleared = 0;
-	for (s = 0; s < seg->area_count; s++) {
-		if ((seg_metalv(seg, s)->status & (LV_REBUILD|LV_RESHAPE_DELTA_DISKS_PLUS|LV_RESHAPE_DELTA_DISKS_MINUS)) ||
-		    (seg_lv(seg, s)->status & (LV_REBUILD|LV_RESHAPE_DELTA_DISKS_PLUS|LV_RESHAPE_DELTA_DISKS_MINUS))) {
-			seg_metalv(seg, s)->status &= ~(LV_REBUILD|LV_RESHAPE_DELTA_DISKS_PLUS|LV_RESHAPE_DELTA_DISKS_MINUS);
-			seg_lv(seg, s)->status &= ~(LV_REBUILD|LV_RESHAPE_DELTA_DISKS_PLUS|LV_RESHAPE_DELTA_DISKS_MINUS);
+	for (s = 0; s < seg->area_count; s++)
+		if ((*flag_cleared += (seg_lv(seg, s)->status & reset_flags)))
+			seg_lv(seg, s)->status &= ~reset_flags;
 
-			*flag_cleared = 1;
-		}
-	}
-
-	if (seg->data_offset) {
+	if ((*flag_cleared += (seg->data_offset ? 1 : 0)))
 		seg->data_offset = 0;
-		*flag_cleared = 1;
-	}
 
 	if (*flag_cleared) {
 		if (!vg_write(lv->vg) || !vg_commit(lv->vg)) {
@@ -1530,228 +1526,6 @@ PFLA("%d iterations", i);
 for (s = 0; s < seg->area_count; s++)
 PFLA("seg_lv(seg, %u)->name=%s", s, seg_lv(seg, s)->name);
 }
-
-/* HM FIXME: REMOVE: replaced by _lv_change_image_count */
-#if 0
-/*
- * Add raid rmeta/rimage pair(s) to @lv to get to
- * absolute @new_count using @pvs to allocate from
- *
- */
-static int _raid_add_images(struct logical_volume *lv,
-			    const struct segment_type *segtype,
-			    uint32_t new_count, struct dm_list *pvs)
-{
-	struct lv_segment *seg = first_seg(lv);
-	int add_all_rmeta = 0, linear, flag_cleared;
-	int reshape_disks = (seg_is_striped_raid(seg) && segtype && is_same_level(seg->segtype, segtype));
-	uint32_t s;
-	uint32_t old_count = lv_raid_image_count(lv);
-	uint32_t count = new_count - old_count;
-	uint64_t lv_flags = LV_REBUILD;
-	struct dm_list data_lvs, meta_lvs;
-
-PFLA("seg->meta_areas=%p", seg->meta_areas);
-	segtype = segtype ?: seg->segtype;
-PFLA("segtype->name=%s seg->segtype->name=%s, seg->area_count=%u new_count=%u old_count=%u count=%u", segtype->name, seg->segtype->name, seg->area_count, new_count, old_count, count);
-
-	if (!(linear = seg_is_linear(seg)) &&
-	    !seg_is_raid(seg)) {
-		log_error("Unable to add RAID images to %s of segment type %s",
-			  lv->name, lvseg_name(seg));
-		return 0;
-	}
-
-PFL();
-	if (lv->status & LV_NOTSYNCED) {
-		log_error("Can't add image to out-of-sync RAID LV:"
-			  " use 'lvchange --resync' first.");
-		return 0;
-	}
-
-	dm_list_init(&data_lvs); /* For data image additions */
-	dm_list_init(&meta_lvs); /* For metadata image additions */
-
-PFLA("seg->meta_areas=%p", seg->meta_areas);
-	/*
-	 * If the segtype is linear, then we must allocate a metadata
-	 * LV to accompany it.
-	 */
-	if (linear) {
-PFL();
-		/*
-		 * A complete resync will be done because of
-		 * the new raid set, no need to mark each sub-lv
-		 *
-		 * -> reset rebuild flag
-		 */
-		/* HM FIXME: avoid lv_flags altogether and better always define rebuild settings? */
-		lv_flags = 0;
-		add_all_rmeta = 1;
-
-		/* Convert linear to raid by inserting a layer */
-	    	if (!_convert_linear_to_raid(lv))
-			return 0;
-
-		/*
-		 * Need to add an rmeta device to pair it
-		 * with the given linear device as well
-		 */
-		if (!_alloc_rmeta_devs_for_lv(lv, &meta_lvs))
-			return 0;
-
-		/*
-		 * Need access to the new first segment after the
-		 * linear -> raid conversion having inserted an
-		 * additional layer
-		 */
-		seg = first_seg(lv);
-
-	/*
-	 * In case this is a conversion from raid0 to raid4/5/6,
-	 * add the metadata image LVs for the raid0 rimage LVs
-	 * presumably they don't exist already.
-	 */
-	} else if (!seg->meta_areas) {
-		add_all_rmeta = 1;
-
-		if (!_alloc_rmeta_devs_for_lv(lv, &meta_lvs))
-			return 0;
-	}
-
-
-PFLA("seg->segtype->flags=%llX lv_flags=%llX", (long long unsigned) seg->segtype->flags, (long long unsigned) lv_flags);
-	/* Allocate the additional meta and data lvs requested */
-	log_debug_metadata("Allocating new data and metadata LVs for %s", display_lvname(lv));
-	if (!_alloc_image_components(lv, 1, pvs, count, &meta_lvs, &data_lvs)) {
-		log_error("Failed to allocate new data and metadata LVs for %s", display_lvname(lv));
-		return_0;
-	}
-PFL();
-	/* Metadata LVs must be cleared before being added to the array */
-	log_debug_metadata("Clearing newly allocated metadata LVs for %s", display_lvname(lv));
-	if (!_clear_lvs(&meta_lvs)) {
-		log_error("Failed to clear newly allocated metadata LVs for %s", display_lvname(lv));
-		goto fail;
-	}
-PFL();
-	/*
-	 * FIXME: It would be proper to activate the new LVs here, instead of having
-	 * them activated by the suspend.  However, this causes residual device nodes
-	 * to be left for these sub-lvs.
-	 */
-
-	/* Grow areas arrays for metadata and data devs  */
-	log_debug_metadata("Reallocating areas arrays");
-	if (!_realloc_meta_and_data_seg_areas(lv, seg, new_count)) {
-		log_error("Relocation of areas arrays failed.");
-		return 0;
-	}
-
-	seg->area_count = new_count;
-PFL();
-	/*
-	 * Set segment areas for metadata sub_lvs adding
-	 * an extra meta area when converting from linear
-	 */
-	log_debug_metadata("Adding new metadata LVs");
-	if (!_add_image_component_list(seg, 0, 0, &meta_lvs, add_all_rmeta ? 0 : old_count)) {
-PFL();
-		seg->area_count = old_count;
-		goto fail;
-	}
-
-	/* Set segment areas for data sub_lvs */
-	log_debug_metadata("Adding new data LVs");
-	if (!_add_image_component_list(seg, 0, lv_flags, &data_lvs, old_count)) {
-PFL();
-		if (!_extract_image_component_list(seg, RAID_META, add_all_rmeta ? 0 : old_count, &meta_lvs))
-			return 0;
-
-		seg->area_count = old_count;
-		goto fail;
-	}
-
-	/* Reorder the areas in case this is a raid0 -> raid10 conversion */
-	if (seg_is_any_raid0(seg) && segtype_is_raid10(segtype)) {
-		log_debug_metadata("Reordering areas for raid0 -> raid10 takeover");
-		_raid10_reorder_seg_areas(seg, 1);
-	}
-
-	/*
-	 * Conversion from linear to raid1 -> set rebuild flags properly
-	 *
-	 * We might as well clear all flags and the raid set
-	 * will be resnchronized properly because it is new,
-	 * but this shows proper status chars.
-	 */
-	if (linear || (seg_is_any_raid0(seg) && old_count == 1)) {
-		seg_lv(seg, 0)->status &= ~LV_REBUILD;
-		
-		for (s = old_count; s < new_count; s++)
-			seg_lv(seg, s)->status |= LV_REBUILD;
-
-	} else if (reshape_disks) {
-		uint32_t plus_extents = count * (lv->le_count / _data_rimages_count(seg, old_count));
-PFL();
-		/*
-		 * Reshape adding image component pairs:
-		 *
-		 * - reset rebuild flag on new image LVs
-		 * - set delta disks plus flag on new image LVs
-		 */
-		for (s = old_count; s < new_count; s++) {
-PFL();
-			seg_lv(seg, s)->status &= ~LV_REBUILD;
-			seg_lv(seg, s)->status |= LV_RESHAPE_DELTA_DISKS_PLUS;
-		}
-PFL();
-		/* Reshape adding image component pairs -> change sizes accordingly */
-PFLA("lv->le_count=%u data_rimages=%u plus_extents=%u", lv->le_count, _data_rimages_count(seg, old_count), plus_extents);
-		lv->le_count += plus_extents;
-		lv->size = lv->le_count * lv->vg->extent_size;
-		seg->len += plus_extents;
-		seg->area_len += plus_extents;
-		seg->reshape_len = seg->reshape_len / _data_rimages_count(seg, old_count) *
-						      _data_rimages_count(seg, new_count);
-		if (old_count == 2 && !seg->stripe_size)
-			seg->stripe_size = DEFAULT_STRIPESIZE;
-PFLA("lv->le_count=%u", lv->le_count);
-	}
-
-	seg->segtype = segtype;
-
-PFL();
-	if (!lv_update_and_reload_origin(lv)) {
-		if (!_extract_image_component_list(seg, RAID_META, add_all_rmeta ? 0 : old_count, &meta_lvs) ||
-		    !_extract_image_component_list(seg, RAID_IMAGE, old_count, &data_lvs))
-			return 0;
-PFL();
-
-		goto fail;
-	}
-
-PFL();
-	/*
-	 * Now that the 'REBUILD' or 'RESHAPE_DELTA_DISKS' has/have made its/their
-	 * way to the kernel, we must remove the flag(s) so that the individual
-	 * devices are not rebuilt/reshaped upon every activation.
-	 */
-	if (!_reset_flags_passed_to_kernel(lv, &flag_cleared))
-		return 0;
-PFL();
-	return flag_cleared ? lv_update_and_reload_origin(lv) : 1;
-
-fail:
-PFL();
-	/* Cleanly remove newly-allocated LVs that failed insertion attempt */
-	if (!_eliminate_extracted_lvs(lv->vg, &meta_lvs) ||
-	    !_eliminate_extracted_lvs(lv->vg, &data_lvs))
-		return_0;
-
-	return 0;
-}
-#endif
 
 /* Write vg of @lv, suspend @lv and commit the vg */
 static int _vg_write_lv_suspend_vg_commit(struct logical_volume *lv)
@@ -1900,141 +1674,6 @@ PFLA("seg_lv(seg, %u)=%s", s, seg_lv(seg,s)->name);
 	return 1;
 }
 
-/* HM FIXME: REMOVE: replaced by _lv_change_image_count */
-#if 0
-/* Remove image component pairs from @lv defined by @new_count (< old_count) */
-static int _raid_remove_images(struct logical_volume *lv,
-			       const struct segment_type *segtype,
-			       uint32_t new_count, struct dm_list *pvs)
-{
-	struct lv_segment *seg = first_seg(lv);
-	int reshape_disks = (seg_is_striped_raid(seg) && segtype && is_same_level(seg->segtype, segtype));
-	unsigned old_count = seg->area_count;
-	struct dm_list removal_list;
-	struct lv_list *lvl;
-
-	/* HM FIXME: TESTME: allow to remove out-of-sync dedicated parity/Q syndrome devices */
-	if (seg_is_striped_raid(seg) &&
-	    (lv->status & LV_NOTSYNCED) &&
-	    !((seg_is_raid5_n(seg) || seg_is_raid6_n_6(seg)) &&
-	      old_count - new_count == 1)) {
-		log_error("Can't remove image(s) from out-of-sync striped RAID LV:"
-			  " use 'lvchange --resync' first.");
-		return 0;
-	}
-
-PFLA("seg->segtype=%s segtype=%s new_count=%u", seg->segtype->name, segtype->name, new_count);
-	dm_list_init(&removal_list);
-
-	/* If we convert away from raid4/5/6/10 -> remove any reshape space */
-	if (!(segtype_is_raid10(segtype) ||
-	      segtype_is_raid4(segtype) ||
-	      segtype_is_any_raid5(segtype) ||
-	      segtype_is_any_raid6(segtype)) &&
-	    !_lv_free_reshape_space(lv)) {
-		log_error(INTERNAL_ERROR "Failed to remove reshape space from %s",
-			  display_lvname(lv));
-		return 0;
-	}
-PFL();
-	/* Reorder the areas in case this is a raid10 -> raid0 conversion */
-	if (seg_is_raid10(seg) && segtype_is_any_raid0(segtype)) {
-		log_debug_metadata("Reordering areas for raid10 -> raid0 takeover");
-		_raid10_reorder_seg_areas(seg, 0);
-	}
-PFL();
-
-	/* Extract all image and any metadata lvs past new_count */
-	if (!_raid_extract_images(lv, new_count, pvs, 1,
-				  &removal_list, &removal_list)) {
-		log_error("Failed to extract images from %s", display_lvname(lv));
-		return 0;
-	}
-PFL();
-	/* Shrink areas arrays for metadata and data devs after the extration */
-	if (!_realloc_meta_and_data_seg_areas(lv, seg, new_count)) {
-		log_error("Relocation of areas arrays failed.");
-		return 0;
-	}
-
-	/* Set before any optional removal of metadata devs following immediately */
-	seg->area_count = new_count;
-
-	/*
-	 * In case this is a conversion to raid0 (i.e. no metadata devs),
-	 * remove the metadata image LVs.
-	 */
-	if (segtype_is_raid0(segtype) &&
-	    seg->meta_areas &&
-	    !_extract_image_component_list(seg, RAID_META, 0, &removal_list))
-		return 0;
-PFL();
-
-	/* raid0* does not have a bitmap -> no region size */
-	if (segtype_is_any_raid0(segtype))
-		seg->region_size = 0;
-
-PFL();
-	/* Reshape removing image component pairs -> change sizes accordingly */
-	if (reshape_disks) {
-		uint32_t minus_extents = (old_count - new_count) * (lv->le_count / _data_rimages_count(seg, old_count));
-
-PFLA("lv->le_count=%u data_rimages=%u minus_extents=%u", lv->le_count, _data_rimages_count(seg, old_count), minus_extents);
-		lv->le_count -= minus_extents;
-		lv->size = lv->le_count * lv->vg->extent_size;
-		seg->len -= minus_extents;
-		seg->area_len -= minus_extents;
-		seg->reshape_len = seg->reshape_len / _data_rimages_count(seg, old_count) *
-						      _data_rimages_count(seg, new_count);
-PFLA("lv->le_count=%u", lv->le_count);
-	}
-
-	/* Convert to linear? */
-	if (segtype_is_linear(segtype)) { /* new_count == 1 */
-		if (!(seg->segtype = get_segtype_from_flag(lv->vg->cmd, SEG_RAID1)))
-			return_0;
-
-		if (!_convert_raid_to_linear(lv, &removal_list)) {
-			log_error("Failed to remove RAID layer"
-			  	" after linear conversion");
-			return 0;
-		}
-
-		lv->status &= ~(LV_NOTSYNCED | LV_WRITEMOSTLY);
-		seg->stripe_size = 0;
-		seg->writebehind = 0;
-	}
-
-PFL();
-	seg->segtype = segtype;
-	if (!_vg_write_lv_suspend_vg_commit(lv))
-		return 0;
-
-	/*
-	 * We activate the extracted sub-LVs first so they are
-	 * renamed and won't conflict with the remaining sub-LVs.
-	 */
-PFL();
-	dm_list_iterate_items(lvl, &removal_list) {
-		if (!activate_lv_excl_local(lv->vg->cmd, lvl->lv)) {
-			log_error("Failed to resume extracted LVs");
-			return 0;
-		}
-	}
-
-PFL();
-	if (!resume_lv(lv->vg->cmd, lv)) {
-		log_error("Failed to resume %s after committing changes",
-			  display_lvname(lv));
-		return 0;
-	}
-
-PFL();
-	/* Eliminate the residual LVs, write VG, commit it and take a backup */
-	return _eliminate_extracted_lvs(lv->vg, &removal_list);
-}
-#endif
-
 
 /****************************************************************************/
 /*
@@ -2102,59 +1741,15 @@ PFL();
 			return_0;
 
 		/* If any residual LVs, eliminate them, write VG, commit it and take a backup */
-		return dm_list_empty(removal_lvs) ? 1 : _eliminate_extracted_lvs(lv->vg, removal_lvs);
+		return _eliminate_extracted_lvs(lv->vg, removal_lvs);
 	}
 
 	return 1;
 }
 
-/* HM FIXME: REMOVE: replaced by _lv_change_image_count */
-#if 0
 /*
- * _lv_raid_change_image_count
- * @lv
- * @new_count: The absolute count of images (e.g. '2' for a 2-way mirror)
- * @pvs: The list of PVs that are candidates for removal (or empty list)
- *
- * RAID arrays have 'images' which are composed of two parts, they are:
- *    - 'rimage': The data/parity/syndrome holding portion
- *    - 'rmeta' : The metadata holding portion (i.e. superblock/bitmap area)
- * This function adds or removes _both_ portions of the image and commits
- * the results.
- *
- * Returns: 1 on success, 0 on failure
- */
-static int _lv_raid_change_image_count(struct logical_volume *lv,
-				       const struct segment_type *segtype,
-				       uint32_t new_count, struct dm_list *pvs)
-{
-	uint32_t old_count = lv_raid_image_count(lv);
-
-	if (old_count == new_count) {
-		log_warn("%s already has image count of %d.",
-			 display_lvname(lv), new_count);
-		return 1;
-	}
-
-	segtype = segtype ?: first_seg(lv)->segtype;
-PFLA("segtype=%s old_count=%u new_count=%u", segtype->name, old_count, new_count);
-
-	/* Check for maximum supported raid devices */
-	if (!_check_maximum_devices(new_count))
-		return 0;
-
-	if (vg_is_clustered(lv->vg) && !lv_is_active_exclusive_locally(lv)) {
-		log_error("%s must be active exclusive locally to"
-			  " perform this operation.", display_lvname(lv));
-		return 0;
-	}
-
-	return (old_count > new_count ? _raid_remove_images : _raid_add_images)(lv, segtype, new_count, pvs);
-}
-#endif
-
-/*
- *
+ * Split off raid1 images of @lv, prefix with @split_name,
+ * leave @new_count in the raid1 set and find them on @splittable_pvs
  */
 int lv_raid_split(struct logical_volume *lv, const char *split_name,
 		  uint32_t new_count, struct dm_list *splittable_pvs)
@@ -3263,7 +2858,7 @@ PFLA("new_segtype=%s seg->area_count=%u", new_segtype->name, seg->area_count);
 		if (!lv_update_and_reload_origin(lv))
 			return_0;
 
-		if (!dm_list_empty(&removal_lvs) && !_eliminate_extracted_lvs(lv->vg, &removal_lvs))
+		if (!_eliminate_extracted_lvs(lv->vg, &removal_lvs))
 			return_0;
 PFL();
 		/* HM FIXME: i don't like the flow doing this here and in _raid_add_images on addition of component images */
@@ -3470,537 +3065,8 @@ static uint64_t _raid_seg_flag_6_to_5(const struct lv_segment *seg)
 
 	return _seg_flag_to_new_flag(seg->segtype->flags, r6_to_r5, ARRAY_SIZE(r6_to_r5));
 }
-
-/* HM FIXME: REMOVEME: because of takeover function table */
-#if 0
-/*
- * Check, if @new_segtype is possible to convert to for
- * given segment type of @lv or try to adjust it.
- *
- * E.g. conversion raid5_la -> raid6 (ie. "--type raid6", which is equal to raid6_zr)
- * actually needs raid6_la_6
- *
- * HM FIXME: complete?
- */
-static int _adjust_segtype(struct logical_volume *lv,
-			   struct segment_type **new_segtype)
-{
-	uint64_t seg_flag = 0;
-	struct lv_segment *seg = first_seg(lv);
-
-	if (seg_is_raid10(seg))
-		return 0;
-
-	if (is_level_up(seg->segtype, *new_segtype)) {
-		/*
-		 * Up convert
-		 */
-		/* multi-striped/raid0 -> raid5/6 */
-		if (seg_is_striped(seg) || seg_is_any_raid0(seg) || seg_is_raid4(seg)) {
-			if (segtype_is_any_raid5(*new_segtype))
-				seg_flag = SEG_RAID5_N;
-			else if (segtype_is_any_raid6(*new_segtype))
-				seg_flag = SEG_RAID6_N_6;
-			else
-				return 0;
-		}
-
-		if (seg_is_any_raid5(seg))
-			seg_flag = _raid_seg_flag_5_to_6(seg);
-
-	} else {
-		/*
-		 * Down convert
-		 */
-		/* raid6 -> raid5/raid0 */
-		if (seg_is_any_raid6(seg)) {
-			if (segtype_is_any_raid5(*new_segtype))
-				seg_flag = _raid_seg_flag_6_to_5(seg);
-			else if (segtype_is_any_raid0(*new_segtype)) {
-				if (!seg_is_raid6_n_6(seg))
-					seg_flag = SEG_RAID6_N_6;
-			} else
-				return 0;
-		}
-
-		/* raid5 -> 5/raid0 */
-		if (seg_is_any_raid5(seg) && !seg_is_raid5_n(seg)) {
-			if (!segtype_is_raid1(*new_segtype))
-				seg_flag = SEG_RAID5_N;
-		}
-	}
-
-	if (seg_flag) {
-		const struct segment_type *saved_segtype = *new_segtype;
-
-	    	if (!(*new_segtype = get_segtype_from_flag(lv->vg->cmd, seg_flag)))
-			return_0;
-
-		log_warn("Overwriting requested raid type %s for %s with %s to allow for conversion",
-			 saved_segtype->name, display_lvname(lv), (*new_segtype)->name);
-		log_warn("Repeat the command after the conversion of %s to %s has finished",
-			 display_lvname(lv), (*new_segtype)->name);
-	}
-
-	return 1;
-}
-#endif
-
-#if 0
-/* Process one level up takeover on @lv to @segtype allocating fron @allocate_pvs */
-static int _raid_takeover(struct logical_volume *lv,
-			  int up,
-			  const struct segment_type *segtype,
-			  struct dm_list *allocate_pvs,
-			  const char *error_msg)
-{
-	struct lv_segment *seg = first_seg(lv);
-	uint32_t new_count = seg->area_count + segtype->parity_devs - seg->segtype->parity_devs;
-
-	/* Make sure to set default region size on takeover from raid0 */
-	_check_and_init_region_size(lv);
-
-PFLA("segtype=%s old_count=%u new_count=%u", segtype->name, seg->area_count, new_count);
-	/* Takeover raid4 <-> raid5_n */
-	if (new_count == seg->area_count) {
-PFL();
-		if (seg->area_count == 2 ||
-		    ((segtype_is_raid5_n(seg->segtype) && segtype_is_raid4(segtype)) ||
-		     (segtype_is_raid4(seg->segtype)   && segtype_is_raid5_n(segtype)))) {
-			seg->segtype = segtype;
-			return lv_update_and_reload(lv);
-		}
-
-		return 0;
-	}
-
-	if (seg_is_any_raid5(seg) && segtype_is_raid1(segtype) && seg->area_count != 2) {
-		uint32_t remove_count = seg->area_count - 2;
-
-		log_error("Device count is incorrect. "
-			  "Forgotten \"lvconvert --stripes 1 %s\" to remove %u image%s after reshape?",
-			   display_lvname(lv), remove_count, remove_count > 1 ? "s" : "");
-		return 0;
-	}
-
-	/*
-	 * Takeover of raid sets with 2 image component pairs (2-legged):
-	 *
-	 * - in case of raid1 -> raid5, takeover will run a degraded 2 disk raid5 set with the same content
-	 *   in each leg (i.e. a redundant raid1 mapping) which will get an additional disk allocated afterwards
-	 *   and reloaded starting reshaping to reach the raid4/5 layout.
-	 *
-	 * - in case of raid4/raid5_n -> all set, just reload
-	 *
-	 * - in case of raid1 -> raid0, remove the second leg and conditionally the meta device
-	 *   of the first leg if raid0 requested and reload
-	 */
-	/* HM FIXME: is this doubled with _check_linear_or_raid0_from_to_raid0145()? */
-	if (!seg_is_any_raid0(seg) && seg->area_count == 2) {
-		int valid_conversion = 0;
-
-		/* Current segtype is raid1 */
-		if (seg_is_raid1(seg)) {
-			if (segtype_is_any_raid0(segtype))
-				valid_conversion = 1;
-
-			if (segtype_is_raid4(segtype) || segtype_is_any_raid5(segtype))
-				valid_conversion = 1;
-		}
-
-		/* Current segtype is raid4 or any raid5 */
-		if (seg_is_raid4(seg) || seg_is_any_raid5(seg))
-			if (segtype_is_any_raid0(segtype) || segtype_is_raid1(segtype))
-				valid_conversion = 1;
-
-		if (!valid_conversion) {
-			log_error(error_msg, display_lvname(lv));
-			return 0;
-		}
-PFL();
-		/* raid1 does not preset stripe size */
-		if (!seg->stripe_size &&
-		    !(seg->stripe_size = find_config_tree_int(lv->vg->cmd, global_raid_stripe_size_default_CFG, NULL)))
-			return 0;
-
-PFL();
-		if (segtype_is_any_raid0(segtype))
-			new_count = 1;
-
-		else {
-			seg->segtype = segtype;
-			return lv_update_and_reload_origin(lv);
-			// return resume_lv(lv->vg->cmd, lv_lock_holder(lv));
-		}
-	}
-
-PFL();
-	/*
-	 * The top-level LV is being reloaded and the VG
-	 * written and committed in the course of this call
-	 */
-	return _lv_raid_change_image_count(lv, segtype, new_count, allocate_pvs);
-}
-#endif
-
-/* HM FIXME: REMOVEME: because of takeover function table */
-#if 0
-/* Process one level up takeover on @lv to @segtype */
-static int _raid_level_up(struct logical_volume *lv,
-			  const struct segment_type *segtype,
-			  struct dm_list *allocate_pvs)
-{
-	return _raid_takeover(lv, 1, segtype, allocate_pvs,
-			      "raid1 set %s has to have 2 operational disks.");
-}
-
-/* Process one level down takeover on @lv to @segtype */
-static int _raid_level_down(struct logical_volume *lv,
-			    const struct segment_type *segtype,
-			    struct dm_list *allocate_pvs)
-{
-	return _raid_takeover(lv, 0, segtype, allocate_pvs,
-			      "raid1/4/5 set %s has to have 1 mirror/stripe. Use \"lvconvert --stripes 1 ...\"");
-}
-
-/*
- * Convert a RAID set in @lv to another RAID level and algorithm defined
- * by @requested_segtype, stripe size set by @new_stripe_size or number
- * of RAID devices requested by @new_stripes.
- *
- * Returns: 1 on success, 0 on failure
- */
-static int _convert_raid_to_raid(struct logical_volume *lv,
-				 struct segment_type *new_segtype,
-				 const struct segment_type *final_segtype,
-				 int yes, int force,
-				 const unsigned new_stripes,
-				 const unsigned new_stripe_size,
-				 struct dm_list *allocate_pvs)
-{
-	struct lv_segment *seg = first_seg(lv);
-	unsigned stripes = new_stripes ?: _data_rimages_count(seg, seg->area_count);
-	unsigned stripe_size = new_stripe_size ?: seg->stripe_size;
-
-PFLA("seg->segtype=%s new_segtype=%s final_segtype=%s stripes=%u new_stripes=%u", seg->segtype->name, new_segtype->name, final_segtype ? final_segtype->name : "NULL", stripes, new_stripes);
-	if (new_segtype == seg->segtype &&
-	    stripes == _data_rimages_count(seg, seg->area_count) &&
-	    stripe_size == seg->stripe_size) {
-PFLA("stripes=%u stripe_size=%u seg->stripe_size=%u", stripes, stripe_size, seg->stripe_size);
-		log_error("Nothing to do");
-		return 0;
-	}
-
-	/* Check + apply stripe size change */
-	if (stripe_size &&
-	    (stripe_size & (stripe_size - 1) ||
-	     stripe_size < 8)) {
-		log_error("Invalid stripe size on %s", lv->name);
-		return 0;
-	}
-
-	if (seg->stripe_size != stripe_size) {
-		if (seg_is_striped(seg) || seg_is_any_raid0(seg)) {
-			log_error("Cannot change stripe size on \"%s\"", lv->name);
-			return 0;
-		}
-
-		if (stripe_size > lv->vg->extent_size) {
-			log_error("Stripe size for %s too large for volume group extent size", lv->name);
-			return 0;
-		}
-
-		if (stripe_size > seg->region_size) {
-			log_error("New stripe size for %s is larger than region size", lv->name);
-			return 0;
-		}
-	}
-
-	/* linear/raid1 do not preset stripe size */
-	if (!seg->stripe_size &&
-	    !(seg->stripe_size = find_config_tree_int(lv->vg->cmd, global_raid_stripe_size_default_CFG, NULL)))
-		return 0;
-
-PFLA("seg->segtype=%s new_segtype->name=%s", seg->segtype->name, new_segtype->name);
-	/* If we're taking over, adjust segment type to make it possible (e.g. raid5_la -> raid6 needs raid6_la_6) */
-	/* Done before adding any metadata devices */
-	if (!is_same_level(seg->segtype, new_segtype) &&
-	    !_adjust_segtype(lv, &new_segtype))
-		return 0;
-
-	/*
-	 * raid0 <-> raid0_meta adding metadata image devices
-	 * on converting from raid0 -> raid0_meta or removing
-	 * them going the other way.
-	 */
-	if ((seg_is_raid0(seg) && segtype_is_raid0_meta(new_segtype)) ||
-	    (seg_is_raid0_meta(seg) && segtype_is_raid0(new_segtype)))
-		return _raid0_add_or_remove_metadata_lvs(lv, 1, NULL);
-
-	/*
-	 * Staying on the same level -> reshape required to change
-	 * stripes (i.e. # of disks), stripe size or algorithm
-	 */
-	if (is_same_level(seg->segtype, new_segtype))
-		return _raid_reshape(lv, new_segtype, yes, force, stripes, stripe_size, allocate_pvs);
-
-	/*
-	 * HM
-	 *
-	 * Up/down takeover of raid levels
-	 *
-	 * In order to takeover the raid set level N to M (M > N) in @lv, all existing
-	 * rimages in that set need to be paired with rmeta devs (if not yet present)
-	 * to store superblocks and bitmaps of the to be taken over raid0/raid1/raid4/raid5/raid6
-	 * set plus another rimage/rmeta pair has to be allocated for dedicated xor/q.
-	 *
-	 * In order to postprocess the takeover of a raid set from level M to M (M > N)
-	 * in @lv, the last rimage/rmeta devs pair need to be droped in the metadata.
-	 */
-
-PFLA("segtype=%s new_segtype->name=%s", seg->segtype->name, new_segtype->name);
-	/* Down convert from raid4/5 to linear in case of more than 2 legs */
-	if (segtype_is_linear(new_segtype) && seg->area_count > 2) {
-		log_error("Can't convert striped %s from %s to %s directly",
-			  display_lvname(lv), lvseg_name(seg), new_segtype->name);
-		log_error("Convert to single stripe first!");
-		return 0;
-	}
-
-	if (!(is_level_up(seg->segtype, new_segtype) ?
-	      _raid_level_up : _raid_level_down)(lv, new_segtype, allocate_pvs))
-		return 0;
-PFLA("seg->segtype=%s new_segtype->name=%s", seg->segtype->name, new_segtype->name);
-
-	return 1;
-} /* _convert_raid_to_raid() */
-#endif
 /******* END: raid <-> raid conversion *******/
 
-
-/* HM FIXME: REMOVEME: because of takeover function table */
-#if 0
-/****************************************************************************/
-/* Special case raid check/convert functions */
-
-/*
- * Linear/raid0 (1 image) <-> raid0/4/5 conversions of @lv defined by @new_segtype
- */
-static int _check_linear_or_raid0_from_to_raid0145(struct logical_volume *lv,
-						   const struct segment_type *new_segtype,
-						   uint32_t new_image_count,
-						   uint32_t new_stripes,
-						   uint32_t new_stripe_size,
-						   struct dm_list *allocate_pvs)
-{
-	int convert;
-	struct lv_segment *seg = first_seg(lv);
-
-PFL();
-	/* linear -> raid1 with N > 1 images */
-	if ((convert = seg_is_linear(seg) &&
-		       (segtype_is_raid1(new_segtype) || new_image_count > 1)))
-		/* "lvconvert --type raid1 ..." does not set new_image_count */
-		new_image_count = new_image_count > 1 ? new_image_count : 2;
-
-	/* linear -> raid4/5 with 2 images */
-	else if ((convert = (seg_is_linear(seg) &&
-			     (segtype_is_raid4(new_segtype) || segtype_is_any_raid5(new_segtype))))) {
-		new_image_count = 2;
-
-	/* raid0 with _one_ image -> raid1/4/5 with 2 images */
-	} else if ((convert = (seg_is_any_raid0(seg) && seg->area_count == 1 &&
-			       ((segtype_is_raid1(new_segtype) || new_image_count == 2) ||
-				segtype_is_raid4(new_segtype) ||
-				segtype_is_any_raid5(new_segtype))))) {
-		if (seg->segtype == new_segtype)
-			if (!(new_segtype = get_segtype_from_flag(lv->vg->cmd, SEG_RAID1)))
-				return_0;
-
-		new_image_count = 2;
-
-	/* raid1 with N images -> linear with one image */
-	} else if ((convert = (seg_is_raid1(seg) && segtype_is_linear(new_segtype))))
-		new_image_count = 1;
-
-	/* raid1 with N images -> raid0 with 1 image */
-	else if ((convert = (seg_is_raid1(seg) && segtype_is_any_raid0(new_segtype))))
-		new_image_count = 1;
-
-	/* raid1 <-> raid10/4/5 with 2 images */
-	else if ((convert = ((seg_is_raid1(seg) || seg_is_raid4(seg) || seg_is_any_raid5(seg)) &&
-			     seg->area_count == 2 &&
-			     !new_stripes &&
-			     (segtype_is_raid1(new_segtype) ||
-			      segtype_is_raid10(new_segtype) ||
-			      segtype_is_raid4(new_segtype) ||
-			      segtype_is_any_raid5(new_segtype))))) {
-		if (seg->segtype == new_segtype) {
-			log_error("No change requested");
-			return 0;
-		}
-
-		if (new_image_count != 2)
-			log_warn("Ignoring new image count");
-
-		if (new_stripes)
-			log_warn("Ignoring stripes");
-
-		if (new_stripe_size)
-			log_warn("Ignoring stripe size");
-
-		seg->segtype = new_segtype;
-
-		return lv_update_and_reload(lv);
-
-	/* raid10 with 2 images -> raid1 with 2 images */
-	} else if (seg_is_raid10(seg) && seg->area_count == 2 &&
-		   segtype_is_raid1(new_segtype)) {
-		seg->segtype = new_segtype;
-
-		return lv_update_and_reload(lv);
-
-#if 0
-	/* HM FIXME: CODEME: */
-	/* raid10 with N > 2 images -> raid10 with M images */
-	} else if ((convert = (seg_is_raid10(seg) && seg->segtype == new_segtype &&
-		   new_image_count != seg->area_count))) {
-		/* Need to support raid10_copies and raid_format! */
-		;
-#endif
-
-	/* raid4/5 with 2 images -> linear/raid0 with 1 image */
-	} else if ((convert = (seg_is_raid4(seg) || seg_is_any_raid5(seg)) && seg->area_count == 2 &&
-		   (segtype_is_linear(new_segtype) || segtype_is_any_raid0(new_segtype))))
-		new_image_count = 1;
-
-	/* No way to convert raid4/5/6 with > 2 images -> linear! */
-	else if ((seg_is_raid4(seg) || seg_is_any_raid5(seg) || seg_is_any_raid6(seg)) &&
-		   segtype_is_linear(new_segtype))
-		return 0;
-
-	if (!seg->stripe_size)
-		seg->stripe_size = new_stripe_size ?: DEFAULT_STRIPESIZE;
-
-	if (convert) {
-		if ((segtype_is_raid0(new_segtype) || segtype_is_raid1(new_segtype)) && new_stripes) {
-			log_error("--stripes N incompatible with raid0/1");
-			return 0;
-		}
-
-PFLA("linear/raid1/4/5 new_segtype=%s new_image_count=%u stripe_size=%u", new_segtype->name, new_image_count, seg->stripe_size);
-		return _lv_raid_change_image_count(lv, new_segtype, new_image_count, allocate_pvs);
-	}
-
-	return 2; /* Indicate that no conversion happened */
-}
-
-/****************************************************************************/
-/*
- * Mirror <-> RAID1 conversion
- */
-static int _check_mirror_from_to_raid(struct logical_volume *lv,
-				      int yes,
-				      const struct segment_type *new_segtype,
-				      struct dm_list *allocate_pvs)
-{
-	int r;
-	struct lv_segment *seg = first_seg(lv);
-
-	/*
-	 * Mirror -> RAID1/5 conversion
-	 */
-	if (seg_is_mirror(seg) && (segtype_is_raid1(new_segtype) || segtype_is_any_raid5(new_segtype)))
-		r = _convert_mirror_to_raid(lv, new_segtype, 1);
-
-	/*
-	 * RAID1/5 -> Mirror conversion
-	 */
-	/*
-	 * FIXME: support this conversion or don't invite users to switch back to "mirror"?
-	 *        I find this at least valuable in case of an erroneous conversion to raid1
-	 */
-	else if (((seg_is_any_raid5(seg) && seg->area_count == 2) || seg_is_raid1(seg)) &&
-		 segtype_is_mirror(new_segtype)) {
-		struct dm_list removal_lvs;
-
-		dm_list_init(&removal_lvs);
-
-		if (!yes && yes_no_prompt("WARNING: Do you really want to convert %s to "
-					  "non-recommended \"%s\" type? [y/n]: ",
-				  display_lvname(lv), SEG_TYPE_NAME_MIRROR) == 'n') {
-			log_warn("Logical volume %s NOT converted to \"%s\"",
-				  display_lvname(lv), SEG_TYPE_NAME_MIRROR);
-			return 0;
-		}
-		if (sigint_caught())
-			return_0;
-
-		if ((seg_is_any_raid5(seg) &&
-		    !(seg->segtype = get_segtype_from_flag(lv->vg->cmd, SEG_RAID1))))
-			return 0;
-
-		r = _convert_raid1_to_mirror(lv, new_segtype, allocate_pvs, 1, &removal_lvs);
-
-	} else
-		return 2; /* Indicate no conversion to caller */
-
-	return r;
-}
-
-/*
- * raid0 <-> raid10 comversion
- *
- * md raid10 "near" is a stripe on top of stripes number of 2-way mirrors
- */
-/* HM FIXME: move to _raid_takeover() rather than special case here */
-/* HM FIXME: support far and offset formats */
-static int _check_raid0_to_from_raid10(struct logical_volume *lv,
-				       struct segment_type *new_segtype,
-				       struct dm_list *allocate_pvs)
-{
-	struct lv_segment *seg = first_seg(lv);
-	struct dm_list removal_lvs;
-
-	dm_list_init(&removal_lvs);
-
-	if (segtype_is_raid10(new_segtype)) {
-		if (seg_is_striped(seg) || seg_is_any_raid0(seg)) {
-			if (seg_is_striped(seg) &&
-			    !_convert_striped_to_raid0(lv, 1, 0))
-				return 0;
-
-			return _lv_raid_change_image_count(lv, new_segtype, lv_raid_image_count(lv) * 2, allocate_pvs);
-
-		}
-
-		return 3; /* Indicate that conversion is not possible */
-	}
-
-	if (seg_is_raid10(seg)) {
-		if (segtype_is_striped(new_segtype) || segtype_is_any_raid0(new_segtype)) {
-			struct segment_type *final_segtype;
-
-			if (segtype_is_striped(new_segtype)) {
-				final_segtype = new_segtype;
-				if (!(new_segtype = get_segtype_from_flag(lv->vg->cmd, SEG_RAID0)))
-					return_0;
-			} else
-				final_segtype = NULL;
-
-			if (!_lv_raid_change_image_count(lv, new_segtype, lv_raid_image_count(lv) / 2, allocate_pvs))
-				return 0;
-
-			return final_segtype ? _convert_raid0_to_striped(lv, 1, &removal_lvs) : 1;
-
-		}
-
-		return 3; /* Indicate that conversion is not possible */
-	}
-
-	return 2; /* Indicate that no conversion happened */
-}
-#endif
 
 /*
  * Report current number of redundant disks for @total_images and @segtype 
@@ -4162,38 +3228,30 @@ PFLA("lv->le_count=%u", lv->le_count);
 }
 
 /*
- * Update metadata, reload origin @lv and afterwards clear any flags passed to the kernel
+ * Update metadata, reload origin @lv, eliminate any LVs listed on @remova_lvs
+ * and then clear any flags passed to the kernel in the metadata
  */
-static int _lv_update_and_reload_origin_clear_any_flags(struct logical_volume *lv)
+static int _lv_update_and_reload_origin_eliminate_lvs(struct logical_volume *lv,
+						      struct dm_list *removal_lvs)
 {
 	int flag_cleared;
 
 	if (!lv_update_and_reload_origin(lv))
-		return 0;
+		return_0;
+
+	/* Eliminate any residual LV, write VG, commit it and take a backup */
+	if (!_eliminate_extracted_lvs(lv->vg, removal_lvs))
+		return_0;
 
 	/*
-	 * Now that the 'REBUILD' or 'RESHAPE_DELTA_DISKS' has/have made its/their
-	 * way to the kernel, we must remove the flag(s) so that the individual
-	 * devices are not rebuilt/reshaped upon every activation.
+	 * Now that any 'REBUILD' or 'RESHAPE_DELTA_DISKS' etc. has/have made
+	 * its/their way to the kernel, we must remove the flag(s) so that the
+	 * individual devices are not rebuilt/reshaped upon every activation.
 	 */
 	if (!_reset_flags_passed_to_kernel(lv, &flag_cleared))
 		return 0;
 
 	return flag_cleared ? lv_update_and_reload_origin(lv) : 1;
-}
-
-/*
- * Update metadata, reload origin @lv and eliminate any LVs listed on @remova_lvs
- */
-static int _lv_update_and_reload_origin_eliminate_lvs(struct logical_volume *lv,
-						      struct dm_list *removal_lvs)
-{
-	if (!_lv_update_and_reload_origin_clear_any_flags(lv))
-		return_0;
-
-	/* Eliminate any residual LV, write VG, commit it and take a backup */
-	return (!removal_lvs || dm_list_empty(removal_lvs)) ?
-		1 : _eliminate_extracted_lvs(lv->vg, removal_lvs);
 }
 
 /* Return 1 if @lv is synced, else 0 and display error message */
@@ -4253,7 +3311,7 @@ static int _noop(struct logical_volume *lv, int yes, int force,
 	return 1;
 }
 
-/* Error takeover handler for @lv: logs what's (im)possible to convert to */
+/* Error takeover handler for @lv: logs what's (im)possible to convert to and mabye added */
 static int _error(struct logical_volume *lv, int yes, int force,
 		const struct segment_type *new_segtype,
 		unsigned new_image_count, const unsigned new_stripes,
@@ -4271,12 +3329,14 @@ static int _error(struct logical_volume *lv, int yes, int force,
 	return 0;
 }
 
-/* Macroto define raid takeover helper function header */
-#define TAKEOVER_FN_HEADER(name) 						\
-static int name(struct logical_volume *lv, int yes, int force,			\
-		  const struct segment_type *new_segtype,			\
-		  unsigned new_image_count, const unsigned new_stripes,		\
-		  unsigned new_stripe_size, struct dm_list *allocate_pvs)
+/* Macro to define raid takeover helper function header */
+#define TAKEOVER_FN_HEADER(name) 					\
+static int name(struct logical_volume *lv,				\
+		int yes, int force,					\
+		const struct segment_type *new_segtype,			\
+		unsigned new_image_count,				\
+		const unsigned new_stripes,				\
+		unsigned new_stripe_size, struct dm_list *allocate_pvs)	\
 /* Macro to spot takeover helper functions easily */
 #define TAKEOVER_HELPER_FN_HEADER(name) \
 TAKEOVER_FN_HEADER(name)
@@ -4291,11 +3351,68 @@ TAKEOVER_FN_HEADER(name)			\
 
 /* Begin takeover helper funtions */
 
+/* Helper: linear -> raid0* */
+TAKEOVER_HELPER_FN_HEADER(_linear_raid0)
+{
+	struct dm_list meta_lvs;
+	struct lv_segment *seg;
+
+	dm_list_init(&meta_lvs);
+
+	if (new_image_count != 1) {
+		log_error(INTERNAL_ERROR "Image count has to be 1");
+		return 0;
+	}
+
+	/* Convert linear to raid1 by inserting a layer and presetting segtype as raid1 */
+	if (!(seg =_convert_linear_to_raid1(lv)))
+		return 0;
+
+	if (segtype_is_raid0_meta(new_segtype)) {
+PFL();
+		/* Need to add an rmeta device to pair it with the given linear device as well */
+		if (!_alloc_rmeta_devs_for_lv(lv, &meta_lvs))
+			return 0;
+
+		/* Metadata LV must be cleared before being added to the array */
+		log_debug_metadata("Clearing newly allocated metadata LVs of %s", display_lvname(lv));
+		if (!_clear_lvs(&meta_lvs)) {
+			log_error("Failed to clear newly allocated metadata LVs of %s", display_lvname(lv));
+			return_0;
+		}
+
+		/* Grow areas arrays for metadata and data devs  */
+		log_debug_metadata("Realocating areas arrays of %s", display_lvname(lv));
+		if (!_realloc_seg_areas(lv, seg, 1 /* new_image_count */, &seg->meta_areas)) {
+			log_error("Relocation of areas arrays for %s failed", display_lvname(lv));
+			return_0;
+		}
+
+		log_debug_metadata("Adding new metadata LV to %s", display_lvname(lv));
+		if (!_add_image_component_list(seg, 1, 0, &meta_lvs, 0 /* area_offset */)) {
+			log_error("Failed to add new metadata LV to %s", display_lvname(lv));
+			return_0;
+		}
+	}
+
+
+	/* We may be called to convert to !raid0* */
+	if (!force) {
+		seg->segtype = new_segtype;
+		seg->region_size = 0;
+
+		return lv_update_and_reload_origin(lv);
+	}
+
+	return 1;
+}
+
 /* Helper: linear <-> raid1/4/5 takeover handler for @lv */
 TAKEOVER_HELPER_FN_HEADER(_linear_to_raid456)
 {
 	struct dm_list data_lvs, meta_lvs;
-	struct lv_segment *seg;
+	struct lv_segment *seg = first_seg(lv);
+	struct segment_type *segtype;
 
 	dm_list_init(&data_lvs);
 	dm_list_init(&meta_lvs);
@@ -4309,40 +3426,20 @@ TAKEOVER_HELPER_FN_HEADER(_linear_to_raid456)
 
 	new_image_count = new_image_count > 1 ? new_image_count : 2;
 
-	/* Convert linear to raid by inserting a layer and presetting segtype as raid1 */
-	if (!(seg =_convert_linear_to_raid(lv)))
+	/*
+	 * Use helper _linear_raid0() to create the initial raid0_meta wtih one image pair up
+	 *
+	 * HM FIXME: overloding froce argument to avoid metadata update in _linear_raid0()
+	 */
+	if (!(segtype = get_segtype_from_flag(lv->vg->cmd, SEG_RAID0_META)) ||
+	    !_linear_raid0(lv, 0, 1, segtype, 1, 0, 0, allocate_pvs))
 		return 0;
-
-	/* Need to add an rmeta device to pair it with the given linear device as well */
-	if (!_alloc_rmeta_devs_for_lv(lv, &meta_lvs))
-		return 0;
-
-	/* HM FIXME: clear the new meta lv in one go in _clear_lvs()? */
-
-	/* Metadata LVs must be cleared before being added to the array */
-	log_debug_metadata("Clearing newly allocated metadata LV for %s", display_lvname(lv));
-	if (!_clear_lvs(&meta_lvs)) {
-		log_error("Failed to clear newly allocated metadata LV for %s", display_lvname(lv));
-		return 0;
-	}
-
-	/* Grow areas arrays for metadata and data devs  */
-	log_debug_metadata("Realocating metadata areas array of %s", display_lvname(lv));
-	if (!_realloc_seg_areas(lv, seg, 1 /* area_count */, &seg->meta_areas)) {
-		log_error("Relocation of metadata areas array for %s failed", display_lvname(lv));
-		return_0;
-	}
-
-	log_debug_metadata("Adding new metadata LV to %s", display_lvname(lv));
-	if (!_add_image_component_list(seg, 1, 0, &meta_lvs, 0)) {
-		log_error("Failed to add new metadata LV to %s", display_lvname(lv));
-		return_0;
-	}
 
 	/* Allocate the additional meta and data lvs requested */
 	if (!_lv_change_image_count(lv, new_segtype, new_image_count, allocate_pvs, NULL))
 		return 0;
 
+	seg = first_seg(lv);
 	seg->segtype = new_segtype;
 
 	return _lv_update_and_reload_origin_eliminate_lvs(lv, NULL);
@@ -4353,7 +3450,7 @@ TAKEOVER_HELPER_FN_HEADER(_striped_r0_r456)
 {
 	struct lv_segment *seg = first_seg(lv);
 
-	/* This helper can be used to covert from raid0* -> raid4/5/6 too */
+	/* This helper can be used to convert from raid0* -> raid4/5/6 too */
 	if (seg_is_striped(seg)) {
 		if (!_convert_striped_to_raid0(lv, 1 /* alloc_metadata_devs */, 0 /* !update_and_reload */))
 			return 0;
@@ -4385,6 +3482,7 @@ TAKEOVER_HELPER_FN_HEADER(_striped_raid0_raid10)
 {
 	struct lv_segment *seg = first_seg(lv);
 
+	/* This helper can be used to convert from raid0* -> raid10 too */
 	if (seg_is_striped(seg) &&
 	    !_convert_striped_to_raid0(lv, 0 /* alloc_metadata_devs */, 0 /* update_and_reload */))
 		return 0;
@@ -4590,57 +3688,10 @@ TAKEOVER_HELPER_FN_HEADER(_raid10_striped_r0)
 
 /* HM FIXME: All TAKEOVER_FN_DUMMY macro instances need coding into TAKEOVER_FN_HEADER functions! */
 
-/* Linear -> raid0_meta */
-TAKEOVER_FN_HEADER(_l_r0m)
-{
-	struct dm_list meta_lvs;
-	struct lv_segment *seg;
-
-	dm_list_init(&meta_lvs);
-
-	if (new_image_count != 1)
-		return 0;
-
-	/* Convert linear to raid by inserting a layer and presetting segtype as raid1 */
-	if (!(seg =_convert_linear_to_raid(lv)))
-		return 0;
-
-	if (segtype_is_raid0_meta(new_segtype)) {
-		/* Need to add an rmeta device to pair it with the given linear device as well */
-		if (!_alloc_rmeta_devs_for_lv(lv, &meta_lvs))
-			return 0;
-
-		/* Metadata LV must be cleared before being added to the array */
-		log_debug_metadata("Clearing newly allocated metadata LVs of %s", display_lvname(lv));
-		if (!_clear_lvs(&meta_lvs)) {
-			log_error("Failed to clear newly allocated metadata LVs of %s", display_lvname(lv));
-			return_0;
-		}
-
-		/* Grow areas arrays for metadata and data devs  */
-		log_debug_metadata("Realocating areas arrays of %s", display_lvname(lv));
-		if (!_realloc_meta_and_data_seg_areas(lv, seg, new_image_count)) {
-			log_error("Relocation of areas arrays for %s failed", display_lvname(lv));
-			return_0;
-		}
-
-		log_debug_metadata("Adding new metadata LV to %s", display_lvname(lv));
-		if (!_add_image_component_list(seg, 1, 0, &meta_lvs, 0)) {
-			log_error("Failed to add new metadata LV to %s", display_lvname(lv));
-			return_0;
-		}
-	}
-
-	seg->segtype = new_segtype;
-	seg->region_size = 0;
-
-	return lv_update_and_reload_origin(lv);
-}
-
 /* Linear -> raid0 */
 TAKEOVER_FN_HEADER(_l_r0)
 {
-	return _l_r0m(lv, 0, 0, new_segtype, 0, 0, 0, allocate_pvs);
+	return _linear_raid0(lv, 0, 0, new_segtype, 1, 0, 0, allocate_pvs);
 }
 
 /* Linear -> r1 */
@@ -5182,7 +4233,7 @@ TAKEOVER_FN_HEADER(_r10_r45)
 static takeover_fn _takeover_fn_table[9][9] = {
 	/* from |, to ->    linear  striped   mirror   raid0    raid0_meta  raid1    raid4/5     raid6  raid10 */
 	/*      v */
-	/* linear      */ { _noop,   _error,  _error,  _l_r0,   _l_r0m,     _l_r1,   _l_r45,    _error,  _l_r10   },
+	/* linear      */ { _noop,   _error,  _error,  _l_r0,   _l_r0,      _l_r1,   _l_r45,    _error,  _l_r10   },
 	/* striped     */ { _error,  _noop,   _error,  _s_r0,   _s_r0m,     _error,  _s_r45,    _s_r6,   _s_r10   },
 	/* mirror      */ { _error,  _error,  _noop,   _m_r0,   _m_r0m,     _m_r1,   _m_r45,    _error,  _m_r10   },
 	/* raid0       */ { _r0_l,   _r0_s,   _r0_m,   _noop,   _r0_r0m,    _r0_r1,  _r0_r45,   _r0_r6,  _r0_r10  },
