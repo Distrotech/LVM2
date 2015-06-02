@@ -1901,7 +1901,7 @@ static struct resource *find_resource_act(struct lockspace *ls,
 			return r;
 
 		if (r->type == LD_RT_LV && act->rt == LD_RT_LV &&
-		    !strcmp(r->name, act->lv_name))
+		    !strcmp(r->name, act->lv_uuid))
 			return r;
 	}
 
@@ -1920,7 +1920,7 @@ static struct resource *find_resource_act(struct lockspace *ls,
 	else if (r->type == LD_RT_VG)
 		strncpy(r->name, R_NAME_VG, MAX_NAME);
 	else if (r->type == LD_RT_LV)
-		strncpy(r->name, act->lv_name, MAX_NAME);
+		strncpy(r->name, act->lv_uuid, MAX_NAME);
 
 	list_add_tail(&r->list, &ls->resources);
 
@@ -2944,7 +2944,7 @@ static int work_init_lv(struct action *act)
 	}
 
 	if (lm_type == LD_LM_SANLOCK) {
-		rv = lm_init_lv_sanlock(ls_name, act->vg_name, act->lv_name,
+		rv = lm_init_lv_sanlock(ls_name, act->vg_name, act->lv_uuid,
 					vg_args, lv_args);
 
 		memcpy(act->lv_args, lv_args, MAX_ARGS);
@@ -3044,7 +3044,7 @@ static void *worker_thread_main(void *arg_in)
 			add_client_result(act);
 
 		} else if ((act->op == LD_OP_INIT) && (act->rt == LD_RT_LV)) {
-			log_debug("work init_lv %s/%s", act->vg_name, act->lv_name);
+			log_debug("work init_lv %s/%s uuid %s", act->vg_name, act->lv_name, act->lv_uuid);
 			act->result = work_init_lv(act);
 			add_client_result(act);
 
@@ -4086,6 +4086,10 @@ static void client_recv_action(struct client *cl)
 	if (str && strcmp(str, "none"))
 		strncpy(act->lv_name, str, MAX_NAME);
 
+	str = daemon_request_str(req, "lv_uuid", NULL);
+	if (str && strcmp(str, "none"))
+		strncpy(act->lv_uuid, str, MAX_NAME);
+
 	val = daemon_request_int(req, "version", 0);
 	if (val)
 		act->version = (uint32_t)val;
@@ -4347,9 +4351,10 @@ static int get_lockd_vgs(struct list_head *vg_lockd)
 	struct resource *r;
 	const char *vg_name;
 	const char *vg_uuid;
+	const char *lv_uuid;
 	const char *lock_type;
 	const char *lock_args;
-	char lv_lock_path[PATH_MAX];
+	char find_str_path[PATH_MAX];
 	int mutex_unlocked = 0;
 	int rv = 0;
 
@@ -4449,14 +4454,22 @@ static int get_lockd_vgs(struct list_head *vg_lockd)
 				continue;
 
 			for (lv_cn = md_cn->child; lv_cn; lv_cn = lv_cn->sib) {
-				snprintf(lv_lock_path, PATH_MAX, "%s/lock_type", lv_cn->key);
-				lock_type = dm_config_find_str(lv_cn, lv_lock_path, NULL);
+				snprintf(find_str_path, PATH_MAX, "%s/lock_type", lv_cn->key);
+				lock_type = dm_config_find_str(lv_cn, find_str_path, NULL);
 
 				if (!lock_type)
 					continue;
 
-				snprintf(lv_lock_path, PATH_MAX, "%s/lock_args", lv_cn->key);
-				lock_args = dm_config_find_str(lv_cn, lv_lock_path, NULL);
+				snprintf(find_str_path, PATH_MAX, "%s/lock_args", lv_cn->key);
+				lock_args = dm_config_find_str(lv_cn, find_str_path, NULL);
+
+				snprintf(find_str_path, PATH_MAX, "%s/id", lv_cn->key);
+				lv_uuid = dm_config_find_str(lv_cn, find_str_path, NULL);
+
+				if (!lv_uuid) {
+					log_error("get_lock_vgs no lv id for name %s", lv_cn->key);
+					continue;
+				}
 
 				if (!(r = alloc_resource())) {
 					rv = -ENOMEM;
@@ -4464,12 +4477,12 @@ static int get_lockd_vgs(struct list_head *vg_lockd)
 				}
 
 				r->type = LD_RT_LV;
-				strncpy(r->name, lv_cn->key, MAX_NAME);
+				strncpy(r->name, lv_uuid, MAX_NAME);
 				if (lock_args)
 					strncpy(r->lv_args, lock_args, MAX_ARGS);
 				list_add_tail(&r->list, &ls->resources);
-				log_debug("get_lockd_vgs %s lv %s %s",
-					  ls->vg_name, r->name, lock_args ? lock_args : "");
+				log_debug("get_lockd_vgs %s lv %s %s (name %s)",
+					  ls->vg_name, r->name, lock_args ? lock_args : "", lv_cn->key);
 			}
 		}
  next:
