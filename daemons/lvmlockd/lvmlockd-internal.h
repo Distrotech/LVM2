@@ -125,6 +125,7 @@ struct action {
 	char vg_uuid[64];
 	char vg_name[MAX_NAME+1];
 	char lv_name[MAX_NAME+1];
+	char lv_uuid[MAX_NAME+1];
 	char vg_args[MAX_ARGS];
 	char lv_args[MAX_ARGS];
 	char vg_sysid[MAX_NAME+1];
