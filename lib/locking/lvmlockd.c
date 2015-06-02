@@ -2085,7 +2085,6 @@ int lockd_init_lv(struct cmd_context *cmd, struct volume_group *vg,
 		  const char *lv_name, struct id *lv_id,
 		  struct lvcreate_params *lp)
 {
-	const char *lv_name_lock;
 	int lock_type_num = lock_type_to_num(lp->lock_type);
 
 	if (cmd->lock_lv_mode && !strcmp(cmd->lock_lv_mode, "na"))
@@ -2164,7 +2163,7 @@ int lockd_init_lv(struct cmd_context *cmd, struct volume_group *vg,
 
 		} else if (!seg_is_thin_volume(lp) && lp->create_pool) {
 			/* Creating a thin pool only. */
-			lv_name_lock = lp->pool_name;
+			/* lv_name_lock = lp->pool_name; */
 
 		} else {
 			log_error("Unknown thin options for lock init.");
@@ -2173,11 +2172,30 @@ int lockd_init_lv(struct cmd_context *cmd, struct volume_group *vg,
 
 	} else {
 		/* Creating a normal lv. */
-		lv_name_lock = lv_name;
+		/* lv_name_lock = lv_name; */
 	}
 
-	return lockd_init_lv_args(cmd, vg, lv_name_lock, lv_id,
-				  lp->lock_type, &lp->lock_args);
+	/*
+	 * lockd_init_lv_args() will be called during vg_write()
+	 * to complete the sanlock LV lock initialization, where
+	 * actual space on disk is allocated.  Waiting to do this
+	 * last step until vg_write() avoids the need to revert
+	 * the sanlock allocation if the lvcreate function isn't
+	 * completed.
+	 *
+	 * This works, but would leave the sanlock lease allocated
+	 * unless the lease was freed on each early exit path from
+	 * lvcreate:
+	 *
+	 * return lockd_init_lv_args(cmd, vg, lv_name_lock, lv_id,
+	 * 			     lp->lock_type, &lp->lock_args);
+	 */
+
+	if (!strcmp(lp->lock_type, "sanlock"))
+		lp->lock_args = "pending";
+
+	return 1;
+
 }
 
 /* lvremove */
