@@ -1901,7 +1901,7 @@ static struct resource *find_resource_act(struct lockspace *ls,
 			return r;
 
 		if (r->type == LD_RT_LV && act->rt == LD_RT_LV &&
-		    !strcmp(r->name, act->lv_name))
+		    !strcmp(r->name, act->lv_uuid))
 			return r;
 	}
 
@@ -1920,7 +1920,7 @@ static struct resource *find_resource_act(struct lockspace *ls,
 	else if (r->type == LD_RT_VG)
 		strncpy(r->name, R_NAME_VG, MAX_NAME);
 	else if (r->type == LD_RT_LV)
-		strncpy(r->name, act->lv_name, MAX_NAME);
+		strncpy(r->name, act->lv_uuid, MAX_NAME);
 
 	list_add_tail(&r->list, &ls->resources);
 
@@ -2944,7 +2944,7 @@ static int work_init_lv(struct action *act)
 	}
 
 	if (lm_type == LD_LM_SANLOCK) {
-		rv = lm_init_lv_sanlock(ls_name, act->vg_name, act->lv_name,
+		rv = lm_init_lv_sanlock(ls_name, act->vg_name, act->lv_uuid,
 					vg_args, lv_args);
 
 		memcpy(act->lv_args, lv_args, MAX_ARGS);
@@ -3044,7 +3044,7 @@ static void *worker_thread_main(void *arg_in)
 			add_client_result(act);
 
 		} else if ((act->op == LD_OP_INIT) && (act->rt == LD_RT_LV)) {
-			log_debug("work init_lv %s/%s", act->vg_name, act->lv_name);
+			log_debug("work init_lv %s/%s uuid %s", act->vg_name, act->lv_name, act->lv_uuid);
 			act->result = work_init_lv(act);
 			add_client_result(act);
 
@@ -4086,6 +4086,10 @@ static void client_recv_action(struct client *cl)
 	if (str && strcmp(str, "none"))
 		strncpy(act->lv_name, str, MAX_NAME);
 
+	str = daemon_request_str(req, "lv_uuid", NULL);
+	if (str && strcmp(str, "none"))
+		strncpy(act->lv_uuid, str, MAX_NAME);
+
 	val = daemon_request_int(req, "version", 0);
 	if (val)
 		act->version = (uint32_t)val;
@@ -4347,9 +4351,10 @@ static int get_lockd_vgs(struct list_head *vg_lockd)
 	struct resource *r;
 	const char *vg_name;
 	const char *vg_uuid;
+	const char *lv_uuid;
 	const char *lock_type;
 	const char *lock_args;
-	char lv_lock_path[PATH_MAX];
+	char find_str_path[PATH_MAX];
 	int mutex_unlocked = 0;
 	int rv = 0;
 
@@ -4449,14 +4454,22 @@ static int get_lockd_vgs(struct list_head *vg_lockd)
 				continue;
 
 			for (lv_cn = md_cn->child; lv_cn; lv_cn = lv_cn->sib) {
-				snprintf(lv_lock_path, PATH_MAX, "%s/lock_type", lv_cn->key);
-				lock_type = dm_config_find_str(lv_cn, lv_lock_path, NULL);
+				snprintf(find_str_path, PATH_MAX, "%s/lock_type", lv_cn->key);
+				lock_type = dm_config_find_str(lv_cn, find_str_path, NULL);
 
 				if (!lock_type)
 					continue;
 
-				snprintf(lv_lock_path, PATH_MAX, "%s/lock_args", lv_cn->key);
-				lock_args = dm_config_find_str(lv_cn, lv_lock_path, NULL);
+				snprintf(find_str_path, PATH_MAX, "%s/lock_args", lv_cn->key);
+				lock_args = dm_config_find_str(lv_cn, find_str_path, NULL);
+
+				snprintf(find_str_path, PATH_MAX, "%s/id", lv_cn->key);
+				lv_uuid = dm_config_find_str(lv_cn, find_str_path, NULL);
+
+				if (!lv_uuid) {
+					log_error("get_lock_vgs no lv id for name %s", lv_cn->key);
+					continue;
+				}
 
 				if (!(r = alloc_resource())) {
 					rv = -ENOMEM;
@@ -4464,12 +4477,12 @@ static int get_lockd_vgs(struct list_head *vg_lockd)
 				}
 
 				r->type = LD_RT_LV;
-				strncpy(r->name, lv_cn->key, MAX_NAME);
+				strncpy(r->name, lv_uuid, MAX_NAME);
 				if (lock_args)
 					strncpy(r->lv_args, lock_args, MAX_ARGS);
 				list_add_tail(&r->list, &ls->resources);
-				log_debug("get_lockd_vgs %s lv %s %s",
-					  ls->vg_name, r->name, lock_args ? lock_args : "");
+				log_debug("get_lockd_vgs %s lv %s %s (name %s)",
+					  ls->vg_name, r->name, lock_args ? lock_args : "", lv_cn->key);
 			}
 		}
  next:
@@ -4498,17 +4511,18 @@ out:
 	return rv;
 }
 
-static int is_lvm_device(char *name)
+static char _dm_uuid[64];
+
+static char *get_dm_uuid(char *dm_name)
 {
 	struct dm_info info;
 	struct dm_task *dmt;
 	const char *uuid;
-	int rv = 0;
 
 	if (!(dmt = dm_task_create(DM_DEVICE_INFO)))
 		goto fail_out;
 
-	if (!dm_task_set_name(dmt, name))
+	if (!dm_task_set_name(dmt, dm_name))
 		goto fail;
 
 	if (!dm_task_run(dmt))
@@ -4521,24 +4535,63 @@ static int is_lvm_device(char *name)
 		goto fail;
 
 	uuid = dm_task_get_uuid(dmt);
-
-	if (!uuid)
+	if (!uuid) {
+		log_error("Failed to get uuid for device %s", dm_name);
 		goto fail;
-
-	if (!strncmp(uuid, "LVM", 3)) {
-		log_debug("dm device %s is from LVM", name);
-		rv = 1;
-	} else {
-		log_debug("dm device %s is not from LVM", name);
 	}
 
+	if (strncmp(uuid, "LVM", 3)) {
+		log_debug("dm device %s is not from LVM", dm_name);
+		goto fail;
+	}
+
+	memset(_dm_uuid, 0, sizeof(_dm_uuid));
+	strcpy(_dm_uuid, uuid);
 	dm_task_destroy(dmt);
-	return rv;
+	return _dm_uuid;
 
 fail:
 	dm_task_destroy(dmt);
 fail_out:
-	log_error("Failed to get dm info about device %s", name);
+	return NULL;
+}
+
+/*
+ * dm reports the LV uuid as:
+ * LVM-ydpRIdDWBDX25upmj2k0D4deat6oxH8er03T0f4xM8rPIV8XqIhwv3h8Y7xRWjMr
+ *
+ * the lock name for the LV is:
+ * r03T0f-4xM8-rPIV-8XqI-hwv3-h8Y7-xRWjMr
+ *
+ * This function formats both as:
+ * r03T0f4xM8rPIV8XqIhwv3h8Y7xRWjMr
+ *
+ * and returns 1 if they match.
+ */
+
+static int match_dm_uuid(char *dm_uuid, char *lv_lock_uuid)
+{
+	char buf1[64];
+	char buf2[64];
+	int i, j;
+
+	memset(buf1, 0, sizeof(buf1));
+	memset(buf2, 0, sizeof(buf2));
+
+	for (i = 0, j = 0; i < strlen(lv_lock_uuid); i++) {
+		if (lv_lock_uuid[i] == '-')
+			continue;
+		buf1[j] = lv_lock_uuid[i];
+		j++;
+	}
+
+	for (i = 36, j = 0; i < 69; i++) {
+		buf2[j] = dm_uuid[i];
+		j++;
+	}
+
+	if (!strcmp(buf1, buf2))
+		return 1;
 	return 0;
 }
 
@@ -4547,12 +4600,14 @@ fail_out:
  * Remove any that are not active.  The remaining
  * will have locks adopted.
  */
+
 static int remove_inactive_lvs(struct list_head *vg_lockd)
 {
 	struct lockspace *ls;
 	struct resource *r, *rsafe;
 	struct dm_names *names;
 	struct dm_task *dmt;
+	char *dm_uuid;
 	char *vgname, *lvname, *layer;
 	char namebuf[MAX_NAME+1];
 	unsigned next = 0;
@@ -4578,8 +4633,17 @@ static int remove_inactive_lvs(struct list_head *vg_lockd)
 		goto out;
 	}
 
+	/*
+	 * For each dm name, compare it to each lv in each lockd vg.
+	 */
+
 	do {
 		names = (struct dm_names *)((char *) names + next);
+
+		dm_uuid = get_dm_uuid(names->name);
+		if (!dm_uuid)
+			goto next_dmname;
+
 		vgname = NULL;
 		lvname = NULL;
 		layer = NULL;
@@ -4590,31 +4654,34 @@ static int remove_inactive_lvs(struct list_head *vg_lockd)
 
 		dm_split_lvm_name(NULL, NULL, &vgname, &lvname, &layer);
 
+		log_debug("adopt remove_inactive dm name %s dm uuid %s vgname %s lvname %s",
+			  names->name, dm_uuid, vgname, lvname);
+
 		if (!vgname || !lvname) {
 			log_debug("dm name %s invalid split vg %s lv %s layer %s",
 				  names->name, vgname ? vgname : "", lvname ? lvname : "", layer ? layer : "");
-			goto skip;
+			goto next_dmname;
 		}
 
 		list_for_each_entry(ls, vg_lockd, list) {
 			if (strcmp(vgname, ls->vg_name))
 				continue;
 
-			log_debug("lockd vg %s has dm name %s", vgname, lvname);
+			if (!strcmp(lvname, "lvmlock"))
+				continue;
 
 			list_for_each_entry(r, &ls->resources, list) {
-				if (strcmp(lvname, r->name))
-					continue;
-
-				if (!is_lvm_device(names->name))
+				if (!match_dm_uuid(dm_uuid, r->name))
 					continue;
 
 				/* Found an active LV in a lockd VG. */
-				log_debug("lockd vg %s has active lv %s to adopt", ls->vg_name, r->name);
+				log_debug("dm device %s adopt in vg %s lv %s",
+					  names->name, ls->vg_name, r->name);
 				r->adopt = 1;
+				goto next_dmname;
 			}
 		}
-skip:
+next_dmname:
 		next = names->next;
 	} while (next);
 
@@ -4716,7 +4783,7 @@ static void adopt_locks(void)
 			  ls->vg_name, lm_str(ls->lm_type), ls->vg_args);
 
 		list_for_each_entry(r, &ls->resources, list)
-			log_debug("adopt lv %s/%s", ls->vg_name, r->name);
+			log_debug("adopt lv %s %s", ls->vg_name, r->name);
 	}
 
 	/*
@@ -4933,14 +5000,14 @@ static void adopt_locks(void)
 			act->client_id = ADOPT_CLIENT_ID;
 			act->lm_type = ls->lm_type;
 			strncpy(act->vg_name, ls->vg_name, MAX_NAME);
-			strncpy(act->lv_name, r->name, MAX_NAME);
+			strncpy(act->lv_uuid, r->name, MAX_NAME);
 			strncpy(act->lv_args, r->lv_args, MAX_ARGS);
 
-			log_debug("adopt lock for lv %s/%s", act->vg_name, act->lv_name);
+			log_debug("adopt lock for lv %s %s", act->vg_name, act->lv_uuid);
 
 			rv = add_lock_action(act);
 			if (rv < 0) {
-				log_error("adopt add_lock_action lv %s/%s error %d", act->vg_name, act->lv_name, rv);
+				log_error("adopt add_lock_action lv %s %s error %d", act->vg_name, act->lv_uuid, rv);
 				count_adopt_fail++;
 				free_action(act);
 			} else {
@@ -5065,8 +5132,8 @@ static void adopt_locks(void)
 
 			if (act->rt == LD_RT_LV) {
 				/* Unexpected, we should have found an orphan. */
-				log_error("Failed to adopt LV lock for %s/%s error %d",
-					  act->vg_name, act->lv_name, act->result);
+				log_error("Failed to adopt LV lock for %s %s error %d",
+					  act->vg_name, act->lv_uuid, act->result);
 				count_adopt_fail++;
 			} else {
 				/* Normal, no GL/VG lock was orphaned. */
@@ -5083,7 +5150,7 @@ static void adopt_locks(void)
 			 */
 
 			log_error("adopt lock rt %s vg %s lv %s error %d",
-				  rt_str(act->rt), act->vg_name, act->lv_name, act->result);
+				  rt_str(act->rt), act->vg_name, act->lv_uuid, act->result);
 			count_adopt_fail++;
 			count_adopt_done++;
 			free_action(act);
@@ -5094,7 +5161,7 @@ static void adopt_locks(void)
 			 */
 
 			if (act->rt == LD_RT_LV) {
-				log_debug("adopt success lv %s/%s %s", act->vg_name, act->lv_name, mode_str(act->mode));
+				log_debug("adopt success lv %s %s %s", act->vg_name, act->lv_uuid, mode_str(act->mode));
 				free_action(act);
 			} else if (act->rt == LD_RT_VG) {
 				log_debug("adopt success vg %s %s", act->vg_name, mode_str(act->mode));

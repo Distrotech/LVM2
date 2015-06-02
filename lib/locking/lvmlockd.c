@@ -224,6 +224,7 @@ static int _lockd_request(struct cmd_context *cmd,
 		          const char *vg_lock_type,
 		          const char *vg_lock_args,
 		          const char *lv_name,
+		          const char *lv_uuid,
 		          const char *lv_lock_args,
 		          const char *mode,
 		          const char *opts,
@@ -258,6 +259,7 @@ static int _lockd_request(struct cmd_context *cmd,
 					"opts = %s", opts ?: "none",
 					"vg_name = %s", vg_name,
 					"lv_name = %s", lv_name,
+					"lv_uuid = %s", lv_uuid,
 					"vg_lock_type = %s", vg_lock_type ?: "none",
 					"vg_lock_args = %s", vg_lock_args ?: "none",
 					"lv_lock_args = %s", lv_lock_args ?: "none",
@@ -673,7 +675,7 @@ static int _free_vg_dlm(struct cmd_context *cmd, struct volume_group *vg)
 
 	/* Equivalent to a standard unlock. */
 	ret = _lockd_request(cmd, "lock_vg",
-			     vg->name, NULL, NULL, NULL, NULL, "un", NULL,
+			     vg->name, NULL, NULL, NULL, NULL, NULL, "un", NULL,
 			     &result, &lockd_flags);
 
 	if (!ret || result < 0) {
@@ -1114,7 +1116,7 @@ int lockd_gl_create(struct cmd_context *cmd, const char *def_mode, const char *v
 
  req:
 	if (!_lockd_request(cmd, "lock_gl",
-			      NULL, vg_lock_type, NULL, NULL, NULL, mode, NULL,
+			      NULL, vg_lock_type, NULL, NULL, NULL, NULL, mode, NULL,
 			      &result, &lockd_flags)) {
 		/* No result from lvmlockd, it is probably not running. */
 		log_error("Locking failed for global lock");
@@ -1308,7 +1310,7 @@ int lockd_gl(struct cmd_context *cmd, const char *def_mode, uint32_t flags)
 
  req:
 	if (!_lockd_request(cmd, "lock_gl",
-			    NULL, NULL, NULL, NULL, NULL, mode, opts,
+			    NULL, NULL, NULL, NULL, NULL, NULL, mode, opts,
 			    &result, &lockd_flags)) {
 		/* No result from lvmlockd, it is probably not running. */
 
@@ -1540,7 +1542,7 @@ int lockd_vg(struct cmd_context *cmd, const char *vg_name, const char *def_mode,
 
  req:
 	if (!_lockd_request(cmd, "lock_vg",
-			      vg_name, NULL, NULL, NULL, NULL, mode, NULL,
+			      vg_name, NULL, NULL, NULL, NULL, NULL, mode, NULL,
 			      &result, &lockd_flags)) {
 		/*
 		 * No result from lvmlockd, it is probably not running.
@@ -1735,9 +1737,10 @@ int lockd_vg_update(struct volume_group *vg)
  */
 
 int lockd_lv_name(struct cmd_context *cmd, struct volume_group *vg,
-		  const char *lv_name, const char *lock_args,
-		  const char *def_mode, uint32_t flags)
+		  const char *lv_name, struct id *lv_id,
+		  const char *lock_args, const char *def_mode, uint32_t flags)
 {
+	char lv_uuid[64] __attribute__((aligned(8)));
 	const char *mode = NULL;
 	const char *opts = NULL;
 	uint32_t lockd_flags;
@@ -1746,6 +1749,8 @@ int lockd_lv_name(struct cmd_context *cmd, struct volume_group *vg,
 
 	if (cmd->lockd_lv_disable)
 		return 1;
+
+	id_write_format(lv_id, lv_uuid, sizeof(lv_uuid));
 
 	/*
 	 * For lvchange/vgchange activation, def_mode is "sh" or "ex"
@@ -1792,7 +1797,7 @@ int lockd_lv_name(struct cmd_context *cmd, struct volume_group *vg,
  retry:
 	if (!_lockd_request(cmd, "lock_lv",
 			       vg->name, vg->lock_type, vg->lock_args,
-			       lv_name, lock_args, mode, opts,
+			       lv_name, lv_uuid, lock_args, mode, opts,
 			       &result, &lockd_flags)) {
 		/* No result from lvmlockd, it is probably not running. */
 		log_error("Locking failed for LV %s/%s", vg->name, lv_name);
@@ -1870,8 +1875,8 @@ static int _lockd_lv_thin(struct cmd_context *cmd, struct logical_volume *lv,
 
 	flags |= LDLV_MODE_NO_SH;
 
-	return lockd_lv_name(cmd, pool_lv->vg, pool_lv->name, pool_lv->lock_args,
-			     def_mode, flags);
+	return lockd_lv_name(cmd, pool_lv->vg, pool_lv->name, &pool_lv->lvid.id[1],
+			     pool_lv->lock_args, def_mode, flags);
 }
 
 /*
@@ -1921,12 +1926,15 @@ int lockd_lv(struct cmd_context *cmd, struct logical_volume *lv,
 		flags |= LDLV_MODE_NO_SH;
 	}
 
-	return lockd_lv_name(cmd, lv->vg, lv->name, lv->lock_args, def_mode, flags);
+	return lockd_lv_name(cmd, lv->vg, lv->name, &lv->lvid.id[1],
+			     lv->lock_args, def_mode, flags);
 }
 
 static int _init_lv_sanlock(struct cmd_context *cmd, struct volume_group *vg,
-			    const char *lv_name, const char **lock_args_ret)
+			    const char *lv_name, struct id *lv_id,
+			    const char **lock_args_ret)
 {
+	char lv_uuid[64] __attribute__((aligned(8)));
 	daemon_reply reply;
 	const char *reply_str;
 	const char *lv_lock_args = NULL;
@@ -1940,11 +1948,13 @@ static int _init_lv_sanlock(struct cmd_context *cmd, struct volume_group *vg,
 	if (!_lvmlockd_connected)
 		return 0;
 
+	id_write_format(lv_id, lv_uuid, sizeof(lv_uuid));
  retry:
 	reply = _lockd_send("init_lv",
 				"pid = %d", getpid(),
 				"vg_name = %s", vg->name,
 				"lv_name = %s", lv_name,
+				"lv_uuid = %s", lv_uuid,
 				"vg_lock_type = %s", "sanlock",
 				"vg_lock_args = %s", vg->lock_args,
 				NULL);
@@ -2004,8 +2014,9 @@ out:
 }
 
 static int _free_lv_sanlock(struct cmd_context *cmd, struct volume_group *vg,
-			    const char *lv_name, const char *lock_args)
+			    const char *lv_name, struct id *lv_id, const char *lock_args)
 {
+	char lv_uuid[64] __attribute__((aligned(8)));
 	daemon_reply reply;
 	int result;
 	int ret;
@@ -2015,10 +2026,13 @@ static int _free_lv_sanlock(struct cmd_context *cmd, struct volume_group *vg,
 	if (!_lvmlockd_connected)
 		return 0;
 
+	id_write_format(lv_id, lv_uuid, sizeof(lv_uuid));
+
 	reply = _lockd_send("free_lv",
 				"pid = %d", getpid(),
 				"vg_name = %s", vg->name,
 				"lv_name = %s", lv_name,
+				"lv_uuid = %s", lv_uuid,
 				"vg_lock_type = %s", "sanlock",
 				"vg_lock_args = %s", vg->lock_args,
 				"lv_lock_args = %s", lock_args ?: "none",
@@ -2039,47 +2053,13 @@ static int _free_lv_sanlock(struct cmd_context *cmd, struct volume_group *vg,
 	return ret;
 }
 
-/*
- * The lock managers have max name lengths lower than lvm;
- * 64 for dlm and 48 for sanlock.  Check for name collisions
- * within this limit.  (It's much easier to check for this here
- * where the vg metadata is available than in lvmlockd.)
- */
-
-#define MAX_LVNAME_SANLOCK 48
-#define MAX_LVNAME_DLM     64
-
 int lockd_init_lv_args(struct cmd_context *cmd, struct volume_group *vg,
-		       const char *lv_name, const char *lock_type, const char **lock_args)
+		       const char *lv_name, struct id *lv_id,
+		       const char *lock_type, const char **lock_args)
 {
-	struct lv_list *lvl;
-	int maxname;
-
-	switch (lock_type_to_num(vg->lock_type)) {
-	case LOCK_TYPE_SANLOCK:
-		maxname = MAX_LVNAME_SANLOCK;
-		break;
-	case LOCK_TYPE_DLM:
-		maxname = MAX_LVNAME_DLM;
-		break;
-	default:
-		return 1;
-	}
-
-	dm_list_iterate_items(lvl, &vg->lvs) {
-		/* An exact match is the lv itself. */
-		if (!strcmp(lvl->lv->name, lv_name))
-			continue;
-		if (!strncmp(lvl->lv->name, lv_name, maxname)) {
-			log_error("LV name %s matches existing LV %s within %s character limit %d",
-				  lv_name, lvl->lv->name, vg->lock_type, maxname);
-			return 0;
-		}
-	}
-
 	/* sanlock is the only lock type that sets per-LV lock_args. */
 	if (!strcmp(lock_type, "sanlock"))
-		return _init_lv_sanlock(cmd, vg, lv_name, lock_args);
+		return _init_lv_sanlock(cmd, vg, lv_name, lv_id, lock_args);
 	return 1;
 }
 
@@ -2102,7 +2082,8 @@ int lockd_init_lv_args(struct cmd_context *cmd, struct volume_group *vg,
  */
 
 int lockd_init_lv(struct cmd_context *cmd, struct volume_group *vg,
-		  const char *lv_name, struct lvcreate_params *lp)
+		  const char *lv_name, struct id *lv_id,
+		  struct lvcreate_params *lp)
 {
 	const char *lv_name_lock;
 	int lock_type_num = lock_type_to_num(lp->lock_type);
@@ -2195,13 +2176,14 @@ int lockd_init_lv(struct cmd_context *cmd, struct volume_group *vg,
 		lv_name_lock = lv_name;
 	}
 
-	return lockd_init_lv_args(cmd, vg, lv_name_lock, lp->lock_type, &lp->lock_args);
+	return lockd_init_lv_args(cmd, vg, lv_name_lock, lv_id,
+				  lp->lock_type, &lp->lock_args);
 }
 
 /* lvremove */
 
 int lockd_free_lv(struct cmd_context *cmd, struct volume_group *vg,
-		  const char *lv_name, const char *lock_args)
+		  const char *lv_name, struct id *lv_id, const char *lock_args)
 {
 	if (cmd->lock_lv_mode && !strcmp(cmd->lock_lv_mode, "na"))
 		return 1;
@@ -2212,7 +2194,7 @@ int lockd_free_lv(struct cmd_context *cmd, struct volume_group *vg,
 	case LOCK_TYPE_DLM:
 		return 1;
 	case LOCK_TYPE_SANLOCK:
-		return _free_lv_sanlock(cmd, vg, lv_name, lock_args);
+		return _free_lv_sanlock(cmd, vg, lv_name, lv_id, lock_args);
 	default:
 		log_error("lockd_free_lv: unknown lock_type.");
 		return 0;

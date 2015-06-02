@@ -686,7 +686,7 @@ static int _vgchange_locktype(struct cmd_context *cmd,
 			    lv_is_cache_pool_metadata(lv))
 				continue;
 
-			if (!lockd_init_lv_args(cmd, vg, lv->name, lock_type, &lock_args)) {
+			if (!lockd_init_lv_args(cmd, vg, lv->name, &lv->lvid.id[1], lock_type, &lock_args)) {
 				log_error("Failed to init %s lock args LV %s/%s",
 					  lock_type, vg->name, lv->name);
 				return 0;
