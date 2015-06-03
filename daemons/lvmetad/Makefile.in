@@ -18,7 +18,7 @@ top_builddir = @top_builddir@
 SOURCES = lvmetad-core.c
 SOURCES2 = testclient.c
 
-TARGETS = lvmetad lvmeta
+TARGETS = lvmetad lvmetactl
 
 .PHONY: install_lvmetad
 
@@ -42,9 +42,9 @@ lvmetad: $(OBJECTS) $(top_builddir)/libdaemon/client/libdaemonclient.a \
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(OBJECTS) \
 	$(DL_LIBS) $(LVMLIBS) $(LIBS) -rdynamic
 
-lvmeta: lvmeta.o $(top_builddir)/libdaemon/client/libdaemonclient.a \
+lvmetactl: lvmetactl.o $(top_builddir)/libdaemon/client/libdaemonclient.a \
 	$(top_builddir)/libdaemon/server/libdaemonserver.a
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ lvmeta.o \
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ lvmetactl.o \
 	$(DL_LIBS) $(LVMLIBS) -rdynamic
 
 # TODO: No idea. No idea how to test either.
