@@ -319,28 +319,6 @@ static int _lockd_request(struct cmd_context *cmd,
 }
 
 /*
- * The name of the internal lv created to hold sanlock locks.
- */
-#define LVMLOCKD_SANLOCK_LV_NAME "lvmlock"
-
-/*
- * The internal sanlock lv starts at 512MB and is increased by that amount
- * whenever it runs out of space.
- */
-
-static struct logical_volume *_find_sanlock_lv(struct volume_group *vg,
-					       const char *lock_lv_name)
-{
-	struct lv_list *lvl;
-
-	dm_list_iterate_items(lvl, &vg->lvs) {
-		if (!strcmp(lvl->lv->name, lock_lv_name))
-			return lvl->lv;
-	}
-	return NULL;
-}
-
-/*
  * Eventually add an option to specify which pv the lvmlock lv should be placed on.
  */
 
@@ -375,22 +353,16 @@ static int _create_sanlock_lv(struct cmd_context *cmd, struct volume_group *vg,
 	}
 
 	lv_set_hidden(lv);
+	lv->status |= LOCKD_SANLOCK_LV;
+	vg->sanlock_lv = lv;
 
 	return 1;
 }
 
-static int _remove_sanlock_lv(struct cmd_context *cmd, struct volume_group *vg,
-			      const char *lock_lv_name)
+static int _remove_sanlock_lv(struct cmd_context *cmd, struct volume_group *vg)
 {
-	struct logical_volume *lv;
-
-	if (!(lv = _find_sanlock_lv(vg, lock_lv_name))) {
-		log_error("Failed to find sanlock LV %s in VG %s", lock_lv_name, vg->name);
-		return 0;
-	}
-
-	if (!lv_remove(lv)) {
-		log_error("Failed to remove sanlock LV %s/%s", vg->name, lock_lv_name);
+	if (!lv_remove(vg->sanlock_lv)) {
+		log_error("Failed to remove sanlock LV %s/%s", vg->name, vg->sanlock_lv->name);
 		return 0;
 	}
 
@@ -399,21 +371,15 @@ static int _remove_sanlock_lv(struct cmd_context *cmd, struct volume_group *vg,
 
 static int _extend_sanlock_lv(struct cmd_context *cmd, struct volume_group *vg, int extend_mb)
 {
-	const char *lock_lv_name = LVMLOCKD_SANLOCK_LV_NAME;
-	struct logical_volume *lv;
+	struct logical_volume *lv = vg->sanlock_lv;
 	struct lvresize_params lp = {
-		.lv_name = lock_lv_name,
+		.lv_name = vg->sanlock_lv->name,
 		.sign = SIGN_NONE,
 		.percent = PERCENT_NONE,
 		.resize = LV_EXTEND,
 		.ac_force = 1,
 		.sizeargs = 1,
 	};
-
-	if (!(lv = _find_sanlock_lv(vg, lock_lv_name))) {
-		log_error("Extend failed to find sanlock LV %s in VG %s", lock_lv_name, vg->name);
-		return 0;
-	}
 
 	lp.size = lv->size + ((extend_mb * 1024 * 1024) / SECTOR_SIZE);
 
@@ -431,16 +397,8 @@ static int _extend_sanlock_lv(struct cmd_context *cmd, struct volume_group *vg, 
 
 static int _refresh_sanlock_lv(struct cmd_context *cmd, struct volume_group *vg)
 {
-	struct logical_volume *lv;
-	const char *lock_lv_name = LVMLOCKD_SANLOCK_LV_NAME;
-
-	if (!(lv = _find_sanlock_lv(vg, lock_lv_name))) {
-		log_error("Refresh failed to find sanlock lv %s in vg %s", lock_lv_name, vg->name);
-		return 0;
-	}
-
-	if (!lv_refresh_suspend_resume(cmd, lv)) {
-		log_error("Failed to refresh %s.", lv->name);
+	if (!lv_refresh_suspend_resume(cmd, vg->sanlock_lv)) {
+		log_error("Failed to refresh %s.", vg->sanlock_lv->name);
 		return 0;
 	}
 
@@ -507,16 +465,8 @@ int handle_sanlock_lv(struct cmd_context *cmd, struct volume_group *vg)
 
 static int _activate_sanlock_lv(struct cmd_context *cmd, struct volume_group *vg)
 {
-	struct logical_volume *lv;
-	const char *lock_lv_name = LVMLOCKD_SANLOCK_LV_NAME;
-
-	if (!(lv = _find_sanlock_lv(vg, lock_lv_name))) {
-		log_error("Failed to find sanlock lv %s in vg %s", lock_lv_name, vg->name);
-		return 0;
-	}
-
-	if (!activate_lv(cmd, lv)) {
-		log_error("Failed to activate sanlock lv %s/%s", vg->name, lock_lv_name);
+	if (!activate_lv(cmd, vg->sanlock_lv)) {
+		log_error("Failed to activate sanlock lv %s/%s", vg->name, vg->sanlock_lv->name);
 		return 0;
 	}
 
@@ -525,16 +475,8 @@ static int _activate_sanlock_lv(struct cmd_context *cmd, struct volume_group *vg
 
 static int _deactivate_sanlock_lv(struct cmd_context *cmd, struct volume_group *vg)
 {
-	struct logical_volume *lv;
-	const char *lock_lv_name = LVMLOCKD_SANLOCK_LV_NAME;
-
-	if (!(lv = _find_sanlock_lv(vg, lock_lv_name))) {
-		log_error("Failed to find sanlock lv %s in vg %s", lock_lv_name, vg->name);
-		return 0;
-	}
-
-	if (!deactivate_lv(cmd, lv)) {
-		log_error("Failed to deactivate sanlock lv %s/%s", vg->name, lock_lv_name);
+	if (!deactivate_lv(cmd, vg->sanlock_lv)) {
+		log_error("Failed to deactivate sanlock lv %s/%s", vg->name, vg->sanlock_lv->name);
 		return 0;
 	}
 
@@ -618,7 +560,6 @@ static int _init_vg_sanlock(struct cmd_context *cmd, struct volume_group *vg)
 	daemon_reply reply;
 	const char *reply_str;
 	const char *vg_lock_args = NULL;
-	const char *lock_lv_name = LVMLOCKD_SANLOCK_LV_NAME;
 	const char *opts = NULL;
 	int extend_mb;
 	int result;
@@ -638,13 +579,13 @@ static int _init_vg_sanlock(struct cmd_context *cmd, struct volume_group *vg)
 	if (!(extend_mb = find_config_tree_int(cmd, global_sanlock_lv_extend_CFG, NULL)))
 		extend_mb = DEFAULT_SANLOCK_LV_EXTEND_MB;
 
-	if (!_create_sanlock_lv(cmd, vg, lock_lv_name, extend_mb)) {
+	if (!_create_sanlock_lv(cmd, vg, LOCKD_SANLOCK_LV_NAME, extend_mb)) {
 		log_error("Failed to create internal lv.");
 		return 0;
 	}
 
 	/*
-	 * N.B. this passes the lock_lv_name as vg_lock_args
+	 * N.B. this passes the sanlock lv name as vg_lock_args
 	 * even though it is only part of the final args string
 	 * which will be returned from lvmlockd.
 	 */
@@ -653,7 +594,7 @@ static int _init_vg_sanlock(struct cmd_context *cmd, struct volume_group *vg)
 				"pid = %d", getpid(),
 				"vg_name = %s", vg->name,
 				"vg_lock_type = %s", "sanlock",
-				"vg_lock_args = %s", lock_lv_name,
+				"vg_lock_args = %s", vg->sanlock_lv->name,
 				"opts = %s", opts ?: "none",
 				NULL);
 
@@ -716,7 +657,7 @@ out:
 		 */
 		usleep(1000000);
 		_deactivate_sanlock_lv(cmd, vg);
-		_remove_sanlock_lv(cmd, vg, lock_lv_name);
+		_remove_sanlock_lv(cmd, vg);
 		if (!vg_write(vg) || !vg_commit(vg))
 			stack;
 	}
@@ -760,7 +701,6 @@ static int _free_vg_dlm(struct cmd_context *cmd, struct volume_group *vg)
 static int _free_vg_sanlock(struct cmd_context *cmd, struct volume_group *vg)
 {
 	daemon_reply reply;
-	const char *lock_lv_name = LVMLOCKD_SANLOCK_LV_NAME;
 	int result;
 	int ret;
 
@@ -810,7 +750,7 @@ static int _free_vg_sanlock(struct cmd_context *cmd, struct volume_group *vg)
 	usleep(1000000);
 
 	_deactivate_sanlock_lv(cmd, vg);
-	_remove_sanlock_lv(cmd, vg, lock_lv_name);
+	_remove_sanlock_lv(cmd, vg);
  out:
 	daemon_reply_destroy(reply);
 
