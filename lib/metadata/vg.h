@@ -141,6 +141,7 @@ struct volume_group {
 
 	struct dm_hash_table *hostnames; /* map of creation hostnames */
 	struct logical_volume *pool_metadata_spare_lv; /* one per VG */
+	struct logical_volume *sanlock_lv; /* one per VG */
 };
 
 struct volume_group *alloc_vg(const char *pool_name, struct cmd_context *cmd,
