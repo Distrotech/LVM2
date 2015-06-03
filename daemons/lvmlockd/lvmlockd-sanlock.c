@@ -297,7 +297,7 @@ int lm_init_vg_sanlock(char *ls_name, char *vg_name, uint32_t flags, char *vg_ar
 	if (daemon_test) {
 		if (!gl_lsname_sanlock[0])
 			strncpy(gl_lsname_sanlock, ls_name, MAX_NAME);
-		goto out;
+		return 0;
 	}
 
 	rv = sanlock_version(0, &daemon_version, &daemon_proto);
@@ -374,7 +374,7 @@ int lm_init_vg_sanlock(char *ls_name, char *vg_name, uint32_t flags, char *vg_ar
 
 	if (!strcmp(gl_name, R_NAME_GL))
 		strncpy(gl_lsname_sanlock, ls_name, MAX_NAME);
- out:
+ 
 	snprintf(vg_args, MAX_ARGS, "%s:%s", lock_args_version, lock_lv_name);
 
 	log_debug("S %s init_vg_san done vg_args %s", ls_name, vg_args);

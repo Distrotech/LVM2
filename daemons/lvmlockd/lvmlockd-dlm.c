@@ -303,12 +303,10 @@ int lm_rem_resource_dlm(struct lockspace *ls, struct resource *r)
 	struct lm_dlm *lmd = (struct lm_dlm *)ls->lm_data;
 	struct rd_dlm *rdd = (struct rd_dlm *)r->lm_data;
 	struct dlm_lksb *lksb;
-	int rv;
+	int rv = 0;
 
-	if (daemon_test) {
-		rv = 0;
+	if (daemon_test)
 		goto out;
-	}
 
 	lksb = &rdd->lksb;
 
