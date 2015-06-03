@@ -11,16 +11,14 @@ Type=oneshot
 # start lockspaces and wait for them to finish starting
 ExecStart=@sbindir@/vgchange --lock-start --lock-opt autowait
 
-# auto activate lockd LVs in the newly started VGs
-# ExecStart=@sbindir@/vgchange -aay -S 'lock_type={sanlock,dlm}'
-ExecStart=@sbindir@/vgchange -aay
+# auto activate LVs in the newly started lockd VGs
+ExecStart=@sbindir@/vgchange -aay -S locktype=sanlock || locktype=dlm
 
-# deactivate lockd LVs
-# ExecStop=@sbindir@/vgchange -an -S 'lock_type={sanlock,dlm}'
-ExecStop=@sbindir@/vgchange -an
+# deactivate LVs in lockd VGs
+ExecStop=@sbindir@/vgchange -an -S locktype=sanlock || locktype=dlm
 
 # stop lockspaces and wait for them to finish stopping
-ExecStop=@sbindir@/lvmlock --stop-lockspaces --wait
+ExecStop=@sbindir@/lvmlockctl --stop-lockspaces --wait
 
 [Install]
 WantedBy=multi-user.target
