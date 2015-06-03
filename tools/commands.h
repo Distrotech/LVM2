@@ -1136,7 +1136,7 @@ xx(vgcreate,
    physicalextentsize_ARG, test_ARG, force_ARG, zero_ARG, labelsector_ARG,
    metadatasize_ARG, pvmetadatacopies_ARG, metadatacopies_ARG,
    vgmetadatacopies_ARG, dataalignment_ARG, dataalignmentoffset_ARG,
-   systemid_ARG, locktype_ARG, lockopt_ARG)
+   shared_ARG, systemid_ARG, locktype_ARG, lockopt_ARG)
 
 xx(vgdisplay,
    "Display volume group information",
