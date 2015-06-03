@@ -813,80 +813,63 @@ int vgcreate_params_set_from_args(struct cmd_context *cmd,
 	 * The end result is to set vp_new->lock_type to:
 	 * none | clvm | dlm | sanlock.
 	 *
-	 * If --lock-type <arg> is set, the answer is given directly by
-	 * <arg> which is one of none|clvm|dlm|sanlock.
+	 * If 'vgcreate --lock-type <arg>' is set, the answer is given
+	 * directly by <arg> which is one of none|clvm|dlm|sanlock.
 	 *
-	 * If --clustered y (-cy) is set, then lock_type will be derived
-	 * from other settings/config (see selection logic below.)
+	 * 'vgcreate --clustered y' is the way to create clvm VGs.
 	 *
-	 * Relevant lvm.conf configurations include:
+	 * 'vgcreate --shared' is the way to create lockd VGs.
+	 * lock_type of sanlock or dlm is selected based on
+	 * which lock manager is running.
 	 *
-	 * global/use_lvmlockd = 0, global/locking_type = 1
+	 *
+	 * 1. Using neither clvmd nor lvmlockd.
 	 * ------------------------------------------------
+	 * lvm.conf:
+	 * global/use_lvmlockd = 0
+	 * global/locking_type = 1
+	 *
 	 * - no locking is enabled
 	 * - clvmd is not used
 	 * - lvmlockd is not used
 	 * - VGs with CLUSTERED set are ignored (requires clvmd)
-	 * - VGs with lock_type set are ignored (requires lvmlockd)
-	 * - vgcreate can create new VGs with lock_type = none
+	 * - VGs with lockd type are ignored (requires lvmlockd)
+	 * - vgcreate can create new VGs with lock_type none
+	 * - 'vgcreate --clustered y' fails
+	 * - 'vgcreate --shared' fails
+	 * - 'vgcreate' (neither option) creates a local VG
 	 *
-	 * global/use_lvmlockd = 0, global/locking_type = 3
+	 * 2. Using clvmd.
 	 * ------------------------------------------------
+	 * lvm.conf:
+	 * global/use_lvmlockd = 0
+	 * global/locking_type = 3
+	 *
 	 * - locking through clvmd is enabled (traditional clvm config)
 	 * - clvmd is used
 	 * - lvmlockd is not used
 	 * - VGs with CLUSTERED set can be used
-	 * - VGs with lock_type set are ignored (requires lvmlockd)
+	 * - VGs with lockd type are ignored (requires lvmlockd)
 	 * - vgcreate can create new VGs with CLUSTERED status flag
+	 * - 'vgcreate --clustered y' works
+	 * - 'vgcreate --shared' fails
+	 * - 'vgcreate' (neither option) creates a clvm VG
 	 *
-	 * global/use_lvmlockd = 1, global/locking_type = 1
+	 * 3. Using lvmlockd.
 	 * ------------------------------------------------
-	 * - locking through lvmlockd is enabled (new lvmlockd config)
+	 * lvm.conf:
+	 * global/use_lvmlockd = 1
+	 * global/locking_type = 1
+	 *
+	 * - locking through lvmlockd is enabled
 	 * - clvmd is not used
 	 * - lvmlockd is used
 	 * - VGs with CLUSTERED set are ignored (requires clvmd)
-	 * - VGs with lock_type set can be used
-	 * - vgcreate can create new VGs with lock_type (sanlock|dlm)
-	 *
-	 * VG metadata
-	 * -----------
-	 *
-	 * A VG with lock_type sanlock|dlm has the metadata field:
-	 * lock_type = "sanlock" or lock_type = "dlm"
-	 *
-	 * A VG with lock_type clvm has the metadata status flag CLUSTERED.
-	 *
-	 * A VG with lock_type none has no lock_type metadata field and
-	 * no CLUSTERED status flag.
-	 *
-	 * A VG with lock_type sanlock|dlm also has a new metadata field
-	 * lock_args = "..." where the specific string is set by the
-	 * lock manager to lock-manager-specific data.
-	 *
-	 * deriving lock_type from -c
-	 * --------------------------
-	 *
-	 * The --clustered (-c) option can have varying results depending
-	 * on the lvm.conf settings and what is running.  The resulting
-	 * lock_type (none|clvm|sanlock|dlm) is derived as follows:
-	 *
-	 * When using lvmlockd:
-	 *
-	 * 1. --clustered n -> lock_type none
-	 *
-	 * 2. --clustered y -> lock_type sanlock|dlm based on which is running
-	 *
-	 * 3. Neither --clustered nor --lock-type specified -> lock_type none
-	 *
-	 * When using clvmd:
-	 *
-	 * 1. --clustered n -> lock_type none
-	 *
-	 * 2. --clustered y -> lock_type clvm
-	 *
-	 * 3. Neither --clustered nor --lock-type specified -> lock_type clvm
-	 *
-	 *    The historical default is clvm.
+	 * - VGs with lockd type can be used
+	 * - vgcreate can create new VGs with lock_type sanlock or dlm
+	 * - 'vgcreate --clustered y' fails
+	 * - 'vgcreate --shared' works
+	 * - 'vgcreate' (neither option) creates a local VG
 	 */
 
 	locking_type = find_config_tree_int(cmd, global_locking_type_CFG, NULL);
@@ -894,10 +877,24 @@ int vgcreate_params_set_from_args(struct cmd_context *cmd,
 	use_clvmd = (locking_type == 3);
 
 	if (arg_is_set(cmd, locktype_ARG)) {
+		if (arg_is_set(cmd, clustered_ARG) || arg_is_set(cmd, shared_ARG)) {
+			log_error("A lock type cannot be specified with --shared or --clustered.");
+			return 0;
+		}
 		lock_type = arg_str_value(cmd, locktype_ARG, "");
 
 	} else if (arg_is_set(cmd, clustered_ARG)) {
 		const char *arg_str = arg_str_value(cmd, clustered_ARG, "");
+
+		if (use_lvmlockd) {
+			log_error("Use --shared with lvmlockd, and --clustered with clvmd.");
+			return 0;
+		}
+
+		if (!use_clvmd) {
+			log_error("The --clustered option requires clvmd (locking_type=3).");
+			return 0;
+		}
 
 		if (!strcmp(arg_str, "y")) {
 			clustery = 1;
@@ -908,31 +905,28 @@ int vgcreate_params_set_from_args(struct cmd_context *cmd,
 			return 0;
 		}
 
-		if (use_lvmlockd && clustery) {
-			if (!(lock_type = lockd_running_lock_type(cmd)))
-				return 0;
-		} else if (use_lvmlockd && !clustery) {
-			lock_type = "none";
-		} else if (use_clvmd && clustery) {
-			lock_type = "clvm";
-		} else if (use_clvmd && !clustery) {
-			lock_type = "none";
-		} else {
-			log_error("clustered vg requires use_lvmlockd or locking_type 3 (clvmd)");
+		lock_type = clustery ? "clvm" : "none";
+
+	} else if (arg_is_set(cmd, shared_ARG)) {
+		if (use_clvmd) {
+			log_error("Use --shared with lvmlockd, and --clustered with clvmd.");
+			return 0;
+		}
+
+		if (!use_lvmlockd) {
+			log_error("The --shared option requires lvmlockd (use_lvmlockd=1).");
+			return 0;
+		}
+
+		if (!(lock_type = lockd_running_lock_type(cmd))) {
+			log_error("Failed to detect a running lock manager to select lock_type.");
 			return 0;
 		}
 
 	} else {
 		if (use_clvmd)
 			lock_type = locking_is_clustered() ? "clvm" : "none";
-		else if (use_lvmlockd)
-			lock_type = "none";
-
-		/*
-		 * lock_type NULL is when there is no --lock-type,
-		 * no --clustered, and locking_type is not 3.
-		 */
-		if (!lock_type)
+		else
 			lock_type = "none";
 	}
 
