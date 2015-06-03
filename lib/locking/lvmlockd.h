@@ -145,6 +145,8 @@ int lockd_init_lv_args(struct cmd_context *cmd, struct volume_group *vg,
 
 const char *lockd_running_lock_type(struct cmd_context *cmd);
 
+int handle_sanlock_lv(struct cmd_context *cmd, struct volume_group *vg);
+
 #else /* LVMLOCKD_SUPPORT */
 
 static inline void lvmlockd_set_socket(const char *sock)
@@ -267,6 +269,11 @@ static inline int lockd_init_lv_args(struct cmd_context *cmd, struct volume_grou
 static inline const char *lockd_running_lock_type(struct cmd_context *cmd)
 {
 	return NULL;
+}
+
+int handle_sanlock_lv(struct cmd_context *cmd, struct volume_group *vg)
+{
+	return 0;
 }
 
 #endif /* LVMLOCKD_SUPPORT */
