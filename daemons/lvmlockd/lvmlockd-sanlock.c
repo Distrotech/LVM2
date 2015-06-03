@@ -425,7 +425,7 @@ int lm_init_vg_sanlock(char *ls_name, char *vg_name, uint32_t flags, char *vg_ar
  */
 
 int lm_init_lv_sanlock(char *ls_name, char *vg_name, char *lv_name,
-		       char *vg_args, char *lv_args)
+		       char *vg_args, char *lv_args, uint64_t free_offset)
 {
 	struct sanlk_resourced rd;
 	char lock_lv_name[MAX_ARGS];
@@ -458,7 +458,10 @@ int lm_init_lv_sanlock(char *ls_name, char *vg_name, char *lv_name,
 		return -EINVAL;
 	}
 
-	offset = align_size * LV_LOCK_BEGIN;
+	if (free_offset)
+		offset = free_offset;
+	else
+		offset = align_size * LV_LOCK_BEGIN;
 	rd.rs.disks[0].offset = offset;
 
 	if (daemon_test) {
@@ -481,7 +484,7 @@ int lm_init_lv_sanlock(char *ls_name, char *vg_name, char *lv_name,
 			return rv;
 		}
 
-		if (rv) {
+		if (rv && rv != SANLK_LEADER_MAGIC) {
 			log_error("S %s init_lv_san read error %d offset %llu",
 				  ls_name, rv, (unsigned long long)offset);
 			break;
@@ -493,7 +496,12 @@ int lm_init_lv_sanlock(char *ls_name, char *vg_name, char *lv_name,
 			return -EEXIST;
 		}
 
-		if (!strcmp(rd.rs.name, "#unused")) {
+		/*
+		 * If we read newly extended space, it will not be initialized
+		 * with an "#unused" resource, but will return SANLK_LEADER_MAGIC
+		 * indicating an uninitialized paxos structure on disk.
+		 */
+		if ((rv == SANLK_LEADER_MAGIC) || !strcmp(rd.rs.name, "#unused")) {
 			log_debug("S %s init_lv_san %s found unused area at %llu",
 				  ls_name, lv_name, (unsigned long long)offset);
 
@@ -855,6 +863,78 @@ int lm_gl_is_enabled(struct lockspace *ls)
 	int rv;
 	rv = gl_is_enabled(ls, ls->lm_data);
 	ls->sanlock_gl_enabled = rv;
+	return rv;
+}
+
+/*
+ * This is called at the beginning of lvcreate to
+ * ensure there is free space for a new LV lock.
+ * If not, lvcreate will extend the lvmlock lv
+ * before continuing with creating the new LV.
+ * This way, lm_init_lv_san() should find a free
+ * lock (unless the autoextend of lvmlock lv has
+ * been disabled.)
+ */
+
+int lm_find_free_lock_sanlock(struct lockspace *ls, uint64_t *free_offset)
+{
+	struct lm_sanlock *lms = (struct lm_sanlock *)ls->lm_data;
+	struct sanlk_resourced rd;
+	uint64_t offset;
+	int rv;
+
+	if (daemon_test)
+		return 0;
+
+	memset(&rd, 0, sizeof(rd));
+
+	strncpy(rd.rs.lockspace_name, ls->name, SANLK_NAME_LEN);
+	rd.rs.num_disks = 1;
+	strncpy(rd.rs.disks[0].path, lms->ss.host_id_disk.path, SANLK_PATH_LEN);
+
+	offset = lms->align_size * LV_LOCK_BEGIN;
+
+	while (1) {
+		rd.rs.disks[0].offset = offset;
+
+		memset(rd.rs.name, 0, SANLK_NAME_LEN);
+
+		rv = sanlock_read_resource(&rd.rs, 0);
+		if (rv == -EMSGSIZE || rv == -ENOSPC) {
+			/* This indicates the end of the device is reached. */
+			log_debug("S %s find_free_lock_san read limit offset %llu",
+				  ls->name, (unsigned long long)offset);
+			return -EMSGSIZE;
+		}
+
+		/*
+		 * If we read newly extended space, it will not be initialized
+		 * with an "#unused" resource, but will return an error about
+		 * an invalid paxos structure on disk.
+		 */
+		if (rv == SANLK_LEADER_MAGIC) {
+			log_debug("S %s find_free_lock_san found empty area at %llu",
+				  ls->name, (unsigned long long)offset);
+			*free_offset = offset;
+			return 0;
+		}
+
+		if (rv) {
+			log_error("S %s find_free_lock_san read error %d offset %llu",
+				  ls->name, rv, (unsigned long long)offset);
+			break;
+		}
+
+		if (!strcmp(rd.rs.name, "#unused")) {
+			log_debug("S %s find_free_lock_san found unused area at %llu",
+				  ls->name, (unsigned long long)offset);
+			*free_offset = offset;
+			return 0;
+		}
+
+		offset += lms->align_size;
+	}
+
 	return rv;
 }
 

@@ -742,6 +742,8 @@ static const char *op_str(int x)
 		return "rename_final";
 	case LD_OP_RUNNING_LM:
 		return "running_lm";
+	case LD_OP_FIND_FREE_LOCK:
+		return "find_free_lock";
 	default:
 		return "op_unknown";
 	};
@@ -943,6 +945,15 @@ static void lm_rem_resource(struct lockspace *ls, struct resource *r)
 		lm_rem_resource_dlm(ls, r);
 	else if (ls->lm_type == LD_LM_SANLOCK)
 		lm_rem_resource_sanlock(ls, r);
+}
+
+static int lm_find_free_lock(struct lockspace *ls, uint64_t *free_offset)
+{
+	if (ls->lm_type == LD_LM_DLM)
+		return 0;
+	else if (ls->lm_type == LD_LM_SANLOCK)
+		return lm_find_free_lock_sanlock(ls, free_offset);
+	return -1;
 }
 
 /*
@@ -2040,8 +2051,18 @@ static void *lockspace_thread_main(void *arg_in)
 			pthread_cond_wait(&ls->cond, &ls->mutex);
 		}
 
-		/* client thread queues actions on ls->actions, we move
-		   ls->actions to r->actions, then process the resources */
+		/*
+		 * Process all the actions queued for this lockspace.
+		 * The client thread queues actions on ls->actions.
+		 *
+		 * Here, take all the actions off of ls->actions, and:
+		 *
+		 * - For lock operations, move the act to r->actions.
+		 *   These lock actions/operations processed by res_process().
+		 *
+		 * - For non-lock operations, e.g. related to managing
+		 *   the lockspace, process them in this loop.
+		 */
 
 		while (1) {
 			if (list_empty(&ls->actions)) {
@@ -2098,6 +2119,19 @@ static void *lockspace_thread_main(void *arg_in)
 				break;
 			}
 
+			if (act->op == LD_OP_FIND_FREE_LOCK && act->rt == LD_RT_VG) {
+				uint64_t free_offset = 0;
+				log_debug("S %s find free lock", ls->name);
+				rv = lm_find_free_lock(ls, &free_offset);
+				log_debug("S %s find free lock %d offset %llu",
+					  ls->name, rv, (unsigned long long)free_offset);
+				ls->free_lock_offset = free_offset;
+				list_del(&act->list);
+				act->result = rv;
+				add_client_result(act);
+				continue;
+			}
+
 			list_del(&act->list);
 
 			/* applies to all resources */
@@ -2107,8 +2141,12 @@ static void *lockspace_thread_main(void *arg_in)
 			}
 
 			/*
-			 * Find the specific resource this action refers to;
-			 * creates resource if not found.
+			 * All the other op's are for locking.
+			 * Find the specific resource that the lock op is for,
+			 * and add the act to the resource's list of lock ops.
+			 *
+			 * (This creates a new resource if the one named in
+			 * the act is not found.)
 			 */
 
 			r = find_resource_act(ls, act, (act->op == LD_OP_FREE) ? 1 : 0);
@@ -2124,6 +2162,11 @@ static void *lockspace_thread_main(void *arg_in)
 				  op_str(act->op), mode_str(act->mode));
 		}
 		pthread_mutex_unlock(&ls->mutex);
+
+		/*
+		 * Process the lock operations that have been queued for each
+		 * resource.
+		 */
 
 		retry = 0;
 
@@ -2915,6 +2958,7 @@ static int work_init_lv(struct action *act)
 	char ls_name[MAX_NAME+1];
 	char vg_args[MAX_ARGS];
 	char lv_args[MAX_ARGS];
+	uint64_t free_offset;
 	int lm_type = 0;
 	int rv = 0;
 
@@ -2929,6 +2973,8 @@ static int work_init_lv(struct action *act)
 	if (ls) {
 		lm_type = ls->lm_type;
 		memcpy(vg_args, ls->vg_args, MAX_ARGS);
+		free_offset = ls->free_lock_offset;
+		ls->free_lock_offset = 0;
 	}
 	pthread_mutex_unlock(&lockspaces_mutex);
 
@@ -2945,7 +2991,7 @@ static int work_init_lv(struct action *act)
 
 	if (lm_type == LD_LM_SANLOCK) {
 		rv = lm_init_lv_sanlock(ls_name, act->vg_name, act->lv_uuid,
-					vg_args, lv_args);
+					vg_args, lv_args, free_offset);
 
 		memcpy(act->lv_args, lv_args, MAX_ARGS);
 		return rv;
@@ -3588,6 +3634,11 @@ static int str_to_op_rt(const char *req_name, int *op, int *rt)
 		*rt = 0;
 		return 0;
 	}
+	if (!strcmp(req_name, "find_free_lock")) {
+		*op = LD_OP_FIND_FREE_LOCK;
+		*rt = LD_RT_VG;
+		return 0;
+	}
 out:
 	return -1;
 }
@@ -4137,6 +4188,7 @@ static void client_recv_action(struct client *cl)
 	case LD_OP_DISABLE:
 	case LD_OP_FREE:
 	case LD_OP_RENAME_BEFORE:
+	case LD_OP_FIND_FREE_LOCK:
 		rv = add_lock_action(act);
 		break;
 	default:

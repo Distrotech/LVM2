@@ -833,8 +833,16 @@ cfg(global_use_lvmetad_CFG, "use_lvmetad", global_CFG_SECTION, 0, CFG_TYPE_BOOL,
 cfg(global_use_lvmlockd_CFG, "use_lvmlockd", global_CFG_SECTION, 0, CFG_TYPE_BOOL, 0, vsn(2, 2, 120), NULL, 0, NULL,
 	"Use lvmlockd for locking among hosts using LVM on shared storage.\n")
 
-cfg(global_lock_retries_CFG, "lock_retries", global_CFG_SECTION, CFG_DEFAULT_COMMENTED, CFG_TYPE_INT, DEFAULT_LOCK_RETRIES, vsn(2, 2, 12), NULL, 0, NULL,
+cfg(global_lock_retries_CFG, "lock_retries", global_CFG_SECTION, CFG_DEFAULT_COMMENTED, CFG_TYPE_INT, DEFAULT_LOCK_RETRIES, vsn(2, 2, 120), NULL, 0, NULL,
 	"Retry lvmlockd lock requests this many times.\n")
+
+cfg(global_sanlock_lv_extend_CFG, "sanlock_lv_extend", global_CFG_SECTION, CFG_DEFAULT_COMMENTED, CFG_TYPE_INT, DEFAULT_SANLOCK_LV_EXTEND_MB, vsn(2, 2, 120), NULL, 0, NULL,
+	"Size in MiB to extend the internal LV holding sanlock locks.\n"
+	"The internal LV holds locks for each LV in the VG, and after\n"
+	"enough LVs have been created, the internal LV needs to be extended.\n"
+	"lvcreate will automatically extend the internal LV when needed by\n"
+	"the amount specified here.  Setting this to 0 disables the\n"
+	"automatic extension and can cause lvcreate to fail.\n")
 
 cfg(global_allow_override_lock_modes_CFG, "allow_override_lock_modes", global_CFG_SECTION, 0, CFG_TYPE_BOOL, 0, vsn(2, 2, 120), NULL, 0, NULL,
 	"Allow command options to override normal locking.\n")
