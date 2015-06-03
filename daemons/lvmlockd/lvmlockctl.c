@@ -407,8 +407,10 @@ static int do_dump(const char *req_name)
 
 	daemon_reply_destroy(reply);
 
-	if (result < 0)
+	if (result < 0) {
+		rv = result;
 		log_error("result %d", result);
+	}
 
 	if (!dump_len)
 		goto out;
