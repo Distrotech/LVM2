@@ -1514,6 +1514,13 @@ int lvcreate(struct cmd_context *cmd, int argc, char **argv)
 			    lp.pool_name ? : "with generated name", lp.vg_name, lp.segtype->name);
 	}
 
+	if (vg->lock_type && !strcmp(vg->lock_type, "sanlock")) {
+		if (!handle_sanlock_lv(cmd, vg)) {
+			log_error("No space for sanlock lock, extend the internal lvmlock LV.");
+			goto_out;
+		}
+	}
+
 	if (seg_is_thin_volume(&lp))
 		log_verbose("Making thin LV %s in pool %s in VG %s%s%s using segtype %s",
 			    lp.lv_name ? : "with generated name",

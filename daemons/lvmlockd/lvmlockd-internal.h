@@ -50,6 +50,7 @@ enum {
 	LD_OP_RENAME_BEFORE,
 	LD_OP_RENAME_FINAL,
 	LD_OP_RUNNING_LM,
+	LD_OP_FIND_FREE_LOCK,
 };
 
 /* resource types */
@@ -167,6 +168,7 @@ struct lockspace {
 	int8_t lm_type;			/* lock manager: LM_DLM, LM_SANLOCK */
 	void *lm_data;
 	uint64_t host_id;
+	uint64_t free_lock_offset;	/* start search for free lock here */
 
 	uint32_t start_client_id;	/* client_id that started the lockspace */
 	pthread_t thread;		/* makes synchronous lock requests */
@@ -217,7 +219,7 @@ int lm_data_size_dlm(void);
 int lm_is_running_dlm(void);
 
 int lm_init_vg_sanlock(char *ls_name, char *vg_name, uint32_t flags, char *vg_args);
-int lm_init_lv_sanlock(char *ls_name, char *vg_name, char *lv_name, char *vg_args, char *lv_args);
+int lm_init_lv_sanlock(char *ls_name, char *vg_name, char *lv_name, char *vg_args, char *lv_args, uint64_t free_offset);
 int lm_free_lv_sanlock(struct lockspace *ls, struct resource *r);
 int lm_rename_vg_sanlock(char *ls_name, char *vg_name, uint32_t flags, char *vg_args);
 int lm_prepare_lockspace_sanlock(struct lockspace *ls);
@@ -237,6 +239,7 @@ int lm_gl_is_enabled(struct lockspace *ls);
 int lm_get_lockspaces_sanlock(struct list_head *ls_rejoin);
 int lm_data_size_sanlock(void);
 int lm_is_running_sanlock(void);
+int lm_find_free_lock_sanlock(struct lockspace *ls, uint64_t *free_offset);
 
 #if __BYTE_ORDER == __BIG_ENDIAN
 #define le16_to_cpu(x) (bswap_16((x)))
