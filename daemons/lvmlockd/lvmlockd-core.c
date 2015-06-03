@@ -1509,11 +1509,11 @@ static void res_process(struct lockspace *ls, struct resource *r,
 			act->result = rv;
 			list_del(&act->list);
 			add_client_result(act);
-		}
 
-		if (!rv && act->op == LD_OP_DISABLE) {
-			log_debug("S %s R %s free disabled", ls->name, r->name);
-			goto r_free;
+			if (!rv && act->op == LD_OP_DISABLE) {
+				log_debug("S %s R %s free disabled", ls->name, r->name);
+				goto r_free;
+			}
 		}
 	}
 
@@ -3246,7 +3246,10 @@ static struct client *find_client_pi(int pi)
  */
 static void restart_poll(void)
 {
-	write(restart_fds[1], "w", 1);
+	int rv;
+	rv = write(restart_fds[1], "w", 1);
+	if (!rv || rv < 0)
+		log_debug("restart_poll write %d", errno);
 }
 
 /* poll will take requests from client again, cl->mutex must be held */
@@ -5376,8 +5379,13 @@ static int setup_restart(void)
 static void process_restart(int fd)
 {
 	char wake[1];
+	int rv;
+
 	/* assert fd == restart_fds[0] */
-	read(restart_fds[0], wake, 1);
+
+	rv = read(restart_fds[0], wake, 1);
+	if (!rv || rv < 0)
+		log_debug("process_restart error %d", errno);
 }
 
 static void sigterm_handler(int sig __attribute__((unused)))
