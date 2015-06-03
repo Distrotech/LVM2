@@ -20,6 +20,7 @@
 #include "toolcontext.h"
 #include "lvmcache.h"
 #include "lvmetad.h"
+#include "lvmlockd.h"
 #include "lv_alloc.h"
 #include "pv_alloc.h"
 #include "segtype.h"
@@ -651,6 +652,12 @@ static int _read_lvnames(struct format_instance *fid __attribute__((unused)),
 				   lv->name);
 		lv->status |= POOL_METADATA_SPARE;
 		vg->pool_metadata_spare_lv = lv;
+	}
+
+	if (!lv_is_visible(lv) && !strcmp(lv->name, LOCKD_SANLOCK_LV_NAME)) {
+		log_debug_metadata("Logical volume %s is sanlock lv.", lv->name);
+		lv->status |= LOCKD_SANLOCK_LV;
+		vg->sanlock_lv = lv;
 	}
 
 	return 1;

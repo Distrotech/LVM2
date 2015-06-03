@@ -14,6 +14,8 @@
 #include "config-util.h"
 #include "daemon-client.h"
 
+#define LOCKD_SANLOCK_LV_NAME "lvmlock"
+
 #define LOCK_TYPE_NONE    0
 #define LOCK_TYPE_CLVM    1
 #define LOCK_TYPE_DLM     2
