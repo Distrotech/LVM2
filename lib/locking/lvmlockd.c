@@ -328,8 +328,6 @@ static int _lockd_request(struct cmd_context *cmd,
  * whenever it runs out of space.
  */
 
-#define LVMLOCKD_SANLOCK_LV_EXTEND (512 * 1024 * 1024)
-
 static struct logical_volume *_find_sanlock_lv(struct volume_group *vg,
 					       const char *lock_lv_name)
 {
@@ -347,13 +345,13 @@ static struct logical_volume *_find_sanlock_lv(struct volume_group *vg,
  */
 
 static int _create_sanlock_lv(struct cmd_context *cmd, struct volume_group *vg,
-			      const char *lock_lv_name)
+			      const char *lock_lv_name, int extend_mb)
 {
 	struct logical_volume *lv;
 	struct lvcreate_params lp = {
 		.activate = CHANGE_ALY,
 		.alloc = ALLOC_INHERIT,
-		.extents = LVMLOCKD_SANLOCK_LV_EXTEND / (vg->extent_size * SECTOR_SIZE),
+		.extents = (extend_mb * 1024 * 1024) / (vg->extent_size * SECTOR_SIZE),
 		.major = -1,
 		.minor = -1,
 		.permission = LVM_READ | LVM_WRITE,
@@ -399,7 +397,7 @@ static int _remove_sanlock_lv(struct cmd_context *cmd, struct volume_group *vg,
 	return 1;
 }
 
-static int _extend_sanlock_lv(struct cmd_context *cmd, struct volume_group *vg)
+static int _extend_sanlock_lv(struct cmd_context *cmd, struct volume_group *vg, int extend_mb)
 {
 	const char *lock_lv_name = LVMLOCKD_SANLOCK_LV_NAME;
 	struct logical_volume *lv;
@@ -417,7 +415,7 @@ static int _extend_sanlock_lv(struct cmd_context *cmd, struct volume_group *vg)
 		return 0;
 	}
 
-	lp.size = lv->size + (LVMLOCKD_SANLOCK_LV_EXTEND / SECTOR_SIZE);
+	lp.size = lv->size + ((extend_mb * 1024 * 1024) / SECTOR_SIZE);
 
 	if (!lv_resize_prepare(cmd, lv, &lp, &vg->pvs) ||
 	    !lv_resize(cmd, lv, &lp, &vg->pvs)) {
@@ -447,6 +445,64 @@ static int _refresh_sanlock_lv(struct cmd_context *cmd, struct volume_group *vg)
 	}
 
 	return 1;
+}
+
+/*
+ * Called at the beginning of lvcreate in a sanlock VG to ensure
+ * that there is space in the sanlock LV for a new lock.  If it's
+ * full, then this extends it.
+ */
+
+int handle_sanlock_lv(struct cmd_context *cmd, struct volume_group *vg)
+{
+	daemon_reply reply;
+	int extend_mb;
+	int result;
+	int ret;
+
+	if (!_use_lvmlockd)
+		return 1;
+	if (!_lvmlockd_connected)
+		return 0;
+
+	extend_mb = find_config_tree_int(cmd, global_sanlock_lv_extend_CFG, NULL);
+
+	/*
+	 * User can choose to not automatically extend the lvmlock LV
+	 * so they can manually extend it.
+	 */
+	if (!extend_mb)
+		return 1;
+
+	/*
+	 * Another host may have extended the lvmlock LV already.
+	 * Refresh so that we'll find the new space they added
+	 * when we search for new space.
+	 */
+	if (!_refresh_sanlock_lv(cmd, vg))
+		return 0;
+
+	/*
+	 * Ask lvmlockd/sanlock to look for an unused lock.
+	 */
+	reply = _lockd_send("find_free_lock",
+			"pid = %d", getpid(),
+			"vg_name = %s", vg->name,
+			NULL);
+
+	if (!_lockd_result(reply, &result, NULL)) {
+		ret = 0;
+	} else {
+		ret = (result < 0) ? 0 : 1;
+	}
+
+	/* No space on the lvmlock lv for a new lease. */
+	if (result == -EMSGSIZE)
+		ret = _extend_sanlock_lv(cmd, vg, extend_mb);
+
+	daemon_reply_destroy(reply);
+
+	return ret;
 }
 
 static int _activate_sanlock_lv(struct cmd_context *cmd, struct volume_group *vg)
@@ -564,6 +620,7 @@ static int _init_vg_sanlock(struct cmd_context *cmd, struct volume_group *vg)
 	const char *vg_lock_args = NULL;
 	const char *lock_lv_name = LVMLOCKD_SANLOCK_LV_NAME;
 	const char *opts = NULL;
+	int extend_mb;
 	int result;
 	int ret;
 
@@ -572,7 +629,16 @@ static int _init_vg_sanlock(struct cmd_context *cmd, struct volume_group *vg)
 	if (!_lvmlockd_connected)
 		return 0;
 
-	if (!_create_sanlock_lv(cmd, vg, lock_lv_name)) {
+	/*
+	 * Automatic extension of the sanlock lv is disabled by
+	 * setting sanlock_lv_extend to 0.  Zero won't work as
+	 * an initial size, so in this case, use the default as
+	 * the initial size.
+	 */
+	if (!(extend_mb = find_config_tree_int(cmd, global_sanlock_lv_extend_CFG, NULL)))
+		extend_mb = DEFAULT_SANLOCK_LV_EXTEND_MB;
+
+	if (!_create_sanlock_lv(cmd, vg, lock_lv_name, extend_mb)) {
 		log_error("Failed to create internal lv.");
 		return 0;
 	}
@@ -1938,8 +2004,6 @@ static int _init_lv_sanlock(struct cmd_context *cmd, struct volume_group *vg,
 	daemon_reply reply;
 	const char *reply_str;
 	const char *lv_lock_args = NULL;
-	int refreshed = 0;
-	int extended = 0;
 	int result;
 	int ret;
 
@@ -1949,7 +2013,7 @@ static int _init_lv_sanlock(struct cmd_context *cmd, struct volume_group *vg,
 		return 0;
 
 	id_write_format(lv_id, lv_uuid, sizeof(lv_uuid));
- retry:
+
 	reply = _lockd_send("init_lv",
 				"pid = %d", getpid(),
 				"vg_name = %s", vg->name,
@@ -1972,20 +2036,10 @@ static int _init_lv_sanlock(struct cmd_context *cmd, struct volume_group *vg,
 
 	if (result == -EMSGSIZE) {
 		/*
-		 * No space on the lvmlock lv for a new lease.
-		 * Check if another host has extended lvmlock,
-		 * and extend lvmlock if needed.
+		 * No space on the lvmlock lv for a new lease, this should be
+		 * detected by handle_sanlock_lv() called before.
 		 */
-		if (!refreshed++) {
-			log_debug("Refresh lvmlock");
-			_refresh_sanlock_lv(cmd, vg);
-			goto retry;
-		}
-		if (!extended++) {
-			log_debug("Extend lvmlock");
-			_extend_sanlock_lv(cmd, vg);
-			goto retry;
-		}
+		log_error("No sanlock space for lock for LV %s/%s", vg->name, lv_name);
 		goto out;
 	}
 
@@ -1994,15 +2048,13 @@ static int _init_lv_sanlock(struct cmd_context *cmd, struct volume_group *vg,
 		goto out;
 	}
 
-	reply_str = daemon_reply_str(reply, "lv_lock_args", NULL);
-	if (!reply_str) {
+	if (!(reply_str = daemon_reply_str(reply, "lv_lock_args", NULL))) {
 		log_error("lv_lock_args not returned");
 		ret = 0;
 		goto out;
 	}
 
-	lv_lock_args = dm_pool_strdup(cmd->mem, reply_str);
-	if (!lv_lock_args) {
+	if (!(lv_lock_args = dm_pool_strdup(cmd->mem, reply_str))) {
 		log_error("lv_lock_args allocation failed");
 		ret = 0;
 	}
@@ -2044,9 +2096,8 @@ static int _free_lv_sanlock(struct cmd_context *cmd, struct volume_group *vg,
 		ret = (result < 0) ? 0 : 1;
 	}
 
-	if (!ret) {
+	if (!ret)
 		log_error("_free_lv_sanlock lvmlockd result %d", result);
-	}
 
 	daemon_reply_destroy(reply);
 
