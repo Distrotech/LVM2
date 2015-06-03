@@ -489,7 +489,7 @@ static int do_stop_lockspaces(void)
 
 static void print_usage(void)
 {
-	printf("lvmlock options\n");
+	printf("lvmlockctl options\n");
 	printf("Options:\n");
 	printf("--help | -h\n");
 	printf("      Show this help information.\n");
@@ -526,19 +526,16 @@ static int read_options(int argc, char *argv[])
 		{"gl-enable",       required_argument, 0,  'E' },
 		{"gl-disable",      required_argument, 0,  'D' },
 		{"stop-lockspaces", no_argument,       0,  'S' },
-		{"sleep",           required_argument, 0,  's' },
 		{0, 0, 0, 0 }
 	};
 
-	/*
 	if (argc == 1) {
 		print_usage();
 		exit(0);
 	}
-	*/
 
 	while (1) {
-		c = getopt_long(argc, argv, "hqidE:D:s:w:f:S", long_options, &option_index);
+		c = getopt_long(argc, argv, "hqidE:D:w:S", long_options, &option_index);
 		if (c == -1)
 			break;
 

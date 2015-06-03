@@ -20,7 +20,7 @@ SOURCES = \
 	lvmlockd-sanlock.c \
 	lvmlockd-dlm.c
 
-TARGETS = lvmlockd lvmlock
+TARGETS = lvmlockd lvmlockctl
 
 .PHONY: install_lvmlockd
 
@@ -39,9 +39,9 @@ lvmlockd: $(OBJECTS) $(top_builddir)/libdaemon/client/libdaemonclient.a \
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(OBJECTS) \
 	$(DL_LIBS) $(LVMLIBS) $(LIBS) -rdynamic
 
-lvmlock: lvmlock.o $(top_builddir)/libdaemon/client/libdaemonclient.a \
+lvmlockctl: lvmlockctl.o $(top_builddir)/libdaemon/client/libdaemonclient.a \
 		    $(top_builddir)/libdaemon/server/libdaemonserver.a
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ lvmlock.o \
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ lvmlockctl.o \
 	$(DL_LIBS) $(LVMLIBS) -rdynamic
 
 install_lvmlockd: lvmlockd
