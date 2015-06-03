@@ -6293,7 +6293,9 @@ struct logical_volume *insert_layer_for_lv(struct cmd_context *cmd,
 	if (lv_is_active_exclusive_locally(lv_where))
 		exclusive = 1;
 
-	if (lv_is_active(lv_where) && strstr(name, "_mimagetmp")) {
+PFLA("lv_is_active()=%d", lv_is_active(lv_where));
+	if (lv_is_active(lv_where) &&
+	    (strstr(name, "_mimagetmp") || strstr(layer_suffix, "_csrc_") || strstr(layer_suffix, "_cdst_"))) {
 		log_very_verbose("Creating transient LV %s for mirror conversion in VG %s.", name, lv_where->vg->name);
 
 		segtype = get_segtype_from_string(cmd, "error");
@@ -6310,12 +6312,13 @@ struct logical_volume *insert_layer_for_lv(struct cmd_context *cmd,
 					  " transient mirror layer.");
 				return NULL;
 			}
-
+PFLA("%s", "vg_write");
 		if (!vg_write(lv_where->vg)) {
 			log_error("Failed to write intermediate VG %s metadata for mirror conversion.", lv_where->vg->name);
 			return NULL;
 		}
 
+PFLA("%s", "vg_commit");
 		if (!vg_commit(lv_where->vg)) {
 			log_error("Failed to commit intermediate VG %s metadata for mirror conversion.", lv_where->vg->name);
 			return NULL;
