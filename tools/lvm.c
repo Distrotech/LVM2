@@ -42,6 +42,8 @@ static char *str_dup_no_mid_hyphen(char *arg)
 	}
 }
 
+/* If allocation fails, just use the args provided in the original argv. */
+
 int main(int argc, char **argv)
 {
 	char **argv_new;
@@ -55,12 +57,8 @@ int main(int argc, char **argv)
 
 	argv_new[0] = argv[0];
 
-	for (i = 1; i < argc; i++) {
-		if (!(argv_new[i] = str_dup_no_mid_hyphen(argv[i]))) {
-			argv_new = argv;
-			goto run;
-		}
-	}
+	for (i = 1; i < argc; i++)
+		argv_new[i] = str_dup_no_mid_hyphen(argv[i]);
 run:
 	ret = lvm2_main(argc, argv_new);
 
