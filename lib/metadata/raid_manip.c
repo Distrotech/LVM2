@@ -3270,6 +3270,7 @@ static int _lv_is_synced(struct logical_volume *lv)
 	return 1;
 }
 
+/* Begin: various conversions between layers (aka MD takeover) */
 /*
  * takeover function argument list definition
  *
@@ -3322,14 +3323,6 @@ static int function_name(TAKEOVER_FN_ARGUMENTS)
 /* Macro to spot takeover helper functions easily */
 #define TAKEOVER_HELPER_FN(function_name) TAKEOVER_FN(function_name)
 
-/* Instantiate "dummy" placeholder raid takeover handler function until implemented */
-#define	TAKEOVER_DUMMY_FN(function_name)		\
-TAKEOVER_FN(function_name)				\
-{							\
-	log_warn("%s has to be coded", #function_name);	\
-	return 0;					\
-}
-
 /*
  * noop and error takoover handler functions
  * to allow for logging that an lv already
@@ -3354,8 +3347,6 @@ TAKEOVER_FN(_error)
 	log_error("Converting the segment type for %s (directly) from %s to %s"
 		  " is not supported.", display_lvname(lv),
 		  lvseg_name(seg), new_segtype->name);
-	seg->segtype = new_segtype;
-	_log_possible_conversion_types(lv);
 
 	return 0;
 }
@@ -3366,8 +3357,8 @@ TAKEOVER_FN(_error)
 /* Helper: linear -> raid0* */
 TAKEOVER_HELPER_FN(_linear_raid0)
 {
-	struct dm_list meta_lvs;
 	struct lv_segment *seg = first_seg(lv);
+	struct dm_list meta_lvs;
 
 	dm_list_init(&meta_lvs);
 
@@ -3400,8 +3391,8 @@ TAKEOVER_HELPER_FN(_linear_raid0)
 /* Helper: linear/raid0 with 1 image <-> raid1/4/5 takeover handler for @lv */
 TAKEOVER_HELPER_FN(_linear_raid14510)
 {
-	struct dm_list data_lvs, meta_lvs;
 	struct lv_segment *seg = first_seg(lv);
+	struct dm_list data_lvs, meta_lvs;
 	struct segment_type *segtype;
 
 	dm_list_init(&data_lvs);
@@ -3514,14 +3505,12 @@ TAKEOVER_HELPER_FN(_raid0_mirror)
 	if (seg_is_raid0(first_seg(lv)) &&
 	    !_alloc_and_add_rmeta_devs_for_lv(lv))
 		return 0;
-PFL();
 	/* First convert to raid1... */
 	if (!(segtype = get_segtype_from_flag(lv->vg->cmd, SEG_RAID1)) ||
 	    !_linear_raid14510(lv, 0, 0, segtype, new_image_count, 0 /* new_stripes */,
 			       new_stripe_size, allocate_pvs))
 		return 0;
 
-PFL();
 	/* ...second convert to mirror */
 	return _convert_raid1_to_mirror(lv, new_segtype, allocate_pvs,
 					1 /* !update_and_reload */, NULL);
@@ -3563,7 +3552,7 @@ TAKEOVER_HELPER_FN(_mirror_raid0)
 	dm_list_init(&removal_lvs);
 
 	if (!seg_is_mirrored(seg)) {
-		log_error(INTERNAL_ERROR "Can't convert non-mirrored segment in lv %s",
+		log_error(INTERNAL_ERROR "Can't convert non-mirrored segment of lv %s",
 			  display_lvname(lv));
 		return 0;
 	}
@@ -3584,7 +3573,7 @@ TAKEOVER_HELPER_FN(_mirror_raid0)
 
 	if (seg_is_raid0(seg)) {
 		/* Remove rmeta LVs */
-		log_debug_metadata("Extracting and renaming metadata LVs frim lv %s",
+		log_debug_metadata("Extracting and renaming metadata LVs from lv %s",
 				   display_lvname(lv));
 		if (!_extract_image_component_list(seg, RAID_META, 0, &removal_lvs))
 			return 0;
@@ -3613,12 +3602,12 @@ TAKEOVER_HELPER_FN(_mirror_r45)
 	if (!_lv_is_synced(lv))
 		return 0;
 
-	if (!_lv_free_reshape_space(lv)) {
-		log_error(INTERNAL_ERROR "Failed to free reshape space");
-		return 0;
-	}
-
 	if (segtype_is_mirror(new_segtype)) {
+		if (!_lv_free_reshape_space(lv)) {
+			log_error(INTERNAL_ERROR "Failed to free reshape space");
+			return 0;
+		}
+
 		if (!(seg->segtype = get_segtype_from_flag(lv->vg->cmd, SEG_RAID1)) ||
 		    !_convert_raid1_to_mirror(lv, new_segtype, allocate_pvs,
 					      0 /* !update_and_reload */, &removal_lvs))
@@ -3644,6 +3633,9 @@ TAKEOVER_HELPER_FN(_raid1_raid0)
 		return 0;
 	}
 
+	if (!_lv_is_synced(lv))
+		return 0;
+
 	seg->segtype = new_segtype;
 	if (!_lv_change_image_count(lv, new_segtype, 1, allocate_pvs, &removal_lvs))
 		return 0;
@@ -3667,14 +3659,14 @@ TAKEOVER_HELPER_FN(_raid14510_linear)
 
 	dm_list_init(&removal_lvs);
 
-	if (!_lv_is_synced(lv))
-		return 0;
-
 	if (seg->area_count > 2 && !seg_is_raid1(seg)) {
 		log_error("Can't convert %s with!%u images",
 			  display_lvname(lv), seg->area_count);
 		return 0;
 	}
+
+	if (!_lv_is_synced(lv))
+		return 0;
 
 	/*
 	 * Have to remove any reshape space which my be a the beginning of
@@ -3714,7 +3706,7 @@ TAKEOVER_HELPER_FN(_raid145_raid1_raid6)
 	return _lv_update_and_reload_origin_eliminate_lvs(lv, &removal_lvs);
 }
 
-/* Helper: raid1 with 2 images -> raid4/5/10 */
+/* Helper: raid1 with 2 images <-> raid4/5/10 */
 TAKEOVER_HELPER_FN(_raid145_raid4510)
 {
 	struct lv_segment *seg = first_seg(lv);
@@ -3741,7 +3733,12 @@ PFL();
 	if (new_image_count && new_image_count != 2)
 		log_error("Ignoring new image count for %s", display_lvname(lv));
 
-	if (!_lv_free_reshape_space(lv)) {
+	/*
+	 * Have to remove any reshape space which my be a the beginning of
+	 * the component data images or linear ain't happy about data content
+	 */
+	if (segtype_is_raid1(new_segtype) &&
+	    !_lv_free_reshape_space(lv)) {
 		log_error(INTERNAL_ERROR "Failed to free reshape space");
 		return 0;
 	}
@@ -4305,6 +4302,12 @@ TAKEOVER_FN(_r45_r6)
 		return 0;
 	}
 
+	if (seg->area_count < 3) {
+		log_error("Please convert %s from 1 stripe to at least 2 first for this conversion",
+			  display_lvname(lv));
+		return 0;
+	}
+
 	if (segtype_is_any_raid6(new_segtype) &&
 	    !(new_segtype = get_segtype_from_flag(lv->vg->cmd, _raid_seg_flag_5_to_6(seg)))) {
 		log_error(INTERNAL_ERROR "Failed to get raid5 -> raid6 conversion type");
@@ -4391,7 +4394,7 @@ TAKEOVER_FN(_r6_r6)
 	struct lv_segment *seg = first_seg(lv);
 
 	if (seg->segtype == new_segtype) {
-		_log_possible_conversion_types(lv);
+		_noop(lv, 0, 0, NULL, 0, 0, 0, allocate_pvs);
 		return 0;
 	}
 
@@ -4469,12 +4472,12 @@ TAKEOVER_FN(_r10_r45)
 	return _raid10_raid145(lv, 0, 0, new_segtype,0, 0, 0, allocate_pvs);
 }
 
-
 /*
  * 2-dimensional takeover function array defining the
  * FSM of possible/impossible or noop (i.e. requested
  * conversion already given on the lv) conversions
  *
+ * Rows define from segtype and columns to segtype
  */
 static takeover_fn_t _takeover_fn_table[9][9] = {
 	/* from |, to ->    linear  striped   mirror   raid0    raid0_meta  raid1    raid4/5     raid6  raid10 */
@@ -4490,11 +4493,8 @@ static takeover_fn_t _takeover_fn_table[9][9] = {
 	/* raid10      */ { _r10_l,  _r10_s,  _r10_m,  _r10_r0, _r10_r0m,   _r10_r1, _r10_r45,  _error,  _error   },
 };
 
-/* END Construction site of takeover handler function jump table solution */
+/* End: various conversions between layers (aka MD takeover) */
 /****************************************************************************/
-/****************************************************************************/
-/****************************************************************************/
-
 
 /*
  * lv_raid_convert
@@ -4557,7 +4557,7 @@ int lv_raid_convert(struct logical_volume *lv,
 		    unsigned new_stripe_size,
 		    struct dm_list *allocate_pvs)
 {
-	int segtype_change, stripe_size_change, y;
+	int r, segtype_change, stripe_size_change, y;
 	uint32_t stripes = new_stripes;
 	unsigned cur_redundancy, new_redundancy;
 	struct lv_segment *seg = first_seg(lv);
@@ -4741,16 +4741,31 @@ PFLA("cur_redundancy=%u new_redundancy=%u", cur_redundancy, new_redundancy);
 		return_0;
 	
 	/*
-	 * Staying on the same level -> reshape required to change #stripes (i.e. # of disks)
+	 * Staying on the same level -> reshape required to change:
+	 *
+	 * - #stripes (i.e. # of disks)
+	 * - stripe size
+	 * - layout (e.g. raid6_zr -> raid6_ls_6
 	 */
-	if (is_same_level(seg->segtype, new_segtype) && stripes && _data_rimages_count(seg, seg->area_count) != stripes)
+	if (is_same_level(seg->segtype, new_segtype) &&
+	    seg_is_striped_raid(seg) &&
+	    !seg_is_any_raid0(seg) &&
+	    ((stripes && _data_rimages_count(seg, seg->area_count) != stripes) ||
+	     (new_stripe_size && new_stripe_size != seg->stripe_size))) {
+		stripes = stripes ?: _data_rimages_count(seg, seg->area_count);
+
 		return _raid_reshape(lv, new_segtype, yes, force, stripes, new_stripe_size, allocate_pvs);
+	}
 
 	/*
 	 * Table driven takeover, i.e. conversions from one segment type to another
 	 */
-	return _takeover_fn_table[_takeover_fn_idx(seg->segtype, seg->area_count)][_takeover_fn_idx(new_segtype, new_image_count)]
-	       (lv, yes, force, new_segtype, new_image_count, new_stripes, new_stripe_size, allocate_pvs);
+	r = _takeover_fn_table[_takeover_fn_idx(seg->segtype, seg->area_count)][_takeover_fn_idx(new_segtype, new_image_count)]
+	     (lv, yes, force, new_segtype, new_image_count, new_stripes, new_stripe_size, allocate_pvs);
+	if (!r)
+		_log_possible_conversion_types(lv);
+
+	return r;
 
 err:
 	/* FIXME: enhance message */

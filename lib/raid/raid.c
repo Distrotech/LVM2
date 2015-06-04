@@ -495,13 +495,12 @@ static const struct raid_type {
 	{ SEG_TYPE_NAME_RAID1,      0, SEG_RAID1 | SEG_AREAS_MIRRORED },
 	{ SEG_TYPE_NAME_RAID10,     0, SEG_RAID10 | SEG_AREAS_MIRRORED },
 	{ SEG_TYPE_NAME_RAID4,      1, SEG_RAID4 },
-	{ SEG_TYPE_NAME_RAID5,      1, SEG_RAID5 }, /* is raid5_ls */
 	{ SEG_TYPE_NAME_RAID5_N,    1, SEG_RAID5_N },
 	{ SEG_TYPE_NAME_RAID5_LA,   1, SEG_RAID5_LA },
 	{ SEG_TYPE_NAME_RAID5_LS,   1, SEG_RAID5_LS },
 	{ SEG_TYPE_NAME_RAID5_RA,   1, SEG_RAID5_RA },
 	{ SEG_TYPE_NAME_RAID5_RS,   1, SEG_RAID5_RS },
-	{ SEG_TYPE_NAME_RAID6,      2, SEG_RAID6 }, /* is raid6_zr */
+	{ SEG_TYPE_NAME_RAID5,      1, SEG_RAID5 }, /* is raid5_ls */
 	{ SEG_TYPE_NAME_RAID6_NC,   2, SEG_RAID6_NC },
 	{ SEG_TYPE_NAME_RAID6_NR,   2, SEG_RAID6_NR },
 	{ SEG_TYPE_NAME_RAID6_ZR,   2, SEG_RAID6_ZR },
@@ -510,6 +509,7 @@ static const struct raid_type {
 	{ SEG_TYPE_NAME_RAID6_RA_6, 2, SEG_RAID6_RA_6 },
 	{ SEG_TYPE_NAME_RAID6_RS_6, 2, SEG_RAID6_RS_6 },
 	{ SEG_TYPE_NAME_RAID6_N_6,  2, SEG_RAID6_N_6 },
+	{ SEG_TYPE_NAME_RAID6,      2, SEG_RAID6 }, /* is raid6_zr */
 };
 
 static struct segment_type *_init_raid_segtype(struct cmd_context *cmd,

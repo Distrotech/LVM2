@@ -1823,58 +1823,6 @@ static int _lvconvert_mirrors(struct cmd_context *cmd,
 	return 1;
 }
 
-static int _is_valid_raid_conversion(const struct segment_type *from_segtype,
-				     const struct segment_type *to_segtype)
-{
-	if (from_segtype == to_segtype)
-		return 1;
-
-PFLA("from_segtype=%s to_segtype=%s\n", from_segtype->name, to_segtype->name);
-	/* From striped to mirror or vice-versa */
-	if (segtype_is_striped(from_segtype) &&
-	    segtype_is_mirror(to_segtype))
-		return 1;
-
-	if (segtype_is_mirror(from_segtype) &&
-	    segtype_is_striped(to_segtype))
-		return 1;
-
-	/* From striped to raid0 or vice-versa */
-	if (segtype_is_striped(from_segtype) &&
-	    segtype_is_raid(to_segtype))
-		return 1;
-
-	if (segtype_is_raid(from_segtype) &&
-	    (segtype_is_linear(to_segtype) || segtype_is_striped(to_segtype)))
-		return 1;
-
-	/* From linear to raid1 or vice-versa */
-	if (segtype_is_linear(from_segtype) &&
-	    segtype_is_raid1(to_segtype))
-		return 1;
-
-	if (segtype_is_raid1(from_segtype) &&
-	    segtype_is_linear(to_segtype))
-		return 1;
-
-	/* From mirror to raid1 */
-	if (segtype_is_mirror(from_segtype) &&
-	    segtype_is_raid1(to_segtype))
-		return 1;
-
-	/* From mirror to raid1 */
-	if (segtype_is_raid1(from_segtype) &&
-	    segtype_is_mirror(to_segtype))
-		return 1;
-
-	/* From raid to raid */
-	if (segtype_is_raid(from_segtype) &&
-	    segtype_is_raid(to_segtype))
-		return 1;
-
-	return 0;
-}
-
 static void _lvconvert_raid_repair_ask(struct cmd_context *cmd,
 				       struct lvconvert_params *lp,
 				       int *replace_dev)
@@ -1929,15 +1877,6 @@ PFLA("stripes_ARG=%u stripes_long_ARG=%u", arg_count(lv->vg->cmd, stripes_ARG), 
 
 	if (!_lvconvert_validate_thin(lv, lp))
 		return_0;
-
-#if 0
-	if (!_is_valid_raid_conversion(seg->segtype, lp->segtype)) {
-		log_error("Unable to convert %s/%s from %s to %s",
-			  lv->vg->name, lv->name,
-			  lvseg_name(seg), lp->segtype->name);
-		return 0;
-	}
-#endif
 
 	/* Change number of RAID1 images */
 	if (arg_count(cmd, mirrors_ARG) || arg_count(cmd, splitmirrors_ARG)) {
@@ -3522,7 +3461,7 @@ static int _lvconvert_single(struct cmd_context *cmd, struct logical_volume *lv,
 		if (arg_count(cmd, repair_ARG) && arg_count(cmd, use_policies_ARG))
 			_remove_missing_empty_pv(lv->vg, failed_pvs);
 	} else
-		log_error("Nothing to do");
+		log_error("Unsupported conversion");
 
 	return ECMD_PROCESSED;
 }
