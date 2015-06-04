@@ -728,7 +728,6 @@ int vgcreate_params_set_from_args(struct cmd_context *cmd,
 	int locking_type;
 	int use_lvmlockd;
 	int use_clvmd;
-	int clustery;
 	int lock_type_num; /* LOCK_TYPE_ */
 
 	vp_new->vg_name = skip_dev_dir(cmd, vp_def->vg_name, NULL);
@@ -885,41 +884,37 @@ int vgcreate_params_set_from_args(struct cmd_context *cmd,
 
 	} else if (arg_is_set(cmd, clustered_ARG)) {
 		const char *arg_str = arg_str_value(cmd, clustered_ARG, "");
+		int clustery = strcmp(arg_str, "y") ? 0 : 1;
 
-		if (use_lvmlockd) {
-			log_error("Use --shared with lvmlockd, and --clustered with clvmd.");
+		if (use_clvmd) {
+			lock_type = clustery ? "clvm" : "none";
+
+		} else if (use_lvmlockd) {
+			log_error("lvmlockd is configured, use --shared with lvmlockd, and --clustered with clvmd.");
 			return 0;
-		}
 
-		if (!use_clvmd) {
-			log_error("The --clustered option requires clvmd (locking_type=3).");
-			return 0;
-		}
-
-		if (!strcmp(arg_str, "y")) {
-			clustery = 1;
-		} else if (!strcmp(arg_str, "n")) {
-			clustery = 0;
 		} else {
-			log_error("Unknown clustered value");
-			return 0;
+			if (clustery) {
+				log_error("The --clustered option requires clvmd (locking_type=3).");
+				return 0;
+			} else {
+				lock_type = "none";
+			}
 		}
-
-		lock_type = clustery ? "clvm" : "none";
 
 	} else if (arg_is_set(cmd, shared_ARG)) {
-		if (use_clvmd) {
+		if (use_lvmlockd) {
+			if (!(lock_type = lockd_running_lock_type(cmd))) {
+				log_error("Failed to detect a running lock manager to select lock_type.");
+				return 0;
+			}
+
+		} else if (use_clvmd) {
 			log_error("Use --shared with lvmlockd, and --clustered with clvmd.");
 			return 0;
-		}
 
-		if (!use_lvmlockd) {
+		} else {
 			log_error("The --shared option requires lvmlockd (use_lvmlockd=1).");
-			return 0;
-		}
-
-		if (!(lock_type = lockd_running_lock_type(cmd))) {
-			log_error("Failed to detect a running lock manager to select lock_type.");
 			return 0;
 		}
 
