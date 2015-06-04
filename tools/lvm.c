@@ -16,9 +16,62 @@
 #include "tools.h"
 #include "lvm2cmdline.h"
 
+static char *str_dup_no_mid_hyphen(char *arg)
+{
+	size_t len = strlen(arg) + 1;
+	char *arg_new;
+	int i, i_new;
+
+	if (arg[0] == '-' && arg[1] == '-') {
+		if (!(arg_new = dm_zalloc(len)))
+			return arg;
+
+		arg_new[0] = '-';
+		arg_new[1] = '-';
+
+		for (i = 2, i_new = 2; i < len; i++) {
+			if (arg[i] == '-')
+				continue;
+			arg_new[i_new] = arg[i];
+			i_new++;
+		}
+
+		return arg_new;
+	} else {
+		return arg;
+	}
+}
+
 int main(int argc, char **argv)
 {
-	return lvm2_main(argc, argv);
+	char **argv_new;
+	int ret;
+	int i;
+
+	if (!(argv_new = dm_zalloc((argc + 1) * sizeof(char *)))) {
+		argv_new = argv;
+		goto run;
+	}
+
+	argv_new[0] = argv[0];
+
+	for (i = 1; i < argc; i++) {
+		if (!(argv_new[i] = str_dup_no_mid_hyphen(argv[i]))) {
+			argv_new = argv;
+			goto run;
+		}
+	}
+run:
+	ret = lvm2_main(argc, argv_new);
+
+	for (i = 1; i < argc; i++) {
+		if (argv_new[i] != argv[i])
+			dm_free(argv_new[i]);
+	}
+	if (argv_new != argv)
+		dm_free(argv_new);
+
+	return ret;
 }
 
 #ifdef READLINE_SUPPORT
