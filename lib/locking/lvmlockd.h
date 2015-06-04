@@ -273,7 +273,7 @@ static inline const char *lockd_running_lock_type(struct cmd_context *cmd)
 	return NULL;
 }
 
-int handle_sanlock_lv(struct cmd_context *cmd, struct volume_group *vg)
+static inline int handle_sanlock_lv(struct cmd_context *cmd, struct volume_group *vg)
 {
 	return 0;
 }
