@@ -2643,17 +2643,20 @@ static int _lvconvert_pool(struct cmd_context *cmd,
 {
 	int r = 0;
 	const char *old_name;
-	const char *lock_free_meta_name = NULL;
-	const char *lock_free_data_name = NULL;
-	struct id *lock_free_meta_id;
-	struct id *lock_free_data_id;
 	struct lv_segment *seg;
 	struct volume_group *vg = pool_lv->vg;
 	struct logical_volume *data_lv;
 	struct logical_volume *metadata_lv = NULL;
 	struct logical_volume *pool_metadata_lv;
+	char *free_data_name = NULL;
+	char *free_meta_name = NULL;
+	struct id free_data_id;
+	struct id free_meta_id;
 	char metadata_name[NAME_LEN], data_name[NAME_LEN];
 	int activate_pool;
+
+	memset(&free_data_id, 0, sizeof(free_data_id));
+	memset(&free_meta_id, 0, sizeof(free_meta_id));
 
 	if (lp->pool_data_name) {
 		if ((lp->thin || lp->cache) &&
@@ -2666,6 +2669,12 @@ static int _lvconvert_pool(struct cmd_context *cmd,
 			log_error("Unknown pool data LV %s.", lp->pool_data_name);
 			return 0;
 		}
+	}
+
+	/* An existing LV needs to have its lock freed once it becomes a data LV. */
+	if (!lv_is_pool(pool_lv)) {
+		free_data_name = dm_pool_strdup(cmd->mem, pool_lv->name);
+		memcpy(&free_data_id, &pool_lv->lvid.id[1], sizeof(struct id));
 	}
 
 	if (!lv_is_visible(pool_lv)) {
@@ -2722,6 +2731,10 @@ static int _lvconvert_pool(struct cmd_context *cmd,
 		}
 		lp->pool_metadata_extents = lp->pool_metadata_lv->le_count;
 		metadata_lv = lp->pool_metadata_lv;
+
+		/* An existing LV needs to have its lock freed once it becomes a meta LV. */
+		free_meta_name = dm_pool_strdup(cmd->mem, metadata_lv->name);
+		memcpy(&free_meta_id, &metadata_lv->lvid.id[1], sizeof(struct id));
 
 		if (metadata_lv == pool_lv) {
 			log_error("Can't use same LV for pool data and metadata LV %s.",
@@ -2986,36 +2999,27 @@ static int _lvconvert_pool(struct cmd_context *cmd,
 		return_0;
 
 	/*
-	 * A thin pool lv adopts the lock from the data lv, and the lock for
-	 * the meta lv is unlocked and freed.  A cache pool lv has no lock, and
-	 * the existing lock for both data and meta lvs are unlocked and freed.
+	 * Create a new lock for a thin pool LV.  A cache pool LV has no lock. 
+	 * Locks are removed from existing LVs that are being converted to
+	 * data and meta LVs (they are unlocked and deleted below.)
 	 */
-	if (is_lockd_type(pool_lv->vg->lock_type)) {
-		if (lp->pool_metadata_name) {
-			char *c;
-			if ((c = strchr(lp->pool_metadata_name, '/')))
-				lock_free_meta_name = c + 1;
-			else
-				lock_free_meta_name = lp->pool_metadata_name;
-
-			lock_free_meta_id = &lp->pool_metadata_lv->lvid.id[1];
-		}
-
+	if (is_lockd_type(vg->lock_type)) {
 		if (segtype_is_cache_pool(lp->segtype)) {
-			lock_free_data_name = pool_lv->name;
-			lock_free_data_id = &pool_lv->lvid.id[1];
-			pool_lv->lock_type = NULL;
-			pool_lv->lock_args = NULL;
-		} else  {
-			if (data_lv->lock_type)
-				pool_lv->lock_type = dm_pool_strdup(cmd->mem, data_lv->lock_type);
-			if (data_lv->lock_args)
-				pool_lv->lock_args = dm_pool_strdup(cmd->mem, data_lv->lock_args);
+			data_lv->lock_type = NULL;
+			data_lv->lock_args = NULL;
+			metadata_lv->lock_type = NULL;
+			metadata_lv->lock_args = NULL;
+		} else {
+			data_lv->lock_type = NULL;
+			data_lv->lock_args = NULL;
+			metadata_lv->lock_type = NULL;
+			metadata_lv->lock_args = NULL;
+
+			pool_lv->lock_type = dm_pool_strdup(cmd->mem, vg->lock_type);
+			if (!strcmp(pool_lv->lock_type, "sanlock"))
+				pool_lv->lock_args = "pending";
+			/* The lock_args will be set in vg_write(). */
 		}
-		data_lv->lock_type = NULL;
-		data_lv->lock_args = NULL;
-		metadata_lv->lock_type = NULL;
-		metadata_lv->lock_args = NULL;
 	}
 
 	/* FIXME: revert renamed LVs in fail path? */
@@ -3051,6 +3055,11 @@ mda_write:
 		log_warn("WARNING: Pool zeroing and large %s chunk size slows down "
 			 "provisioning.", display_size(cmd, seg->chunk_size));
 
+	if (activate_pool && !lockd_lv(cmd, pool_lv, "ex", LDLV_PERSISTENT)) {
+		log_error("Failed to lock pool LV %s/%s", vg->name, pool_lv->name);
+		goto out;
+	}
+
 	if (activate_pool &&
 	    !activate_lv_excl(cmd, pool_lv)) {
 		log_error("Failed to activate pool logical volume %s.",
@@ -3075,20 +3084,20 @@ out:
 					(segtype_is_cache_pool(lp->segtype)) ?
 					"cache" : "thin");
 
-	if (lock_free_meta_name) {
-		if (!lockd_lv_name(cmd, pool_lv->vg, lock_free_meta_name, lock_free_meta_id, NULL, "un", LDLV_PERSISTENT)) {
-			log_error("Failed to unlock pool metadata LV %s/%s",
-				  pool_lv->vg->name, lock_free_meta_name);
-		}
-		lockd_free_lv(cmd, pool_lv->vg, lock_free_meta_name, lock_free_meta_id, NULL);
+	/*
+	 * Unlock and free the locks from existing LVs that became pool data
+	 * and meta LVs.
+	 */
+	if (free_data_name) {
+		if (!lockd_lv_name(cmd, vg, free_data_name, &free_data_id, NULL, "un", LDLV_PERSISTENT))
+			log_error("Failed to unlock pool data LV %s/%s", vg->name, free_data_name);
+		lockd_free_lv(cmd, vg, free_data_name, &free_data_id, NULL);
 	}
 
-	if (lock_free_data_name) {
-		if (!lockd_lv_name(cmd, pool_lv->vg, lock_free_data_name, lock_free_data_id, NULL, "un", LDLV_PERSISTENT)) {
-			log_error("Failed to unlock pool data LV %s/%s",
-				  pool_lv->vg->name, lock_free_data_name);
-		}
-		lockd_free_lv(cmd, pool_lv->vg, lock_free_data_name, lock_free_data_id, NULL);
+	if (free_meta_name) {
+		if (!lockd_lv_name(cmd, vg, free_meta_name, &free_meta_id, NULL, "un", LDLV_PERSISTENT))
+			log_error("Failed to unlock pool metadata LV %s/%s", vg->name, free_meta_name);
+		lockd_free_lv(cmd, vg, free_meta_name, &free_meta_id, NULL);
 	}
 
 	return r;
