@@ -675,7 +675,14 @@ char *vg_attr_dup(struct dm_pool *mem, const struct volume_group *vg)
 	repstr[2] = (vg_is_exported(vg)) ? 'x' : '-';
 	repstr[3] = (vg_missing_pv_count(vg)) ? 'p' : '-';
 	repstr[4] = alloc_policy_char(vg->alloc);
-	repstr[5] = (vg_is_clustered(vg)) ? 'c' : '-';
+
+	if (vg_is_clustered(vg))
+		repstr[5] = 'c';
+	else if (is_lockd_type(vg->lock_type))
+		repstr[5] = 's';
+	else
+		repstr[5] = '-';
+
 	return repstr;
 }
 
