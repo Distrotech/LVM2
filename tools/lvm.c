@@ -76,7 +76,7 @@ run:
 
 int main(int argc, char **argv)
 {
-	return lvm2_main(argc, argv_new);
+	return lvm2_main(argc, argv);
 }
 
 #ifdef READLINE_SUPPORT
