@@ -16,66 +16,33 @@
 #include "tools.h"
 #include "lvm2cmdline.h"
 
-#if 0
-static char *str_dup_no_mid_hyphen(char *arg)
-{
-	size_t len = strlen(arg) + 1;
-	char *arg_new;
-	int i, i_new;
-
-	if (arg[0] == '-' && arg[1] == '-') {
-		if (!(arg_new = dm_zalloc(len)))
-			return arg;
-
-		arg_new[0] = '-';
-		arg_new[1] = '-';
-
-		for (i = 2, i_new = 2; i < len; i++) {
-			if (arg[i] == '-')
-				continue;
-			arg_new[i_new] = arg[i];
-			i_new++;
-		}
-
-		return arg_new;
-	} else {
-		return arg;
-	}
-}
-
-/* If allocation fails, just use the args provided in the original argv. */
+#define MAX_ARG_LEN 64
 
 int main(int argc, char **argv)
 {
-	char **argv_new;
-	int ret;
-	int i;
-
-	if (!(argv_new = dm_zalloc((argc + 1) * sizeof(char *)))) {
-		argv_new = argv;
-		goto run;
-	}
-
-	argv_new[0] = argv[0];
-
-	for (i = 1; i < argc; i++)
-		argv_new[i] = str_dup_no_mid_hyphen(argv[i]);
-run:
-	ret = lvm2_main(argc, argv_new);
+	char arg_new[MAX_ARG_LEN];
+	char *arg;
+	int i, j, j_new;
 
 	for (i = 1; i < argc; i++) {
-		if (argv_new[i] != argv[i])
-			dm_free(argv_new[i]);
+		arg = argv[i];
+
+		if (arg[0] == '-' && arg[1] == '-' && strlen(arg) < MAX_ARG_LEN) {
+			memset(arg_new, 0, sizeof(arg_new));
+			arg_new[0] = '-';
+			arg_new[1] = '-';
+
+			for (j = 2, j_new = 2; j < strlen(arg) + 1; j++) {
+				if (arg[j] == '-')
+					continue;
+				arg_new[j_new] = arg[j];
+				j_new++;
+			}
+
+			memcpy(argv[i], arg_new, strlen(arg_new) + 1);
+		}
 	}
-	if (argv_new != argv)
-		dm_free(argv_new);
 
-	return ret;
-}
-#endif
-
-int main(int argc, char **argv)
-{
 	return lvm2_main(argc, argv);
 }
 
