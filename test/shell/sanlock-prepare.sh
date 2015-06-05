@@ -83,7 +83,3 @@ vgcreate --config 'devices { global_filter=["a|GL_DEV|", "r|.*|"] filter=["a|GL_
 
 vgs --config 'devices { global_filter=["a|GL_DEV|", "r|.*|"] filter=["a|GL_DEV|", "r|.*|"]}' -o+locktype,lockargs glvg
 
-# FIXME: make this work
-alias vgcreate="vgcreate --lock-type sanlock"
-
-
