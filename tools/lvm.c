@@ -16,6 +16,7 @@
 #include "tools.h"
 #include "lvm2cmdline.h"
 
+#if 0
 static char *str_dup_no_mid_hyphen(char *arg)
 {
 	size_t len = strlen(arg) + 1;
@@ -70,6 +71,12 @@ run:
 		dm_free(argv_new);
 
 	return ret;
+}
+#endif
+
+int main(int argc, char **argv)
+{
+	return lvm2_main(argc, argv_new);
 }
 
 #ifdef READLINE_SUPPORT
