@@ -280,7 +280,7 @@ LVM commands request locks from clvmd to use the VG.
 
 .P
 
-.SS new lockd VGs
+.SS using lockd VGs
 
 When use_lvmlockd is first enabled, and before the first lockd VG is
 created, no global lock will exist, and LVM commands will try and fail to
@@ -292,6 +292,10 @@ exclusively will fail.
 When a new lockd VG is created, its lockspace is automatically started on
 the host that creates the VG.  Other hosts will need to run 'vgcreate
 --lock-start' to start the new VG before they can use it.
+
+From the 'vgs' reporting command, lockd VGs are indicated by "s" (for
+shared) in the sixth attr field.  The specific lock type and lock args
+for a lockd VG can be displayed with 'vgs -o+locktype,lockargs'.
 
 
 .SS starting and stopping VGs
@@ -352,18 +356,16 @@ activation {
 .SS automatic starting and automatic activation
 
 Scripts or programs on a host that automatically start VGs will use the
-"auto" option with --lock-start to indicate that the command is being run
-automatically by the system:
+"auto" option to indicate that the command is being run automatically by
+the system:
 
 vgchange --lock-start --lock-opt auto [vg_name ...]
-.br
-vgchange --lock-start --lock-opt autowait [vg_name ...]
 
-By default, the "auto" variations have identical behavior to
---lock-start and '--lock-start --lock-opt wait' options.
+Without any additional configuration, including the "auto" option has no
+effect; all VGs are started unless restricted by lock_start_list.
 
 However, when the lvm.conf activation/auto_lock_start_list is defined, the
-auto start commands perform an additional filtering phase to all VGs being
+auto start command performs an additional filtering phase to all VGs being
 started, testing each VG name against the auto_lock_start_list.  The
 auto_lock_start_list defines lockd VGs that will be started by the auto
 start command.  Visible lockd VGs not included in the list are ignored by
@@ -380,35 +382,38 @@ auto starting of the corresponding lockd VGs is necessary.
 
 .SS locking activity
 
-To optimize the use of LVM with lvmlockd, consider the three kinds of LVM
-locks and when they are used:
+To optimize the use of LVM with lvmlockd, consider the three kinds of
+locks in lvmlockd and when they are used:
 
-1.
 .I GL lock
 
 The global lock (GL lock) is associated with global information, which is
-information not isolated to a single VG.  This is primarily:
+information not isolated to a single VG.  This includes:
 
-.nf
 - The global VG namespace.
+.br
 - The set of orphan PVs and unused devices.
+.br
 - The properties of orphan PVs, e.g. PV size.
-.fi
 
 The global lock is used in shared mode by commands that read this
 information, or in exclusive mode by commands that change it.
 
-The vgs command acquires the global lock in shared mode because it reports
-the list of all VG names.
+The command 'vgs' acquires the global lock in shared mode because it
+reports the list of all VG names.
 
 The vgcreate command acquires the global lock in exclusive mode because it
 creates a new VG name, and it takes a PV from the list of unused PVs.
+
+When an LVM command is given a tag argument, or uses select, it must read
+all VGs to match the tag or selection, which causes the global lock to be
+acquired.  To avoid use of the global lock, avoid using tags and select,
+and specify VG name arguments.
 
 When use_lvmlockd is enabled, LVM commands attempt to acquire the global
 lock even if no lockd VGs exist.  For this reason, lvmlockd should not be
 enabled unless lockd VGs will be used.
 
-2.
 .I VG lock
 
 A VG lock is associated with each VG.  The VG lock is acquired in shared
@@ -416,14 +421,14 @@ mode to read the VG and in exclusive mode to change the VG (modify the VG
 metadata).  This lock serializes modifications to a VG with all other LVM
 commands on other hosts.
 
-The vgs command will not only acquire the GL lock (see above), but will
-acquire the VG lock for each VG prior to reading it.
+The command 'vgs' will not only acquire the GL lock to read the list of
+all VG names, but will acquire the VG lock for each VG prior to reading
+it.
 
-The "vgs vg_name" command does not acquire the GL lock (it does not need
-the list of all VG names), but will acquire the VG lock on each vg_name
-listed.
+The command 'vgs <vg_name>' does not acquire the GL lock (it does not need
+the list of all VG names), but will acquire the VG lock on each VG name
+argument.
 
-3.
 .I LV lock
 
 An LV lock is acquired before the LV is activated, and is released after
@@ -431,6 +436,15 @@ the LV is deactivated.  If the LV lock cannot be acquired, the LV is not
 activated.  LV locks are persistent and remain in place after the
 activation command is done.  GL and VG locks are transient, and are held
 only while an LVM command is running.
+
+.I retries
+
+If a request for a GL or VG lock fails due to a lock conflict with another
+host, lvmlockd automatically retries for a short time before returning a
+failure to the LVM command.  The LVM command will then retry the entire
+lock request a number of times specified by global/lock_retries before
+failing.  If a request for an LV lock fails due to a lock conflict, the
+command fails immediately.
 
 
 .SS sanlock global lock
@@ -469,7 +483,7 @@ lvmlockctl --gl-disable <vg_name>
 
 An opposite problem can occur if the VG holding the global lock is
 removed.  In this case, no global lock will exist following the vgremove,
-and subsequent lvm commands will fail to acquire it.  In this case, the
+and subsequent LVM commands will fail to acquire it.  In this case, the
 global lock needs to be manually enabled in one of the remaining sanlock
 VGs with the command:
 
@@ -588,7 +602,7 @@ locks from the lock manager that had been held by the previous instance.
 If dlm or corosync fail, the clustering system will fence the host using a
 method configured within the dlm/corosync clustering environment.
 
-lvm commands on other hosts will be blocked from acquiring any locks until
+LVM commands on other hosts will be blocked from acquiring any locks until
 the dlm/corosync recovery process is complete.
 
 .B sanlock lock storage failure
@@ -607,10 +621,10 @@ the host's LV locks not being released, which leads to sanlock using the
 local watchdog to reset the host before another host can acquire any locks
 held by the local host.
 
-lvm commands on other hosts will be blocked from acquiring locks held by
+LVM commands on other hosts will be blocked from acquiring locks held by
 the failed/reset host until the sanlock recovery time expires (2-4
 minutes).  This includes activation of any LVs that were locked by the
-failed host.  It also includes GL/VG locks held by any lvm commands that
+failed host.  It also includes GL/VG locks held by any LVM commands that
 happened to be running on the failed host at the time of the failure.
 
 (In the future, lvmlockd may have the option to suspend locked LVs in
@@ -731,6 +745,7 @@ global/lock_retries.
 .IP \[bu] 2
 The reporting options locktype and lockargs can be used to view lockd VG
 and LV lock_type and lock_args fields, i.g. vgs -o+locktype,lockargs.
+In the sixth VG attr field, "s" for "shared" is displayed for lockd VGs.
 
 .IP \[bu] 2
 If lvmlockd fails or is killed while in use, locks it held remain but are
