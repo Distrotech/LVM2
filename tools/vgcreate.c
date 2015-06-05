@@ -158,6 +158,8 @@ int vgcreate(struct cmd_context *cmd, int argc, char **argv)
 			goto out;
 		}
 
+		lockd_gl(cmd, "un", 0);
+
 		if (!start_opt || !strcmp(start_opt, "wait")) {
 			/* It is OK if the user does Ctrl-C to cancel the wait. */
 			log_print_unless_silent("Starting locking.  Waiting until locks are ready...");
