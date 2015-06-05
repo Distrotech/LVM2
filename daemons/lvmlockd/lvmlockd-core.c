@@ -2958,7 +2958,7 @@ static int work_init_lv(struct action *act)
 	char ls_name[MAX_NAME+1];
 	char vg_args[MAX_ARGS];
 	char lv_args[MAX_ARGS];
-	uint64_t free_offset;
+	uint64_t free_offset = 0;
 	int lm_type = 0;
 	int rv = 0;
 
