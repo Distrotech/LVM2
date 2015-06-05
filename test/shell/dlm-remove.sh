@@ -15,7 +15,6 @@ test_description='Remove the dlm test setup'
 
 [ -z "$LVM_TEST_LOCK_TYPE_DLM" ] && skip;
 
-# FIXME: reverse prepare_lvmlockd_dlm
-killall dlm_controld
-killall corosync
-
+systemctl stop dlm
+systemctl stop corosync
+killall lvmlockd
