@@ -386,7 +386,7 @@ static int do_dump(const char *req_name)
 {
 	daemon_reply reply;
 	int result;
-	int fd, rv;
+	int fd, rv = 0;
 
 	fd = setup_dump_socket();
 	if (fd < 0) {
