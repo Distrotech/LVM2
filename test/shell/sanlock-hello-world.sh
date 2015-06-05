@@ -17,9 +17,11 @@ test_description='Hello world for vgcreate with sanlock'
 
 aux prepare_pvs 1 1024
 
-vgcreate --lock-type sanlock --lock-opt wait $vg "$dev1"
+vgcreate --shared $vg "$dev1"
 
 vgs -o+locktype,lockargs $vg
+
+check vg_field $vg vg_locktype sanlock
 
 vgremove $vg
 
