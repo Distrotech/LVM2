@@ -234,6 +234,8 @@ int init_raid_segtypes(struct cmd_context *cmd, struct segtype_library *seglib);
 					 (SEG_RAID6_ZR|SEG_RAID6_NC|SEG_RAID6_NR| \
 					  SEG_RAID6_LS_6|SEG_RAID6_LA_6|SEG_RAID6_RS_6|SEG_RAID6_RA_6|SEG_RAID6_N_6)) ? 1 : 0)
 #define segtype_is_striped_raid(segtype)	(segtype_is_raid(segtype) && !segtype_is_raid1(segtype))
+#define segtype_is_reshapable_raid(segtype)	(segtype_is_raid10(segtype) || segtype_is_raid4(segtype) || \
+						 segtype_is_any_raid5(segtype) || segtype_is_any_raid6(segtype))
 
 #define seg_is_raid0(seg)		segtype_is_raid0((seg)->segtype)
 #define seg_is_raid0_meta(seg)		segtype_is_raid0_meta((seg)->segtype)
@@ -258,6 +260,7 @@ int init_raid_segtypes(struct cmd_context *cmd, struct segtype_library *seglib);
 #define seg_is_raid6_nc(seg)		segtype_is_raid6_nc((seg)->segtype)
 #define seg_is_raid6_nr(seg)		segtype_is_raid6_nr((seg)->segtype)
 #define seg_is_striped_raid(seg)	segtype_is_striped_raid((seg)->segtype)
+#define seg_is_reshapable_raid(seg)	segtype_is_reshapable_raid((seg)->segtype)
 
 #ifdef REPLICATOR_INTERNAL
 int init_replicator_segtype(struct cmd_context *cmd, struct segtype_library *seglib);

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2005-2014 Red Hat, Inc. All rights reserved.
+ * Copyright (C) 2005-2015 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
  *
@@ -382,7 +382,6 @@ static int _read_params(struct cmd_context *cmd, int argc, char **argv,
 
 	if (!_check_conversion_type(cmd, type_str))
 		return_0;
-
 #if 1
 	/* FIXME: TESTME */
 	if (arg_count(cmd, type_ARG) &&
@@ -1860,7 +1859,6 @@ static int _lvconvert_raid(struct logical_volume *lv, struct lvconvert_params *l
 
 	if (!arg_count(cmd, type_ARG))
 		lp->segtype = seg->segtype;
-PFLA("stripes_ARG=%u stripes_long_ARG=%u", arg_count(lv->vg->cmd, stripes_ARG), arg_count(lv->vg->cmd, stripes_long_ARG));
 
 	/* -mN can change image count for mirror/raid1 and linear (converting it to mirror/raid1) */
 	/* -m0 can change raid0 with one stripe and raid4/5 with 2 to linear */
@@ -1914,15 +1912,30 @@ PFLA("lp->segtype=%s\n", lp->segtype->name);
 	if ((seg_is_linear(seg) || seg_is_striped(seg) || seg_is_mirrored(seg) || lv_is_raid(lv)) &&
 	    (arg_count(cmd, type_ARG) ||
 	     image_count ||
-	     arg_count(cmd, stripes_ARG) ||
 	     arg_count(cmd, stripes_long_ARG) ||
 	     arg_count(cmd, stripesize_ARG))) {
-		unsigned stripes = (arg_count(cmd, stripes_ARG) || arg_count(cmd, stripes_long_ARG)) ? lp->stripes  : 0;
+		unsigned stripes = 0;
 		unsigned stripe_size = arg_count(cmd, stripesize_ARG) ? lp->stripe_size  : 0;
-PFLA("stripes=%u stripe_size=%u\n", stripes, stripe_size);
 
-		if (seg_is_striped(seg))
-			seg->region_size = lp->region_size;
+		if (arg_count(cmd, stripes_long_ARG)) {
+			unsigned stripe_count = seg->area_count - seg->segtype->parity_devs;
+
+			stripes = lp->stripes;
+
+			switch (arg_sign_value(cmd, stripes_long_ARG, SIGN_NONE)) {
+			case SIGN_PLUS:
+				stripes += stripe_count;
+				break;
+			case SIGN_MINUS:
+				stripes -= stripe_count - stripes;
+				break;
+			case SIGN_NONE:
+				break;
+			}
+		}
+
+		if (seg_is_reshapable_raid(seg) || seg_is_raid1(seg))
+			seg->region_size = lp->region_size ?: 1024;
 
 		/* Check for reshaping support if requested */
 		if (((seg->segtype != lp->segtype && !strncmp(seg->segtype->name, lp->segtype->name, 5)) ||
