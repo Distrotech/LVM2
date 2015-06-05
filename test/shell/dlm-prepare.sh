@@ -17,7 +17,7 @@ test_description='Set up things to run tests with dlm'
 [ -z "$LVM_TEST_LOCK_TYPE_DLM" ] && skip;
 
 COROSYNC_CONF="/etc/corosync/corosync.conf"
-COROSYNC_NODE=`hostname`
+COROSYNC_NODE="$(hostname)"
 create_corosync_conf() {
 	if test -a $COROSYNC_CONF; then
 		if ! grep "created by lvm test suite" $COROSYNC_CONF; then
@@ -27,7 +27,7 @@ create_corosync_conf() {
 		fi
 	fi
 
-	sed -e "s/@LOCAL_NODE@/$(COROSYNC_NODE)/" lib/test-corosync-conf > $COROSYNC_CONF
+	sed -e "s/@LOCAL_NODE@/$COROSYNC_NODE/" lib/test-corosync-conf > $COROSYNC_CONF
 	echo "created new $COROSYNC_CONF"
 }
 
@@ -87,8 +87,4 @@ prepare_lvmlockd_dlm() {
 }
 
 prepare_lvmlockd_dlm
-
-# FIXME: make this work
-alias vgcreate="vgcreate --lock-type dlm"
-
 
