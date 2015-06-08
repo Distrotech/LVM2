@@ -1390,16 +1390,6 @@ static int _raid_extract_images(struct logical_volume *lv, uint32_t new_image_co
 	if (!(error_segtype = get_segtype_from_string(lv->vg->cmd, "error")))
 		return_0;
 
-	dm_list_iterate_items(lvl, &removal_list)
-		if (!activate_lv_excl_local(cmd, lvl->lv))
-			return_0;
-
-	if (!resume_lv(cmd, lv_lock_holder(lv))) {
-		log_error("Failed to resume %s/%s after committing changes",
-			  lv->vg->name, lv->name);
-		return 0;
-	}
-
 	/*
 	 * We make two passes over the devices.
 	 * - The first pass we look for error LVs to handle them first
@@ -5050,29 +5040,6 @@ static int _generate_name_and_set_segment(struct logical_volume *lv,
 
 	lv_set_hidden(lvl->lv);
 	return 1;
-}
-
-static int _avoid_pvs_of_lv(struct logical_volume *lv, void *data)
-{
-	struct dm_list *allocate_pvs = (struct dm_list *) data;
-	struct pv_list *pvl;
-
-	dm_list_iterate_items(pvl, allocate_pvs)
-		if (!(lv->status & PARTIAL_LV) &&
-		    lv_is_on_pv(lv, pvl->pv))
-			pvl->pv->status |= PV_ALLOCATION_PROHIBITED;
-
-	return 1;
- }
-
-/*
- * Prevent any PVs holding other image components of @lv from being used for allocation
- * by setting the internal PV_ALLOCATION_PROHIBITED flag to use it to avoid generating
- * pv maps for those PVs.
- */
-static int _avoid_pvs_with_other_images_of_lv(struct logical_volume *lv, struct dm_list *allocate_pvs)
-{
-	return for_each_sub_lv(lv, _avoid_pvs_of_lv, allocate_pvs);
 }
 
 /*
