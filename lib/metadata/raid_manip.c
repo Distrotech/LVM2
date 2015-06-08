@@ -241,6 +241,22 @@ static int _raid_in_sync(struct logical_volume *lv)
 		log_error("Unable to determine sync status of %s.", display_lvname(lv));
 		return 0;
 	}
+	if (sync_percent == DM_PERCENT_0) {
+		/*
+		 * FIXME We repeat the status read here to workaround an
+		 * unresolved kernel bug when we see 0 even though the 
+		 * the array is 100% in sync.
+		 * https://bugzilla.redhat.com/1210637
+		 */
+		if (!lv_raid_percent(lv, &sync_percent)) {
+			log_error("Unable to determine sync status of %s/%s.",
+				  lv->vg->name, lv->name);
+			return 0;
+		}
+		if (sync_percent == DM_PERCENT_100)
+			log_warn("WARNING: Sync status for %s is inconsistent.",
+				 display_lvname(lv));
+	}
 
 	return (sync_percent == DM_PERCENT_100) ? 1 : 0;
 }
@@ -1098,7 +1114,7 @@ PFLA("rimage_extents_cur=%u rmeta_extents_cur=%u rimage_extents_new=%u rmeta_ext
  * be allocated from the same PV(s) as the data device.
  */
 static int _alloc_rmeta_for_lv(struct logical_volume *data_lv,
-		struct logical_volume **meta_lv)
+			       struct logical_volume **meta_lv)
 {
 	int r = 1;
 	char *p;
@@ -1117,7 +1133,7 @@ static int _alloc_rmeta_for_lv(struct logical_volume *data_lv,
 	_check_and_init_region_size(data_lv);
 
 	if ((p = strstr(data_lv->name, "_mimage_")) ||
-			(p = strstr(data_lv->name, "_rimage_")))
+	    (p = strstr(data_lv->name, "_rimage_")))
 		*p = '\0';
 
 	if (!get_pv_list_for_lv(data_lv->vg->cmd->mem,
@@ -1373,6 +1389,16 @@ static int _raid_extract_images(struct logical_volume *lv, uint32_t new_image_co
 
 	if (!(error_segtype = get_segtype_from_string(lv->vg->cmd, "error")))
 		return_0;
+
+	dm_list_iterate_items(lvl, &removal_list)
+		if (!activate_lv_excl_local(cmd, lvl->lv))
+			return_0;
+
+	if (!resume_lv(cmd, lv_lock_holder(lv))) {
+		log_error("Failed to resume %s/%s after committing changes",
+			  lv->vg->name, lv->name);
+		return 0;
+	}
 
 	/*
 	 * We make two passes over the devices.
@@ -5024,6 +5050,29 @@ static int _generate_name_and_set_segment(struct logical_volume *lv,
 
 	lv_set_hidden(lvl->lv);
 	return 1;
+}
+
+static int _avoid_pvs_of_lv(struct logical_volume *lv, void *data)
+{
+	struct dm_list *allocate_pvs = (struct dm_list *) data;
+	struct pv_list *pvl;
+
+	dm_list_iterate_items(pvl, allocate_pvs)
+		if (!(lv->status & PARTIAL_LV) &&
+		    lv_is_on_pv(lv, pvl->pv))
+			pvl->pv->status |= PV_ALLOCATION_PROHIBITED;
+
+	return 1;
+ }
+
+/*
+ * Prevent any PVs holding other image components of @lv from being used for allocation
+ * by setting the internal PV_ALLOCATION_PROHIBITED flag to use it to avoid generating
+ * pv maps for those PVs.
+ */
+static int _avoid_pvs_with_other_images_of_lv(struct logical_volume *lv, struct dm_list *allocate_pvs)
+{
+	return for_each_sub_lv(lv, _avoid_pvs_of_lv, allocate_pvs);
 }
 
 /*

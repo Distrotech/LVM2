@@ -10,7 +10,14 @@
 
 . lib/inittest
 
+test -e LOCAL_LVMPOLLD && skip
+
 aux prepare_devs 2
 pvcreate "$dev1" "$dev2"
 pvremove "$dev1" "$dev2" 2>&1 | tee pvremove.txt
 not grep "No physical" pvremove.txt
+
+pvcreate "$dev1" "$dev2"
+vgcreate bla "$dev1" "$dev2"
+pvremove -ff -y "$dev1" "$dev2" 2>&1 | tee pvremove.txt
+not grep "device missing" pvremove.txt

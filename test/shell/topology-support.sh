@@ -1,5 +1,5 @@
 #!/bin/sh
-# Copyright (C) 2010 Red Hat, Inc. All rights reserved.
+# Copyright (C) 2010-2015 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
 # modify, copy, or redistribute it subject to the terms and conditions
@@ -11,21 +11,9 @@
 
 . lib/inittest
 
+test -e LOCAL_LVMPOLLD && skip
+
 which mkfs.ext3 || skip
-
-check_logical_block_size() {
-    # Verify logical_block_size - requires Linux >= 2.6.31
-    SYSFS_LOGICAL_BLOCK_SIZE="/sys/block/$(basename $(< SCSI_DEBUG_DEV))/queue/logical_block_size"
-    test -f "$SYSFS_LOGICAL_BLOCK_SIZE" || return 0
-    test "$(< $SYSFS_LOGICAL_BLOCK_SIZE)" -eq "$1" # ACTUAL_LOGICAL_BLOCK_SIZE
-}
-
-check_optimal_io_size() {
-    # Verify optimal_io_size
-    SYSFS_OPTIMAL_IO_SIZE="/sys/block/$(basename $(< SCSI_DEBUG_DEV))/queue/optimal_io_size"
-    test -f "$SYSFS_OPTIMAL_IO_SIZE" || return 0
-    test "$(< $SYSFS_OPTIMAL_IO_SIZE)" -eq "$1" # ACTUAL_OPTIMAL_IO_SIZE
-}
 
 lvdev_() {
     echo "$DM_DEV_DIR/$1/$2"
@@ -38,9 +26,11 @@ test_snapshot_mount() {
     mount "$(lvdev_ $vg $lv1)" test_mnt
     lvcreate -L4M -n $lv2 -s $vg/$lv1
     umount test_mnt
+    aux udev_wait
     # mount the origin
     mount "$(lvdev_ $vg $lv1)" test_mnt
     umount test_mnt
+    aux udev_wait
     # mount the snapshot
     mount "$(lvdev_ $vg $lv2)" test_mnt
     umount test_mnt
@@ -55,23 +45,18 @@ NUM_DEVS=1
 PER_DEV_SIZE=34
 DEV_SIZE=$(($NUM_DEVS*$PER_DEV_SIZE))
 
-# Test that kernel supports topology
-aux prepare_scsi_debug_dev $DEV_SIZE || skip
-
-if [ ! -e /sys/block/$(basename $(< SCSI_DEBUG_DEV))/alignment_offset ] ; then
-	aux cleanup_scsi_debug_dev
-	skip
-fi
-aux cleanup_scsi_debug_dev
-
 # ---------------------------------------------
 # Create "desktop-class" 4K drive
 # (logical_block_size=512, physical_block_size=4096, alignment_offset=0):
 LOGICAL_BLOCK_SIZE=512
 aux prepare_scsi_debug_dev $DEV_SIZE \
     sector_size=$LOGICAL_BLOCK_SIZE physblk_exp=3
-check_logical_block_size $LOGICAL_BLOCK_SIZE
-
+# Test that kernel supports topology
+if [ ! -e /sys/block/$(basename $(< SCSI_DEBUG_DEV))/alignment_offset ] ; then
+	aux cleanup_scsi_debug_dev
+	skip
+fi
+check sysfs "$(< SCSI_DEBUG_DEV)" queue/logical_block_size $LOGICAL_BLOCK_SIZE
 aux prepare_pvs $NUM_DEVS $PER_DEV_SIZE
 get_devs
 
@@ -87,7 +72,7 @@ aux cleanup_scsi_debug_dev
 LOGICAL_BLOCK_SIZE=512
 aux prepare_scsi_debug_dev $DEV_SIZE \
     sector_size=$LOGICAL_BLOCK_SIZE physblk_exp=3 lowest_aligned=7
-check_logical_block_size $LOGICAL_BLOCK_SIZE
+check sysfs "$(< SCSI_DEBUG_DEV)" queue/logical_block_size $LOGICAL_BLOCK_SIZE
 
 aux prepare_pvs $NUM_DEVS $PER_DEV_SIZE
 vgcreate $vg "${DEVICES[@]}"
@@ -102,7 +87,7 @@ aux cleanup_scsi_debug_dev
 LOGICAL_BLOCK_SIZE=4096
 aux prepare_scsi_debug_dev $DEV_SIZE \
     sector_size=$LOGICAL_BLOCK_SIZE
-check_logical_block_size $LOGICAL_BLOCK_SIZE
+check sysfs "$(< SCSI_DEBUG_DEV)" queue/logical_block_size $LOGICAL_BLOCK_SIZE
 
 aux prepare_pvs $NUM_DEVS $PER_DEV_SIZE
 vgcreate $vg "${DEVICES[@]}"
@@ -111,6 +96,9 @@ vgremove $vg
 
 aux cleanup_scsi_debug_dev
 
+# scsi_debug option opt_blks appeared in Oct 2010
+aux kernel_at_least 2 6 37 || exit 0
+
 # ---------------------------------------------
 # Create "enterprise-class" 512 drive w/ HW raid stripe_size = 768K
 # (logical_block_size=512, physical_block_size=512, alignment_offset=0):
@@ -118,10 +106,15 @@ aux cleanup_scsi_debug_dev
 LOGICAL_BLOCK_SIZE=512
 aux prepare_scsi_debug_dev $DEV_SIZE \
     sector_size=$LOGICAL_BLOCK_SIZE opt_blks=1536
-check_logical_block_size $LOGICAL_BLOCK_SIZE
-check_optimal_io_size 786432
+
+check sysfs "$(< SCSI_DEBUG_DEV)" queue/logical_block_size $LOGICAL_BLOCK_SIZE
+check sysfs "$(< SCSI_DEBUG_DEV)" queue/optimal_io_size 786432
 
 aux prepare_pvs 1 $PER_DEV_SIZE
-check pv_field "${DEVICES[@]}" pe_start 768.00k
+
+# Kernel (3.19) could provide wrong results - in this case skip
+# test with incorrect result - lvm2 can't figure out good values.
+check sysfs "$dev1" queue/optimal_io_size 786432 || SHOULD=should
+$SHOULD check pv_field "${DEVICES[@]}" pe_start 768.00k
 
 aux cleanup_scsi_debug_dev

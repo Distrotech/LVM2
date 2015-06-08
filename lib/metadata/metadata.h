@@ -72,6 +72,7 @@ struct dm_config_tree;
 struct metadata_area;
 struct alloc_handle;
 struct lvmcache_info;
+struct cached_vg_fmtdata;
 
 /* Per-format per-metadata area operations */
 struct metadata_area_ops {
@@ -79,10 +80,14 @@ struct metadata_area_ops {
 	struct volume_group *(*vg_read) (struct format_instance * fi,
 					 const char *vg_name,
 					 struct metadata_area * mda,
+					 struct cached_vg_fmtdata **vg_fmtdata,
+					 unsigned *use_previous_vg,
 					 int single_device);
 	struct volume_group *(*vg_read_precommit) (struct format_instance * fi,
 					 const char *vg_name,
-					 struct metadata_area * mda);
+					 struct metadata_area * mda,
+					 struct cached_vg_fmtdata **vg_fmtdata,
+					 unsigned *use_previous_vg);
 	/*
 	 * Write out complete VG metadata.  You must ensure internal
 	 * consistency before calling. eg. PEs can't refer to PVs not
@@ -430,9 +435,13 @@ int lv_split_segment(struct logical_volume *lv, uint32_t le);
 int add_seg_to_segs_using_this_lv(struct logical_volume *lv, struct lv_segment *seg);
 int remove_seg_from_segs_using_this_lv(struct logical_volume *lv, struct lv_segment *seg);
 
+int for_each_sub_lv_except_pools(struct logical_volume *lv,
+				 int (*fn)(struct logical_volume *lv, void *data),
+				 void *data);
 int for_each_sub_lv(struct logical_volume *lv,
-                    int (*fn)(struct logical_volume *lv, void *data),
-                    void *data);
+		    int (*fn)(struct logical_volume *lv, void *data),
+		    void *data);
+
 int move_lv_segments(struct logical_volume *lv_to,
 		     struct logical_volume *lv_from,
 		     uint64_t set_status, uint64_t reset_status);

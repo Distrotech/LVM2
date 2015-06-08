@@ -28,7 +28,7 @@ struct logical_volume;
 typedef enum name_error {
 	NAME_VALID = 0,
 	NAME_INVALID_EMPTY = -1,
-	NAME_INVALID_HYPEN = -2,
+	NAME_INVALID_HYPHEN = -2,
 	NAME_INVALID_DOTS = -3,
 	NAME_INVALID_CHARSET = -4,
 	NAME_INVALID_LENGTH = -5
@@ -43,6 +43,8 @@ char *build_dm_uuid(struct dm_pool *mem, const struct logical_volume *lvid,
 int validate_name(const char *n);
 name_error_t validate_name_detailed(const char *n);
 int validate_tag(const char *n);
+
+void copy_systemid_chars(const char *src, char *dst);
 
 int apply_lvname_restrictions(const char *name);
 int is_reserved_lvname(const char *name);

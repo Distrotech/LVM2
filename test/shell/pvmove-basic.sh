@@ -12,6 +12,9 @@
 
 test_description="ensure that pvmove works with basic options"
 
+# disable lvmetad logging as it bogs down test systems
+export LVM_TEST_LVMETAD_DEBUG_OPTS=${LVM_TEST_LVMETAD_DEBUG_OPTS-}
+
 . lib/inittest
 
 which md5sum || skip
@@ -66,8 +69,8 @@ check_and_cleanup_lvs_() {
 	check dev_md5sum $vg $lv1
 	check dev_md5sum $vg $lv2
 	check dev_md5sum $vg $lv3
-	get lv_field $vg name >out
-	not grep ^pvmove out
+	get lv_field $vg name -a >out
+	not grep "^\[pvmove" out
 	vgchange -an $vg
 	lvremove -ff $vg
 	(dm_table | not grep $vg) || \
@@ -331,7 +334,7 @@ check_and_cleanup_lvs_
 
 #COMM "pvmove abort"
 restore_lvs_
-pvmove $mode -i100 -b "$dev1" "$dev3"
+LVM_TEST_TAG="kill_me_$PREFIX" pvmove $mode -i100 -b "$dev1" "$dev3"
 pvmove --abort
 check_and_cleanup_lvs_
 

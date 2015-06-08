@@ -157,6 +157,13 @@ PFLA("segtype=%s seg->area_len=%u seg->area_count=%u parity_devs=%u area_multipl
 			inc_error_count;
 		}
 
+		if (lv_is_error_when_full(lv) &&
+		    !seg_can_error_when_full(seg)) {
+			log_error("LV %s: segment %u (%s) does not support flag "
+				  "ERROR_WHEN_FULL.", lv->name, seg_count, seg->segtype->name);
+			inc_error_count;
+		}
+
 		if (complete_vg && seg->log_lv &&
 		    !seg_is_mirrored(seg) && !(seg->status & RAID_IMAGE)) {
 			log_error("LV %s: segment %u log LV %s is not a "

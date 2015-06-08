@@ -26,9 +26,9 @@ struct pvresize_params {
 static int _pvresize_single(struct cmd_context *cmd,
 			    struct volume_group *vg,
 			    struct physical_volume *pv,
-			    void *handle)
+			    struct processing_handle *handle)
 {
-	struct pvresize_params *params = (struct pvresize_params *) handle;
+	struct pvresize_params *params = (struct pvresize_params *) handle->custom_handle;
 
 	if (!params) {
 		log_error(INTERNAL_ERROR "Invalid resize params.");
@@ -47,16 +47,19 @@ static int _pvresize_single(struct cmd_context *cmd,
 int pvresize(struct cmd_context *cmd, int argc, char **argv)
 {
 	struct pvresize_params params;
+	struct processing_handle *handle = NULL;
 	int ret;
 
 	if (!argc) {
 		log_error("Please supply physical volume(s)");
-		return EINVALID_CMD_LINE;
+		ret = EINVALID_CMD_LINE;
+		goto out;
 	}
 
 	if (arg_sign_value(cmd, physicalvolumesize_ARG, SIGN_NONE) == SIGN_MINUS) {
 		log_error("Physical volume size may not be negative");
-		return EINVALID_CMD_LINE;
+		ret = EINVALID_CMD_LINE;
+		goto out;
 	}
 
 	params.new_size = arg_uint64_value(cmd, physicalvolumesize_ARG,
@@ -65,11 +68,20 @@ int pvresize(struct cmd_context *cmd, int argc, char **argv)
 	params.done = 0;
 	params.total = 0;
 
-	ret = process_each_pv(cmd, argc, argv, NULL, READ_FOR_UPDATE, &params,
+	if (!(handle = init_processing_handle(cmd))) {
+		log_error("Failed to initialize processing handle.");
+		ret = ECMD_FAILED;
+		goto out;
+	}
+
+	handle->custom_handle = &params;
+
+	ret = process_each_pv(cmd, argc, argv, NULL, READ_FOR_UPDATE, handle,
 			      _pvresize_single);
 
 	log_print_unless_silent("%d physical volume(s) resized / %d physical volume(s) "
 				"not resized", params.done, params.total - params.done);
-
+out:
+	destroy_processing_handle(cmd, handle);
 	return ret;
 }

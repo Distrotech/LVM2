@@ -167,6 +167,8 @@ static int _read_pv(struct format_instance *fid,
 	const struct dm_config_value *cv;
 	uint64_t size, ba_start;
 
+	int outdated = !strcmp(pvn->parent->key, "outdated_pvs");
+
 	if (!(pvl = dm_pool_zalloc(mem, sizeof(*pvl))) ||
 	    !(pvl->pv = dm_pool_zalloc(mem, sizeof(*pvl->pv))))
 		return_0;
@@ -212,7 +214,7 @@ static int _read_pv(struct format_instance *fid,
 
 	memcpy(&pv->vgid, &vg->id, sizeof(vg->id));
 
-	if (!_read_flag_config(pvn, &pv->status, PV_FLAGS)) {
+	if (!outdated && !_read_flag_config(pvn, &pv->status, PV_FLAGS)) {
 		log_error("Couldn't read status flags for physical volume.");
 		return 0;
 	}
@@ -234,13 +236,13 @@ static int _read_pv(struct format_instance *fid,
 		return 0;
 	}
 
-	if (!_read_uint64(pvn, "pe_start", &pv->pe_start)) {
+	if (!outdated && !_read_uint64(pvn, "pe_start", &pv->pe_start)) {
 		log_error("Couldn't read extent start value (pe_start) "
 			  "for physical volume.");
 		return 0;
 	}
 
-	if (!_read_int32(pvn, "pe_count", &pv->pe_count)) {
+	if (!outdated && !_read_int32(pvn, "pe_count", &pv->pe_count)) {
 		log_error("Couldn't find extent count (pe_count) for "
 			  "physical volume.");
 		return 0;
@@ -251,7 +253,7 @@ static int _read_pv(struct format_instance *fid,
 	_read_uint64(pvn, "ba_start", &ba_start);
 	_read_uint64(pvn, "ba_size", &size);
 	if (ba_start && size) {
-		log_debug("Found bootloader area specification for PV %s "
+		log_debug_metadata("Found bootloader area specification for PV %s "
 			  "in metadata: ba_start=%" PRIu64 ", ba_size=%" PRIu64 ".",
 			  pv_dev_name(pv), ba_start, size);
 		pv->ba_start = ba_start;
@@ -299,7 +301,10 @@ static int _read_pv(struct format_instance *fid,
 
 	vg->extent_count += pv->pe_count;
 	vg->free_count += pv->pe_count;
-	add_pvl_to_vgs(vg, pvl);
+	if (outdated)
+		dm_list_add(&vg->pvs_outdated, &pvl->list);
+	else
+		add_pvl_to_vgs(vg, pvl);
 
 	return 1;
 }
@@ -535,7 +540,7 @@ static int _read_lvnames(struct format_instance *fid __attribute__((unused)),
 	const char *str;
 	const struct dm_config_value *cv;
 	const char *hostname;
-	uint64_t timestamp = 0;
+	uint64_t timestamp = 0, lvstatus;
 
 	if (!(lv = alloc_lv(mem)))
 		return_0;
@@ -548,11 +553,17 @@ static int _read_lvnames(struct format_instance *fid __attribute__((unused)),
 		return 0;
 	}
 
-	if (!_read_flag_config(lvn, &lv->status, LV_FLAGS)) {
+	if (!_read_flag_config(lvn, &lvstatus, LV_FLAGS)) {
 		log_error("Couldn't read status flags for logical volume %s.",
 			  lv->name);
 		return 0;
 	}
+
+	if (lvstatus & LVM_WRITE_LOCKED) {
+		lvstatus |= LVM_WRITE;
+		lvstatus &= ~LVM_WRITE_LOCKED;
+	}
+	lv->status = lvstatus;
 
 	if (dm_config_has_node(lvn, "creation_time")) {
 		if (!_read_uint64(lvn, "creation_time", &timestamp)) {
@@ -737,10 +748,11 @@ static struct volume_group *_read_vg(struct format_instance *fid,
 {
 	const struct dm_config_node *vgn;
 	const struct dm_config_value *cv;
-	const char *str;
+	const char *str, *format_str, *system_id;
 	struct volume_group *vg;
 	struct dm_hash_table *pv_hash = NULL, *lv_hash = NULL;
 	unsigned scan_done_once = use_cached_pvs;
+	uint64_t vgstatus;
 
 	/* skip any top-level values */
 	for (vgn = cft->root; (vgn && vgn->v); vgn = vgn->sib)
@@ -753,9 +765,6 @@ static struct volume_group *_read_vg(struct format_instance *fid,
 
 	if (!(vg = alloc_vg("read_vg", fid->fmt->cmd, vgn->key)))
 		return_NULL;
-
-	if (!(vg->system_id = dm_pool_zalloc(vg->vgmem, NAME_LEN + 1)))
-		goto_bad;
 
 	/*
 	 * The pv hash memorises the pv section names -> pv
@@ -777,8 +786,16 @@ static struct volume_group *_read_vg(struct format_instance *fid,
 
 	vgn = vgn->child;
 
-	if (dm_config_get_str(vgn, "system_id", &str)) {
-		strncpy(vg->system_id, str, NAME_LEN);
+	/* A backup file might be a backup of a different format */
+	if (dm_config_get_str(vgn, "format", &format_str) &&
+	    !(vg->original_fmt = get_format_by_name(fid->fmt->cmd, format_str))) {
+		log_error("Unrecognised format %s for volume group %s.", format_str, vg->name);
+		goto bad;
+	}
+
+	if (dm_config_get_str(vgn, "lock_type", &str)) {
+		if (!(vg->lock_type = dm_pool_strdup(vg->vgmem, str)))
+			goto bad;
 	}
 
 	if (!_read_id(&vg->id, vgn, "id")) {
@@ -792,11 +809,31 @@ static struct volume_group *_read_vg(struct format_instance *fid,
 		goto bad;
 	}
 
-	if (!_read_flag_config(vgn, &vg->status, VG_FLAGS)) {
+	if (!_read_flag_config(vgn, &vgstatus, VG_FLAGS)) {
 		log_error("Error reading flags of volume group %s.",
 			  vg->name);
 		goto bad;
 	}
+
+	/*
+	 * A system id without WRITE_LOCKED is an old lvm1 system id.
+	 */
+	if (dm_config_get_str(vgn, "system_id", &system_id)) {
+		if (!(vgstatus & LVM_WRITE_LOCKED)) {
+			if (!(vg->lvm1_system_id = dm_pool_zalloc(vg->vgmem, NAME_LEN + 1)))
+				goto_bad;
+			strncpy(vg->lvm1_system_id, system_id, NAME_LEN);
+		} else if (!(vg->system_id = dm_pool_strdup(vg->vgmem, system_id))) {
+			log_error("Failed to allocate memory for system_id in _read_vg.");
+			goto bad;
+		}
+	}
+
+	if (vgstatus & LVM_WRITE_LOCKED) {
+		vgstatus |= LVM_WRITE;
+		vgstatus &= ~LVM_WRITE_LOCKED;
+	}
+	vg->status = vgstatus;
 
 	if (!_read_int32(vgn, "extent_size", &vg->extent_size)) {
 		log_error("Couldn't read extent size for volume group %s.",
@@ -849,6 +886,9 @@ static struct volume_group *_read_vg(struct format_instance *fid,
 		goto bad;
 	}
 
+	_read_sections(fid, "outdated_pvs", _read_pv, vg,
+		       vgn, pv_hash, lv_hash, 1, &scan_done_once);
+
 	/* Optional tags */
 	if (dm_config_get_list(vgn, "tags", &cv) &&
 	    !(read_tags(vg->vgmem, &vg->tags, cv))) {
@@ -879,8 +919,6 @@ static struct volume_group *_read_vg(struct format_instance *fid,
 	dm_hash_destroy(pv_hash);
 	dm_hash_destroy(lv_hash);
 
-	/* FIXME Determine format type from file contents */
-	/* eg Set to instance of fmt1 here if reading a format1 backup? */
 	vg_set_fid(vg, fid);
 
 	/*
@@ -915,19 +953,16 @@ static void _read_desc(struct dm_pool *mem,
 	*when = u;
 }
 
-static const char *_read_vgname(const struct format_type *fmt,
-				const struct dm_config_tree *cft, struct id *vgid,
-				uint64_t *vgstatus, char **creation_host)
+static int _read_vgname(const struct format_type *fmt, const struct dm_config_tree *cft, 
+			struct lvmcache_vgsummary *vgsummary)
 {
 	const struct dm_config_node *vgn;
 	struct dm_pool *mem = fmt->cmd->mem;
-	char *vgname;
 	int old_suppress;
 
 	old_suppress = log_suppress(2);
-	*creation_host = dm_pool_strdup(mem,
-					dm_config_find_str_allow_empty(cft->root,
-							"creation_host", ""));
+	vgsummary->creation_host =
+	    dm_pool_strdup(mem, dm_config_find_str_allow_empty(cft->root, "creation_host", ""));
 	log_suppress(old_suppress);
 
 	/* skip any top-level values */
@@ -938,23 +973,23 @@ static const char *_read_vgname(const struct format_type *fmt,
 		return 0;
 	}
 
-	if (!(vgname = dm_pool_strdup(mem, vgn->key)))
+	if (!(vgsummary->vgname = dm_pool_strdup(mem, vgn->key)))
 		return_0;
 
 	vgn = vgn->child;
 
-	if (!_read_id(vgid, vgn, "id")) {
-		log_error("Couldn't read uuid for volume group %s.", vgname);
+	if (!_read_id(&vgsummary->vgid, vgn, "id")) {
+		log_error("Couldn't read uuid for volume group %s.", vgsummary->vgname);
 		return 0;
 	}
 
-	if (!_read_flag_config(vgn, vgstatus, VG_FLAGS)) {
+	if (!_read_flag_config(vgn, &vgsummary->vgstatus, VG_FLAGS)) {
 		log_error("Couldn't find status flags for volume group %s.",
-			  vgname);
+			  vgsummary->vgname);
 		return 0;
 	}
 
-	return vgname;
+	return 1;
 }
 
 static struct text_vg_version_ops _vsn1_ops = {

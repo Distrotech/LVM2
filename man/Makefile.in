@@ -40,17 +40,23 @@ else
 LVMETAD =
 endif
 
+ifeq ("@BUILD_LVMPOLLD@", "yes")
+LVMPOLLD = lvmpolld.8
+else
+LVMPOLLD =
+endif
+
 MAN5=lvm.conf.5
-MAN7=
-MAN8=lvm-dumpconfig.8 \
-	lvchange.8 lvconvert.8 lvcreate.8 lvdisplay.8 lvextend.8 lvm.8 \
-	lvmchange.8 lvmconf.8 lvmdiskscan.8 lvmdump.8 lvmsadc.8 lvmsar.8 \
+MAN7=lvmsystemid.7
+MAN8=lvm-config.8 lvm-dumpconfig.8 lvm-lvpoll.8 \
+	lvchange.8 lvmconfig.8 lvconvert.8 lvcreate.8 lvdisplay.8 lvextend.8 \
+	lvm.8 lvmchange.8 lvmconf.8 lvmdiskscan.8 lvmdump.8 lvmsadc.8 lvmsar.8 \
 	lvreduce.8 lvremove.8 lvrename.8 lvresize.8 lvs.8 \
 	lvscan.8 pvchange.8 pvck.8 pvcreate.8 pvdisplay.8 pvmove.8 pvremove.8 \
 	pvresize.8 pvs.8 pvscan.8 vgcfgbackup.8 vgcfgrestore.8 vgchange.8 \
 	vgck.8 vgcreate.8 vgconvert.8 vgdisplay.8 vgexport.8 vgextend.8 \
 	vgimport.8 vgimportclone.8 vgmerge.8 vgmknodes.8 vgreduce.8 vgremove.8 \
-	vgrename.8 vgs.8 vgscan.8 vgsplit.8 $(FSADMMAN) $(BLKDEACTIVATEMAN) $(LVMETAD)
+	vgrename.8 vgs.8 vgscan.8 vgsplit.8 $(FSADMMAN) $(LVMETAD) $(LVMPOLLD)
 
 ifneq ("@CLVMD@", "none")
   MAN8CLUSTER=clvmd.8
@@ -70,7 +76,7 @@ ifneq ("@THIN@", "none")
   MAN7+=lvmthin.7
 endif
 
-MAN8DM=dmsetup.8 $(DMEVENTDMAN)
+MAN8DM=dmsetup.8 $(DMEVENTDMAN) $(BLKDEACTIVATEMAN)
 MAN5DIR=$(mandir)/man5
 MAN7DIR=$(mandir)/man7
 MAN8DIR=$(mandir)/man8

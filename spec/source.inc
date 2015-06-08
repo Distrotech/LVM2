@@ -4,6 +4,7 @@
 # Defaults (rawhide)... 
 
 %global enable_profiling 0
+%global enable_testsuite 0
 %global enable_udev 1
 %global enable_systemd 1
 %global enable_cmirror 1
@@ -23,6 +24,8 @@
 %global req_udev udev >= 181-1
 
 %service lvmetad 1
+
+%service lvmpolld 1
 
 ##############################################################
 
@@ -71,12 +74,12 @@
 # Do not reset Release to 1 unless both lvm2 and device-mapper
 # versions are increased together.
 
-%define device_mapper_version 1.02.75
+%define device_mapper_version 1.02.97
 
 Summary: Userland logical volume management tools
 Name: lvm2
-Version: 2.02.96
-Release: 4%{?dist}
+Version: 2.02.120
+Release: 1%{?dist}
 License: GPLv2
 Group: System Environment/Base
 URL: http://sources.redhat.com/lvm2

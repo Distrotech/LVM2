@@ -15,10 +15,10 @@
 
 #include "tools.h"
 
-static int vgimport_single(struct cmd_context *cmd __attribute__((unused)),
+static int vgimport_single(struct cmd_context *cmd,
 			   const char *vg_name,
 			   struct volume_group *vg,
-			   void *handle __attribute__((unused)))
+			   struct processing_handle *handle __attribute__((unused)))
 {
 	struct pv_list *pvl;
 	struct physical_volume *pv;
@@ -37,6 +37,7 @@ static int vgimport_single(struct cmd_context *cmd __attribute__((unused)),
 		goto_bad;
 
 	vg->status &= ~EXPORTED_VG;
+	vg->system_id = cmd->system_id ? dm_pool_strdup(vg->vgmem, cmd->system_id) : NULL;
 
 	dm_list_iterate_items(pvl, &vg->pvs) {
 		pv = pvl->pv;
@@ -58,12 +59,12 @@ bad:
 
 int vgimport(struct cmd_context *cmd, int argc, char **argv)
 {
-	if (!argc && !arg_count(cmd, all_ARG)) {
-		log_error("Please supply volume groups or use -a for all.");
+	if (!argc && !arg_count(cmd, all_ARG) && !arg_is_set(cmd, select_ARG)) {
+		log_error("Please supply volume groups or -S for selection or use -a for all.");
 		return EINVALID_CMD_LINE;
 	}
 
-	if (argc && arg_count(cmd, all_ARG)) {
+	if (arg_count(cmd, all_ARG) && (argc || arg_is_set(cmd, select_ARG))) {
 		log_error("No arguments permitted when using -a for all.");
 		return EINVALID_CMD_LINE;
 	}
@@ -82,6 +83,17 @@ int vgimport(struct cmd_context *cmd, int argc, char **argv)
 		 */
 		log_warn("WARNING: Volume groups with missing PVs will be imported with --force.");
 		cmd->handles_missing_pvs = 1;
+	}
+
+	/*
+	 * Rescan devices and update lvmetad.  lvmetad may hold a copy of the
+	 * VG from before it was exported, if it was exported by another host.
+	 * We need to reread it to see that it's been exported before we can
+	 * import it.
+	 */
+	if (lvmetad_active() && !lvmetad_pvscan_all_devs(cmd, NULL)) {
+		log_error("Failed to scan devices.");
+		return ECMD_FAILED;
 	}
 
 	return process_each_vg(cmd, argc, argv,

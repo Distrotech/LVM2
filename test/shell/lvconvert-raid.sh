@@ -9,7 +9,12 @@
 # along with this program; if not, write to the Free Software Foundation,
 # Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 
+# disable lvmetad logging as it bogs down test systems
+export LVM_TEST_LVMETAD_DEBUG_OPTS=${LVM_TEST_LVMETAD_DEBUG_OPTS-}
+
 . lib/inittest
+
+test -e LOCAL_LVMPOLLD && skip
 
 get_image_pvs() {
 	local d
@@ -119,6 +124,12 @@ check linear $vg $lv1
 check linear $vg $lv2
 check active $vg $lv2
 # FIXME: ensure no residual devices
+lvremove -ff $vg
+
+# 4-way
+lvcreate --type raid1 -m 4 -l 2 -n $lv1 $vg
+aux wait_for_sync $vg $lv1
+lvconvert --yes --splitmirrors 1 --name $lv2 $vg/$lv1 "$dev2"
 lvremove -ff $vg
 
 ###########################################

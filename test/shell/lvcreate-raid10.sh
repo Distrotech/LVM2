@@ -11,6 +11,8 @@
 
 . lib/inittest
 
+test -e LOCAL_LVMPOLLD && skip
+
 lv_devices() {
 	test $3 -eq $(get lv_devices $1/$2 | wc -w)
 }
@@ -50,11 +52,11 @@ aux wait_for_sync $vg $lv2
 lvremove -ff $vg
 
 # Test 100%FREE option
-# 37 extents / device
-# 1 image = 36 extents (1 for meta)
-# 3 images = 108 extents = 54.00m
+# 38 extents / device
+# 1 image = 37 extents (1 for meta)
+# 3 images = 111 extents = 55.50m
 lvcreate --type raid10 -i 3 -l 100%FREE -an -Zn -n raid10 $vg
-check lv_field $vg/raid10 size "54.00m"
+check lv_field $vg/raid10 size "55.50m"
 lvremove -ff $vg
 
 # Create RAID (implicit stripe count based on PV count)

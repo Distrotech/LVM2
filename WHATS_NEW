@@ -1,5 +1,174 @@
-Version 2.02.115 -
-=====================================
+Version 2.02.121 - 
+================================
+  Zero errno in before strtoul call in dmsetup if tested after the call.
+  Zero errno in before strtoul call in lvmpolld.
+  Fix a segfault in pvscan --cache --background command.
+  Fix test for AREA_PV when checking for failed mirrors.
+  Do not use --sysinit in lvm2-activation{-early,-net}.service if lvmpolld used.
+  Do not fail polling when poll LV not found (already finished or removed).
+  Replace poll_get_copy_vg/lv fns with vg_read() and find_lv() in polldaemon.
+  Close all device fds only in before sleep call in polldaemon.
+
+Version 2.02.120 - 15th May 2015
+================================
+  Make various adjustments to Makefile compilation flags.
+  Add lvmpolld debug message class.
+  Add lvmpolld client mode for querying running server instance for status info.
+  Fix some libdaemon socket creation and reuse error paths.
+  Daemons (libdaemon) support exit on idle also in non-systemd environment.
+  Provide make dist and make rpm targets
+  Configure lvm.conf for use_lvmetad and use_lvmpolld.
+  Add lvpoll for cmdline communication with lvmpolld.
+  Add lvmpolld acting as a free-standing version of polldaemon.
+  Avoid repeated identical lvmetad VG lookups in commands processing all VGs.
+  Handle switches to alternative duplicate PVs efficiently with lvmetad.
+  Properly validate PV size for pvcreate --restorefile.
+  Fix check if pvcreate wiped device (2.02.117).
+  Fix storing of vgid when caching metadata (2.02.118).
+  Fix recursive lvm-config man page. (2.02.119)
+  Refactor polldaemon interfaces to poll every operation by VG/LV couple
+  Skip wait after testing in _wait_for_single_lv when polling finished
+  Return 'None' in python for empty string properties instead of crashing.
+  Distinguish signed numerical property type in reports for lvm2app library.
+  Reread raid completion status immediately when progress appears to be zero.
+  lvm2app closes locking on lvm_quit().
+  Configure detects /run or /var/run.
+  Add missing newline in clvmd --help output.
+
+Version 2.02.119 - 2nd May 2015
+===============================
+  New LVM_LOG_FILE_EPOCH, LVM_EXPECTED_EXIT_STATUS env vars. Man page to follow.
+  Remove detailed content from lvm.conf man page: use lvmconfig instead.
+  Generate complete config files with lvmconfig or 'make generate'.
+  Also display info on deprecated config with lvmconfig --withcomments.
+  Display version since which config is deprecated in lvmconfig --withversions.
+  Add --showdeprecated to lvmconfig to also display deprecated settings.
+  Hide deprecated settings in lvmconfig output for all types but current,diff.
+  Introduce support for exit on idle feature in libdaemon
+  Add --showunsupported to lvmconfig to also display unsupported settings.
+  Display unsupported settings for lvmconfig --type current,diff only by default
+  Honour lvmconfig --ignoreunsupported and --ignoreadvanced for all --type.
+  Make python bindings usable with python3 (and compatible with 2.6 & 2.7).
+  Add lvmconfig -l|--list as shortcut for lvmconfig --type list --withsummary.
+  Add lvmconfig --type list to display plain list of configuration settings.
+  Introduce lvmconfig as the preferred form of 'lvm dumpconfig'.
+  Add lv_ancestors and lv_descendants reporting fields.
+  Add --ignorelocal option to dumpconfig to ignore the local section.
+  Close connection to lvmetad after fork.
+  Make lvchange able to resume background pvmove polling again.
+  Split pvmove update metadata fn in an initial one and a subsequent one.
+  Refactor shared pvmove and lvconvert code into new _poll files.
+  Add --unconfigured option to dumpconfig to print strings unconfigured.
+  Add --withsummary option to dumpconfig to print first line - summary comment.
+  Use number of device holders to help choose between duplicate PVs.
+  Try to make lvmetad and non-lvmetad duplicate PV handling as similar as poss.
+  Issue warnings about duplicate PVs discovered by lvmetad.
+  Track alternative devices with matching PVIDs in lvmetad.
+  Check for lvm binary in blkdeactivate and skip LVM processing if not present.
+  Add --enable-halvm and --disable-halvm options to lvmconf script.
+  Add --services, --mirrorservice and --startstopservices option to lvmconf.
+  Use proper default value of global/use_lvmetad when processing lvmconf script.
+  Respect allocation/cling_tag_list during intial contiguous allocation.
+  Add A_PARTITION_BY_TAGS set when allocated areas should not share tags.
+  Make changes persist with python addTag/removeTag.
+  Set correct vgid when updating cache when writing PV metadata.
+  More efficient clvmd singlenode locking emulation.
+  Reject lvcreate -m with raid4/5/6 to avoid unexpected layout.
+  Don't skip invalidation of cached orphans if vg write lck is held (2.02.118).
+  Log relevant PV tags when using cling allocation.
+  Add str_list_add_list() to combine two lists.
+  Fix LV processing with selection to always do the selection on initial state.
+  Add internal LV_REMOVED LV status flag.
+
+Version 2.02.118 - 23rd March 2015
+==================================
+  Store metadata size + checksum in lvmcache and add struct lvmcache_vgsummary.
+  Remove inaccessible clustered PVs from 'pvs -a'.
+  Don't invalidate cached orphan information while global lock is held.
+  Avoid rescan of all devices when requested pvscan for removed device.
+  Measure configuration timestamps with nanoseconds when available.
+  Disable lvchange of major and minor of pool LVs.
+  Fix pvscan --cache to not scan and read ignored metadata areas on PVs.
+  Add After=iscsi-shutdown.service to blk-availability.service systemd unit.
+  Disallow vgconvert from changing metadata format when lvmetad is used.
+  Don't do a full read of VG when creating a new VG with an existing name.
+  Reduce amount of VG metadata parsing when looking for vgname on a PV.
+  Avoid reparsing same metadata when reading same metadata from multiple PVs.
+  Save extra device open/close when scanning device for size.
+  Fix seg_monitor field to report status also for mirrors and thick snapshots.
+  Replace LVM_WRITE with LVM_WRITE_LOCKED flags in metadata if system ID is set.
+  Remove ACCESS_NEEDS_SYSTEM_ID VG status flag. (2.02.117)
+  Enable system ID features.
+
+Version 2.02.117 - 4th March 2015
+=================================
+  Add CFG_DISABLED for new system ID config settings that must not yet be used.
+  Preserve original format type field when processing backup files.
+  Implement status action for lvm2-monitor initscript to display monitored LVs.
+  Allow lvchange -p to change kernel state only if metadata state differs.
+  Fix incorrect persistent .cache after report with label fields only (2.02.106).
+  Reinstate PV tag recognition for pvs if reporting label fields only (2.02.105).
+  Rescan devices before vgimport with lvmetad so exported VG is seen.
+  Fix hang by adjusting cluster mirror regionsize, avoiding CPG msg limit.
+  Do not crash when --cachepolicy is given without --cachesettings.
+  Add NEEDS_FOREIGN_VGS flag to vgimport so --foreign is always supplied.
+  Add --foreign to the 6 display and reporting tools and vgcfgbackup.
+  Install /etc/lvm/lvmlocal.conf template with local section for systemid.
+  Record creation_host_system_id in lvm2 metadata (never set yet).
+  Reinstate recursive config file tag section processing. (2.02.99)
+  Add 'lvm systemid' to display the current system ID (never set yet).
+  Fix configure to properly recognize --with-default-raid10-segtype option.
+  Do not refresh filters/rescan if no signature is wiped during pvcreate.
+  Enforce none external dev info for wiping during pvcreate to avoid races.
+  Add global/system_id_source and system_id_file to lvm.conf (disabled).
+  Add support for VG system_id to control host access to VGs.
+  Update vgextend to use process_each_vg.
+  Add --ignoreskippedcluster to pvchange.
+  Allow pvchange to modify several properties at once.
+  Update pvchange to use process_each_pv.
+  Fix pvs -a used with lvmetad to filter out devices unsuitable for PVs.
+  Fix selection to recognize units for ba_start, vg_free and seg_start fields.
+  Add support for -S/--select to vgexport and vgimport.
+  Add support for -S/--select to vgdisplay, lvdisplay and pvdisplay without -C.
+  Add support for -S/--select to vgremove and lvremove.
+  Add support for -S/--select to vgchange,lvchange and pvchange.
+  Add infrastructure to support selection for non-reporting tools.
+  Add LVM_COMMAND_PROFILE env var to set default command profile name to use.
+  Set CLOEXEC flag on file descriptors originating in libdaemon.
+
+Version 2.02.116 - 30th January 2015
+====================================
+  Deactivate unused thin pools activated with lvm2 pre-2.02.112 versions.
+  Check lock holding LV when lvconverting stacked raid LV in cluster.
+  Support udev external dev info for filters: PV min size, mpath, md, partition.
+  Add fw_raid_component_detection lvm.conf option to enable FW raid detection.
+  Add devices/external_device_info_source lvm.conf option ("none" by default).
+  Scan pools in for_each_sub_lv() and add for_each_sub_lv_except_pools().
+  Fix lvm2app lvm_lv_get_property return value for fields with info/status ioctl.
+  Fix lvm2app regression in lvm_lv_get_attr causing unknown values (2.02.115).
+  Set default cache_mode to writehrough when missing in metadata.
+  Preserve chunk size with repair and metadata swap of a thin pool.
+  Fix raid --splitmirror 1 functionality (2.02.112).
+  Fix tree preload to handle splitting raid images.
+  Do not support unpartitioned DASD devices.
+  Improve config validation to check if setting with string value can be empty.
+
+Version 2.02.115 - 21st January 2015
+====================================
+  Report segment types without monitoring support as undefined.
+  Support lvchange --errorwhenfull for thin pools.
+  Improve the processing and reporting of duplicate PVs.
+  Report lv_health_status and health attribute also for thin pool.
+  Add lv_when_full reporting field.
+  Add support for lvcreate --errorwhenfull y|n for thin pools.
+  Fix lvconvert --repair to honour resilience requirement for segmented RAID LV.
+  Filter out partitioned device-mapper devices as unsuitable for use as PVs.
+  Also notify lvmetad about filtered device if using pvscan --cache DevicePath.
+  Use LVM's own selection instead of awk expressions in clvmd startup scripts.
+  Do not filter out snapshot origin LVs as unusable devices for an LVM stack.
+  Fix incorrect rimage names when converting from mirror to raid1 LV (2.02.112).
+  Introduce pvremove_many to avoid excessive metadata re-reading and messages.
+  Check for cmirror availability during cluster mirror creation and activation.
   Add cache_policy and cache_settings reporting fields.
   Add missing recognition for --binary option with {pv,vg,lv}display -C.
   Fix vgimportclone to notify lvmetad about changes done if lvmetad is used.

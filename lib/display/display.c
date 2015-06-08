@@ -385,7 +385,7 @@ int pvdisplay_short(const struct cmd_context *cmd __attribute__((unused)),
 	char uuid[64] __attribute__((aligned(8)));
 
 	if (!pv)
-		return 0;
+		return_0;
 
 	if (!id_write_format(&pv->id, uuid, sizeof(uuid)))
 		return_0;
@@ -399,7 +399,8 @@ int pvdisplay_short(const struct cmd_context *cmd __attribute__((unused)),
 		  pv->pe_count, pv->pe_count - pv->pe_alloc_count);
 
 	log_print(" ");
-	return 0;
+
+	return 1; /* ECMD_PROCESSED */
 }
 
 void lvdisplay_colons(const struct logical_volume *lv)
@@ -623,7 +624,7 @@ int lvdisplay_full(struct cmd_context *cmd,
 
 	log_print(" ");
 
-	return 0;
+	return 1; /* ECMD_PROCESSED */
 }
 
 void display_stripe(const struct lv_segment *seg, uint32_t s, const char *pre)
@@ -695,7 +696,7 @@ void vgdisplay_full(const struct volume_group *vg)
 
 	log_print("--- Volume group ---");
 	log_print("VG Name               %s", vg->name);
-	log_print("System ID             %s", vg->system_id);
+	log_print("System ID             %s", (vg->system_id && *vg->system_id) ? vg->system_id : vg->lvm1_system_id ? : "");
 	log_print("Format                %s", vg->fid->fmt->name);
 	if (vg->fid->fmt->features & FMT_MDAS) {
 		log_print("Metadata Areas        %d",
@@ -855,7 +856,7 @@ void display_name_error(name_error_t name_error)
 	case NAME_INVALID_EMPTY:
 		log_error("Name is zero length.");
 		break;
-	case NAME_INVALID_HYPEN:
+	case NAME_INVALID_HYPHEN:
 		log_error("Name cannot start with hyphen.");
 		break;
 	case NAME_INVALID_DOTS:

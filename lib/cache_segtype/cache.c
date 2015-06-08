@@ -68,7 +68,9 @@ static int _cache_pool_text_import(struct lv_segment *seg,
 			return SEG_LOG_ERROR("cache_mode must be a string in");
 		if (!set_cache_pool_feature(&seg->feature_flags, str))
 			return SEG_LOG_ERROR("Unknown cache_mode in");
-	}
+	} else
+		/* When missed in metadata, it's an old stuff - use writethrough */
+		seg->feature_flags |= DM_CACHE_FEATURE_WRITETHROUGH;
 
 	if (dm_config_has_node(sn, "policy")) {
 		if (!(str = dm_config_find_str(sn, "policy", NULL)))
@@ -280,8 +282,15 @@ static int _cache_add_target_line(struct dev_manager *dm,
 				 struct dm_tree_node *node, uint64_t len,
 				 uint32_t *pvmove_mirror_count __attribute__((unused)))
 {
-	struct lv_segment *cache_pool_seg = first_seg(seg->pool_lv);
+	struct lv_segment *cache_pool_seg;
 	char *metadata_uuid, *data_uuid, *origin_uuid;
+
+	if (!seg->pool_lv || !seg_is_cache(seg)) {
+		log_error(INTERNAL_ERROR "Passed segment is not cache.");
+		return 0;
+	}
+
+	cache_pool_seg = first_seg(seg->pool_lv);
 
 	if (!(metadata_uuid = build_dm_uuid(mem, cache_pool_seg->metadata_lv, NULL)))
 		return_0;

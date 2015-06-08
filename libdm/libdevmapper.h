@@ -151,6 +151,7 @@ struct dm_info {
 	int32_t target_count;
 
 	int deferred_remove;
+	int internal_suspend;
 };
 
 struct dm_deps {
@@ -174,8 +175,6 @@ struct dm_versions {
 
 int dm_get_library_version(char *version, size_t size);
 int dm_task_get_driver_version(struct dm_task *dmt, char *version, size_t size);
-
-#define dm_task_get_info dm_task_get_info_with_deferred_remove
 int dm_task_get_info(struct dm_task *dmt, struct dm_info *dmi);
 
 /*
@@ -367,8 +366,12 @@ struct dm_status_thin_pool {
 	uint64_t used_data_blocks;
 	uint64_t total_data_blocks;
 	uint64_t held_metadata_root;
-	uint32_t read_only;
+	uint32_t read_only;		/* metadata may not be changed */
 	dm_thin_discards_t discards;
+	uint32_t fail : 1;		/* all I/O fails */
+	uint32_t error_if_no_space : 1;	/* otherwise queue_if_no_space */
+	uint32_t out_of_data_space : 1;	/* metadata may be changed, but data may not be allocated */
+	uint32_t reserved : 29;
 };
 
 int dm_get_status_thin_pool(struct dm_pool *mem, const char *params,
@@ -389,6 +392,11 @@ int dm_get_status_thin(struct dm_pool *mem, const char *params,
  * Call this to actually run the ioctl.
  */
 int dm_task_run(struct dm_task *dmt);
+
+/*
+ * The errno from the last device-mapper ioctl performed by dm_task_run.
+ */
+int dm_task_get_errno(struct dm_task *dmt);
 
 /*
  * Call this to make or remove the device nodes associated with previously
@@ -890,7 +898,11 @@ int dm_tree_node_add_thin_pool_message(struct dm_tree_node *node,
 int dm_tree_node_set_thin_pool_discard(struct dm_tree_node *node,
 				       unsigned ignore,
 				       unsigned no_passdown);
-
+/*
+ * Set error if no space, instead of queueing for thin pool.
+ */
+int dm_tree_node_set_thin_pool_error_if_no_space(struct dm_tree_node *node,
+						 unsigned error_if_no_space);
 /*
  * FIXME: Defines bellow are based on kernel's dm-thin.c defines
  * MAX_DEV_ID ((1 << 24) - 1)
@@ -1651,6 +1663,7 @@ struct dm_report_object_type {
 	uint32_t id;			/* Powers of 2 */
 	const char *desc;
 	const char *prefix;		/* field id string prefix (optional) */
+	/* FIXME: convert to proper usage of const pointers here */
 	void *(*data_fn)(void *object);	/* callback from report_object() */
 };
 
@@ -1756,7 +1769,17 @@ struct dm_report *dm_report_init_with_selection(uint32_t *report_types,
 						const char *selection,
 						const struct dm_report_reserved_value reserved_values[],
 						void *private_data);
+/*
+ * Report an object, pass it through the selection criteria if they
+ * are present and display the result on output if it passes the criteria.
+ */
 int dm_report_object(struct dm_report *rh, void *object);
+/*
+ * The same as dm_report_object, but display the result on output only if
+ * 'do_output' arg is set. Also, save the result of selection in 'selected'
+ * arg if it's not NULL (either 1 if the object passes, otherwise 0).
+ */
+int dm_report_object_is_selected(struct dm_report *rh, void *object, int do_output, int *selected);
 
 /*
  * Compact report output so that if field value is empty for all rows in

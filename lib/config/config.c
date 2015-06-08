@@ -53,7 +53,7 @@ struct config_file {
 
 struct config_source {
 	config_source_t type;
-	time_t timestamp;
+	struct timespec timestamp;
 	union {
 		struct config_file *file;
 		struct config_file *profile;
@@ -65,11 +65,11 @@ struct config_source {
  * Map each ID to respective definition of the configuration item.
  */
 static struct cfg_def_item _cfg_def_items[CFG_COUNT + 1] = {
-#define cfg_section(id, name, parent, flags, since_version, comment) {id, parent, name, CFG_TYPE_SECTION, {0}, flags, since_version, comment},
-#define cfg(id, name, parent, flags, type, default_value, since_version, comment) {id, parent, name, type, {.v_##type = default_value}, flags, since_version, comment},
-#define cfg_runtime(id, name, parent, flags, type, since_version, comment) {id, parent, name, type, {.fn_##type = get_default_##id}, flags | CFG_DEFAULT_RUN_TIME, since_version, comment},
-#define cfg_array(id, name, parent, flags, types, default_value, since_version, comment) {id, parent, name, CFG_TYPE_ARRAY | types, {.v_CFG_TYPE_STRING = default_value}, flags, since_version, comment},
-#define cfg_array_runtime(id, name, parent, flags, types, since_version, comment) {id, parent, name, CFG_TYPE_ARRAY | types, {.fn_CFG_TYPE_STRING = get_default_##id}, flags | CFG_DEFAULT_RUN_TIME, since_version, comment},
+#define cfg_section(id, name, parent, flags, since_version, deprecated_since_version, deprecation_comment, comment) {id, parent, name, CFG_TYPE_SECTION, {0}, flags, since_version, {0}, deprecated_since_version, deprecation_comment, comment},
+#define cfg(id, name, parent, flags, type, default_value, since_version, unconfigured_value, deprecated_since_version, deprecation_comment, comment) {id, parent, name, type, {.v_##type = default_value}, flags, since_version, {.v_UNCONFIGURED = unconfigured_value}, deprecated_since_version, deprecation_comment, comment},
+#define cfg_runtime(id, name, parent, flags, type, since_version, deprecated_since_version, deprecation_comment, comment) {id, parent, name, type, {.fn_##type = get_default_##id}, flags | CFG_DEFAULT_RUN_TIME, since_version, {.fn_UNCONFIGURED = get_default_unconfigured_##id}, deprecated_since_version, deprecation_comment, comment},
+#define cfg_array(id, name, parent, flags, types, default_value, since_version, unconfigured_value, deprecated_since_version, deprecation_comment, comment) {id, parent, name, CFG_TYPE_ARRAY | types, {.v_CFG_TYPE_STRING = default_value}, flags, since_version, {.v_UNCONFIGURED = unconfigured_value}, deprecated_since_version, deprecation_comment, comment},
+#define cfg_array_runtime(id, name, parent, flags, types, since_version, deprecated_since_version, deprecation_comment, comment) {id, parent, name, CFG_TYPE_ARRAY | types, {.fn_CFG_TYPE_STRING = get_default_##id}, flags | CFG_DEFAULT_RUN_TIME, since_version, {.fn_UNCONFIGURED = get_default_unconfigured_##id}, deprecated_since_version, deprecation_comment, comment},
 #include "config_settings.h"
 #undef cfg_section
 #undef cfg
@@ -173,7 +173,7 @@ int config_file_check(struct dm_config_tree *cft, const char **filename, struct 
 		return 0;
 	}
 
-	cs->timestamp = info->st_ctime;
+	lvm_stat_ctim(&cs->timestamp, info);
 	cf->exists = 1;
 	cf->st_size = info->st_size;
 
@@ -193,6 +193,7 @@ int config_file_changed(struct dm_config_tree *cft)
 	struct config_source *cs = dm_config_get_custom(cft);
 	struct config_file *cf;
 	struct stat info;
+	struct timespec ts;
 
 	if (cs->type != CONFIG_FILE) {
 		log_error(INTERNAL_ERROR "config_file_changed: expected file config source, "
@@ -226,7 +227,9 @@ int config_file_changed(struct dm_config_tree *cft)
 	}
 
 	/* Unchanged? */
-	if (cs->timestamp == info.st_ctime && cf->st_size == info.st_size)
+	lvm_stat_ctim(&ts, &info);
+	if ((timespeccmp(&cs->timestamp, &ts, ==)) &&
+	    cf->st_size == info.st_size)
 		return 0;
 
       reload:
@@ -478,9 +481,15 @@ int override_config_tree_from_profile(struct cmd_context *cmd,
 	return 0;
 }
 
+/*
+ * When checksum_only is set, the checksum of buffer is only matched
+ * and function avoids parsing of mda into config tree which
+ * remains unmodified and should not be used.
+ */
 int config_file_read_fd(struct dm_config_tree *cft, struct device *dev,
 			off_t offset, size_t size, off_t offset2, size_t size2,
-			checksum_fn_t checksum_fn, uint32_t checksum)
+			checksum_fn_t checksum_fn, uint32_t checksum,
+			int checksum_only)
 {
 	char *fb, *fe;
 	int r = 0;
@@ -529,9 +538,11 @@ int config_file_read_fd(struct dm_config_tree *cft, struct device *dev,
 		goto out;
 	}
 
-	fe = fb + size + size2;
-	if (!dm_config_parse(cft, fb, fe))
-		goto_out;
+	if (!checksum_only) {
+		fe = fb + size + size2;
+		if (!dm_config_parse(cft, fb, fe))
+			goto_out;
+	}
 
 	r = 1;
 
@@ -575,7 +586,7 @@ int config_file_read(struct dm_config_tree *cft)
 	}
 
 	r = config_file_read_fd(cft, cf->dev, 0, (size_t) info.st_size, 0, 0,
-				(checksum_fn_t) NULL, 0);
+				(checksum_fn_t) NULL, 0, 0);
 
 	if (!cf->keep_open) {
 		if (!dev_close(cf->dev))
@@ -586,13 +597,14 @@ int config_file_read(struct dm_config_tree *cft)
 	return r;
 }
 
-time_t config_file_timestamp(struct dm_config_tree *cft)
+struct timespec config_file_timestamp(struct dm_config_tree *cft)
 {
 	struct config_source *cs = dm_config_get_custom(cft);
 	return cs->timestamp;
 }
 
 #define cfg_def_get_item_p(id) (&_cfg_def_items[id])
+#define cfg_def_get_default_unconfigured_value_hint(cmd,item) ((item->flags & CFG_DEFAULT_RUN_TIME) ? item->default_unconfigured_value.fn_UNCONFIGURED(cmd) : item->default_unconfigured_value.v_UNCONFIGURED)
 #define cfg_def_get_default_value_hint(cmd,item,type,profile) ((item->flags & CFG_DEFAULT_RUN_TIME) ? item->default_value.fn_##type(cmd,profile) : item->default_value.v_##type)
 #define cfg_def_get_default_value(cmd,item,type,profile) (item->flags & CFG_DEFAULT_UNDEFINED ? 0 : cfg_def_get_default_value_hint(cmd,item,type,profile))
 
@@ -649,8 +661,8 @@ static void _log_type_error(const char *path, cfg_def_type_t actual,
 	_get_type_name(actual_type_name, sizeof(actual_type_name), actual);
 	_get_type_name(expected_type_name, sizeof(expected_type_name), expected);
 
-	log_warn_suppress(suppress_messages, "Configuration setting \"%s\" has invalid type. "
-					     "Found%s, expected%s.", path,
+	log_warn_suppress(suppress_messages, "WARNING: Configuration setting \"%s\" has invalid type. "
+					     "Found%s but expected%s.", path,
 					     actual_type_name, expected_type_name);
 }
 
@@ -790,6 +802,11 @@ static int _config_def_check_node_single_value(struct cft_check_handle *handle,
 			} else if  (!(def->type & CFG_TYPE_STRING)) {
 				_log_type_error(rp, CFG_TYPE_STRING, def->type, handle->suppress_messages);
 				return 0;
+			} else if (!(def->flags & CFG_ALLOW_EMPTY) && !*v->v.str) {
+				log_warn_suppress(handle->suppress_messages,
+						  "Configuration setting \"%s\" invalid. "
+						  "It cannot be set to an empty value.", rp);
+				return 0;
 			}
 			break;
 		default: ;
@@ -808,6 +825,12 @@ static int _check_value_differs_from_default(struct cft_check_handle *handle,
 	int64_t i;
 	float f;
 	const char *str;
+
+	if ((handle->ignoreunsupported && (def->flags & CFG_UNSUPPORTED)) ||
+	    (handle->ignoreadvanced && (def->flags & CFG_ADVANCED))) {
+		diff = 0;
+		goto out;
+	}
 
 	/* if default value is undefined, the value used differs from default */
 	if (def->flags & CFG_DEFAULT_UNDEFINED) {
@@ -1140,6 +1163,29 @@ static int _apply_local_profile(struct cmd_context *cmd, struct profile *profile
 	return override_config_tree_from_profile(cmd, profile);
 }
 
+static int _config_disabled(struct cmd_context *cmd, cfg_def_item_t *item, const char *path)
+{
+	if ((item->flags & CFG_DISABLED) && dm_config_tree_find_node(cmd->cft, path)) {
+		log_warn("WARNING: Configuration setting %s is disabled. Using default value.", path);
+		return 1;
+	}
+
+	return 0;
+}
+
+const struct dm_config_node *find_config_node(struct cmd_context *cmd, struct dm_config_tree *cft, int id)
+{
+	cfg_def_item_t *item = cfg_def_get_item_p(id);
+	char path[CFG_PATH_MAX_LEN];
+	const struct dm_config_node *cn;
+
+	_cfg_def_make_path(path, sizeof(path), item->id, item, 0);
+
+	cn = dm_config_tree_find_node(cft, path);
+
+	return cn;
+}
+
 const struct dm_config_node *find_config_tree_node(struct cmd_context *cmd, int id, struct profile *profile)
 {
 	cfg_def_item_t *item = cfg_def_get_item_p(id);
@@ -1171,7 +1217,8 @@ const char *find_config_tree_str(struct cmd_context *cmd, int id, struct profile
 	if (item->type != CFG_TYPE_STRING)
 		log_error(INTERNAL_ERROR "%s cfg tree element not declared as string.", path);
 
-	str = dm_config_tree_find_str(cmd->cft, path, cfg_def_get_default_value(cmd, item, CFG_TYPE_STRING, profile));
+	str = _config_disabled(cmd, item, path) ? cfg_def_get_default_value(cmd, item, CFG_TYPE_STRING, profile)
+						: dm_config_tree_find_str(cmd->cft, path, cfg_def_get_default_value(cmd, item, CFG_TYPE_STRING, profile));
 
 	if (profile_applied)
 		remove_config_tree_by_source(cmd, profile->source);
@@ -1194,7 +1241,8 @@ const char *find_config_tree_str_allow_empty(struct cmd_context *cmd, int id, st
 	if (!(item->flags & CFG_ALLOW_EMPTY))
 		log_error(INTERNAL_ERROR "%s cfg tree element not declared to allow empty values.", path);
 
-	str = dm_config_tree_find_str_allow_empty(cmd->cft, path, cfg_def_get_default_value(cmd, item, CFG_TYPE_STRING, profile));
+	str = _config_disabled(cmd, item, path) ? cfg_def_get_default_value(cmd, item, CFG_TYPE_STRING, profile)
+						: dm_config_tree_find_str_allow_empty(cmd->cft, path, cfg_def_get_default_value(cmd, item, CFG_TYPE_STRING, profile));
 
 	if (profile_applied)
 		remove_config_tree_by_source(cmd, profile->source);
@@ -1215,7 +1263,8 @@ int find_config_tree_int(struct cmd_context *cmd, int id, struct profile *profil
 	if (item->type != CFG_TYPE_INT)
 		log_error(INTERNAL_ERROR "%s cfg tree element not declared as integer.", path);
 
-	i = dm_config_tree_find_int(cmd->cft, path, cfg_def_get_default_value(cmd, item, CFG_TYPE_INT, profile));
+	i = _config_disabled(cmd, item, path) ? cfg_def_get_default_value(cmd, item, CFG_TYPE_INT, profile)
+					      : dm_config_tree_find_int(cmd->cft, path, cfg_def_get_default_value(cmd, item, CFG_TYPE_INT, profile));
 
 	if (profile_applied)
 		remove_config_tree_by_source(cmd, profile->source);
@@ -1236,7 +1285,8 @@ int64_t find_config_tree_int64(struct cmd_context *cmd, int id, struct profile *
 	if (item->type != CFG_TYPE_INT)
 		log_error(INTERNAL_ERROR "%s cfg tree element not declared as integer.", path);
 
-	i64 = dm_config_tree_find_int64(cmd->cft, path, cfg_def_get_default_value(cmd, item, CFG_TYPE_INT, profile));
+	i64 = _config_disabled(cmd, item, path) ? cfg_def_get_default_value(cmd, item, CFG_TYPE_INT, profile)
+						: dm_config_tree_find_int64(cmd->cft, path, cfg_def_get_default_value(cmd, item, CFG_TYPE_INT, profile));
 
 	if (profile_applied)
 		remove_config_tree_by_source(cmd, profile->source);
@@ -1257,12 +1307,30 @@ float find_config_tree_float(struct cmd_context *cmd, int id, struct profile *pr
 	if (item->type != CFG_TYPE_FLOAT)
 		log_error(INTERNAL_ERROR "%s cfg tree element not declared as float.", path);
 
-	f = dm_config_tree_find_float(cmd->cft, path, cfg_def_get_default_value(cmd, item, CFG_TYPE_FLOAT, profile));
+	f = _config_disabled(cmd, item, path) ? cfg_def_get_default_value(cmd, item, CFG_TYPE_FLOAT, profile)
+					      : dm_config_tree_find_float(cmd->cft, path, cfg_def_get_default_value(cmd, item, CFG_TYPE_FLOAT, profile));
 
 	if (profile_applied)
 		remove_config_tree_by_source(cmd, profile->source);
 
 	return f;
+}
+
+int find_config_bool(struct cmd_context *cmd, struct dm_config_tree *cft, int id)
+{
+	cfg_def_item_t *item = cfg_def_get_item_p(id);
+	char path[CFG_PATH_MAX_LEN];
+	int b;
+
+	_cfg_def_make_path(path, sizeof(path), item->id, item, 0);
+
+	if (item->type != CFG_TYPE_BOOL)
+		log_error(INTERNAL_ERROR "%s cfg tree element not declared as boolean.", path);
+
+	b = _config_disabled(cmd, item, path) ? cfg_def_get_default_value(cmd, item, CFG_TYPE_BOOL, NULL)
+					      : dm_config_tree_find_bool(cft, path, cfg_def_get_default_value(cmd, item, CFG_TYPE_BOOL, NULL));
+
+	return b;
 }
 
 int find_config_tree_bool(struct cmd_context *cmd, int id, struct profile *profile)
@@ -1278,7 +1346,8 @@ int find_config_tree_bool(struct cmd_context *cmd, int id, struct profile *profi
 	if (item->type != CFG_TYPE_BOOL)
 		log_error(INTERNAL_ERROR "%s cfg tree element not declared as boolean.", path);
 
-	b = dm_config_tree_find_bool(cmd->cft, path, cfg_def_get_default_value(cmd, item, CFG_TYPE_BOOL, profile));
+	b = _config_disabled(cmd, item, path) ? cfg_def_get_default_value(cmd, item, CFG_TYPE_BOOL, profile)
+					      : dm_config_tree_find_bool(cmd->cft, path, cfg_def_get_default_value(cmd, item, CFG_TYPE_BOOL, profile));
 
 	if (profile_applied)
 		remove_config_tree_by_source(cmd, profile->source);
@@ -1414,7 +1483,7 @@ int merge_config_tree(struct cmd_context *cmd, struct dm_config_tree *cft,
 	cs = dm_config_get_custom(cft);
 	csn = dm_config_get_custom(newdata);
 
-	if (cs && csn && (cs->timestamp < csn->timestamp))
+	if (cs && csn && timespeccmp(&cs->timestamp, &csn->timestamp, <))
 		cs->timestamp = csn->timestamp;
 
 	return 1;
@@ -1426,6 +1495,55 @@ struct out_baton {
 	struct dm_pool *mem;
 };
 
+#define MAX_COMMENT_LINE 512
+
+static int _copy_one_line(const char *comment, char *line, int *pos, int len)
+{
+	int p;
+	int i = 0;
+	char c;
+
+	if (*pos >= len)
+		return 0;
+
+	memset(line, 0, MAX_COMMENT_LINE+1);
+
+	for (p = *pos; ; p++) {
+		c = comment[p];
+
+		(*pos)++;
+
+		if (c == '\n' || c == '\0')
+			break;
+
+		line[i++] = c;
+
+		if (i == MAX_COMMENT_LINE)
+		       break;
+	}
+
+	return i;
+}
+
+static int _get_config_node_version(uint16_t version_enc, char *version)
+{
+	if (dm_snprintf(version, 9, "%u.%u.%u",
+			(version_enc & 0xE000) >> 13,
+			(version_enc & 0x1E00) >> 9,
+			(version_enc & 0x1FF)) == -1) {
+		log_error("_get_config_node_version: couldn't create version string");
+		return 0;
+	}
+
+	return 1;
+}
+
+static int _def_node_is_deprecated(cfg_def_item_t *def, struct config_def_tree_spec *spec)
+{
+	return def->deprecated_since_version &&
+	       (spec->version >= def->deprecated_since_version);
+}
+
 static int _out_prefix_fn(const struct dm_config_node *cn, const char *line, void *baton)
 {
 	struct out_baton *out = baton;
@@ -1433,7 +1551,7 @@ static int _out_prefix_fn(const struct dm_config_node *cn, const char *line, voi
 	char version[9]; /* 8+1 chars for max version of 7.15.511 */
 	const char *node_type_name = cn->v ? "option" : "section";
 	char path[CFG_PATH_MAX_LEN];
-
+	char commentline[MAX_COMMENT_LINE+1];
 
 	if (cn->id < 0)
 		return 1;
@@ -1443,18 +1561,36 @@ static int _out_prefix_fn(const struct dm_config_node *cn, const char *line, voi
 		return 0;
 	}
 
+	if (out->tree_spec->type == CFG_DEF_TREE_LIST)
+		return 1;
+
 	if ((out->tree_spec->type == CFG_DEF_TREE_DIFF) &&
 	    (!(out->tree_spec->check_status[cn->id] & CFG_DIFF)))
 		return 1;
 
 	cfg_def = cfg_def_get_item_p(cn->id);
 
-	if (out->tree_spec->withcomments) {
+	if (out->tree_spec->withsummary || out->tree_spec->withcomments) {
 		_cfg_def_make_path(path, sizeof(path), cfg_def->id, cfg_def, 1);
+		fprintf(out->fp, "\n");
 		fprintf(out->fp, "%s# Configuration %s %s.\n", line, node_type_name, path);
 
-		if (cfg_def->comment)
-			fprintf(out->fp, "%s# %s\n", line, cfg_def->comment);
+		if (out->tree_spec->withcomments &&
+		    _def_node_is_deprecated(cfg_def, out->tree_spec))
+			fprintf(out->fp, "%s# %s", line, cfg_def->deprecation_comment);
+
+		if (cfg_def->comment) {
+			int pos = 0;
+			while (_copy_one_line(cfg_def->comment, commentline, &pos, strlen(cfg_def->comment))) {
+				fprintf(out->fp, "%s# %s\n", line, commentline);
+				/* withsummary prints only the first comment line. */
+				if (!out->tree_spec->withcomments)
+					break;
+			}
+		}
+
+		if (_def_node_is_deprecated(cfg_def, out->tree_spec))
+			fprintf(out->fp, "%s# This configuration %s is deprecated.\n", line, node_type_name);
 
 		if (cfg_def->flags & CFG_ADVANCED)
 			fprintf(out->fp, "%s# This configuration %s is advanced.\n", line, node_type_name);
@@ -1470,14 +1606,15 @@ static int _out_prefix_fn(const struct dm_config_node *cn, const char *line, voi
 	}
 
 	if (out->tree_spec->withversions) {
-		if (dm_snprintf(version, 9, "%u.%u.%u",
-				(cfg_def->since_version & 0xE000) >> 13,
-				(cfg_def->since_version & 0x1E00) >> 9,
-				(cfg_def->since_version & 0x1FF)) == -1) {
-			log_error("_out_prefix_fn: couldn't create version string");
-			return 0;
+		if (!_get_config_node_version(cfg_def->since_version, version))
+			return_0;
+		fprintf(out->fp, "%s# Available since version %s.\n", line, version);
+
+		if (_def_node_is_deprecated(cfg_def, out->tree_spec)) {
+			if (!_get_config_node_version(cfg_def->deprecated_since_version, version))
+				return_0;
+			fprintf(out->fp, "%s# Deprecated since version %s.\n", line, version);
 		}
-		fprintf(out->fp, "%s# Since version %s.\n", line, version);
 	}
 
 	return 1;
@@ -1486,15 +1623,55 @@ static int _out_prefix_fn(const struct dm_config_node *cn, const char *line, voi
 static int _out_line_fn(const struct dm_config_node *cn, const char *line, void *baton)
 {
 	struct out_baton *out = baton;
-	struct cfg_def_item *cfg_def = cfg_def_get_item_p(cn->id);
+	struct cfg_def_item *cfg_def;
+	char config_path[CFG_PATH_MAX_LEN];
+	char summary[MAX_COMMENT_LINE+1];
+	char version[9];
+	int pos = 0;
+	size_t len;
+	char *space_prefix;
 
 	if ((out->tree_spec->type == CFG_DEF_TREE_DIFF) &&
 	    (!(out->tree_spec->check_status[cn->id] & CFG_DIFF)))
 		return 1;
 
-	fprintf(out->fp, "%s%s\n", (out->tree_spec->type != CFG_DEF_TREE_CURRENT) &&
-				   (out->tree_spec->type != CFG_DEF_TREE_DIFF) &&
-				   (cfg_def->flags & CFG_DEFAULT_UNDEFINED) ? "#" : "", line);
+	cfg_def = cfg_def_get_item_p(cn->id);
+
+	if (out->tree_spec->type == CFG_DEF_TREE_LIST) {
+		/* List view with node paths and summary. */
+		if (cfg_def->type & CFG_TYPE_SECTION)
+			return 1;
+		if (!_cfg_def_make_path(config_path, CFG_PATH_MAX_LEN, cfg_def->id, cfg_def, 1))
+			return_0;
+		if (out->tree_spec->withversions && !_get_config_node_version(cfg_def->since_version, version))
+			return_0;
+
+		summary[0] = '\0';
+		if (out->tree_spec->withsummary && cfg_def->comment)
+			_copy_one_line(cfg_def->comment, summary, &pos, strlen(cfg_def->comment));
+
+		fprintf(out->fp, "%s%s%s%s%s%s%s\n", config_path,
+			*summary || out->tree_spec->withversions ? " - ": "",
+			*summary ? summary : "",
+			*summary ? " " : "",
+			out->tree_spec->withversions ? "[" : "",
+			out->tree_spec->withversions ? version : "",
+			out->tree_spec->withversions ? "]" : "");
+
+		return 1;
+	}
+
+	/* Usual tree view with nodes and their values. */
+	if ((out->tree_spec->type != CFG_DEF_TREE_CURRENT) &&
+	    (out->tree_spec->type != CFG_DEF_TREE_DIFF) &&
+	    (cfg_def->flags & (CFG_DEFAULT_UNDEFINED | CFG_DEFAULT_COMMENTED))) {
+		space_prefix = ((len = strspn(line, "\t "))) ? dm_pool_strndup(out->mem, line, len) : NULL;
+		fprintf(out->fp, "%s%s%s\n", space_prefix ? : "", "# ", line + len);
+		if (space_prefix)
+			dm_pool_free(out->mem, space_prefix);
+	} else
+		fprintf(out->fp, "%s\n", line);
+
 	return 1;
 }
 
@@ -1575,7 +1752,10 @@ static struct dm_config_node *_add_def_node(struct dm_config_tree *cft,
 
 	cn->id = def->id;
 
-	if (!(def->type & CFG_TYPE_ARRAY)) {
+	if (spec->unconfigured && def->default_unconfigured_value.v_UNCONFIGURED) {
+		cn->v->type = DM_CFG_STRING;
+		cn->v->v.str = cfg_def_get_default_unconfigured_value_hint(spec->cmd, def);
+	} else if (!(def->type & CFG_TYPE_ARRAY)) {
 		switch (def->type) {
 			case CFG_TYPE_SECTION:
 				cn->v = NULL;
@@ -1620,6 +1800,11 @@ static struct dm_config_node *_add_def_node(struct dm_config_tree *cft,
 	return cn;
 }
 
+static int _should_skip_deprecated_def_node(cfg_def_item_t *def, struct config_def_tree_spec *spec)
+{
+	return spec->ignoredeprecated && _def_node_is_deprecated(def, spec);
+}
+
 static int _should_skip_def_node(struct config_def_tree_spec *spec, int section_id, int id)
 {
 	cfg_def_item_t *def = cfg_def_get_item_p(id);
@@ -1639,18 +1824,21 @@ static int _should_skip_def_node(struct config_def_tree_spec *spec, int section_
 			}
 			if ((spec->check_status[id] & CFG_USED) ||
 			    (def->flags & CFG_NAME_VARIABLE) ||
-			    (def->since_version > spec->version))
+			    (def->since_version > spec->version) ||
+			    _should_skip_deprecated_def_node(def, spec))
 				return 1;
 			break;
 		case CFG_DEF_TREE_NEW:
-			if (def->since_version != spec->version)
+			if ((def->since_version != spec->version) ||
+			    _should_skip_deprecated_def_node(def, spec))
 				return 1;
 			break;
 		case CFG_DEF_TREE_PROFILABLE:
 		case CFG_DEF_TREE_PROFILABLE_CMD:
 		case CFG_DEF_TREE_PROFILABLE_MDA:
 			if (!(def->flags & CFG_PROFILABLE) ||
-			    (def->since_version > spec->version))
+			    (def->since_version > spec->version) ||
+			    _should_skip_deprecated_def_node(def, spec))
 				return 1;
 			flags = def->flags & ~CFG_PROFILABLE;
 			if (spec->type == CFG_DEF_TREE_PROFILABLE_CMD) {
@@ -1662,7 +1850,8 @@ static int _should_skip_def_node(struct config_def_tree_spec *spec, int section_
 			}
 			break;
 		default:
-			if (def->since_version > spec->version)
+			if ((def->since_version > spec->version) ||
+			    _should_skip_deprecated_def_node(def, spec))
 				return 1;
 			break;
 	}
@@ -1712,6 +1901,9 @@ struct dm_config_tree *config_def_create_tree(struct config_def_tree_spec *spec)
 
 	for (id = root_CFG_SECTION + 1; id < CFG_COUNT; id++) {
 		if (cfg_def_get_item_p(id)->parent != root_CFG_SECTION)
+			continue;
+
+		if (spec->ignorelocal && (id == local_CFG_SECTION))
 			continue;
 
 		if ((tmp = _add_def_section_subtree(cft, spec, root, relay, id))) {
@@ -1901,6 +2093,11 @@ const char *get_default_devices_cache_dir_CFG(struct cmd_context *cmd, struct pr
 	return dm_pool_strdup(cmd->mem, buf);
 }
 
+const char *get_default_unconfigured_devices_cache_dir_CFG(struct cmd_context *cmd)
+{
+	return "@DEFAULT_SYS_DIR@/@DEFAULT_CACHE_SUBDIR@";
+}
+
 const char *get_default_devices_cache_CFG(struct cmd_context *cmd, struct profile *profile)
 {
 	const char *cache_dir = NULL, *cache_file_prefix = NULL;
@@ -1935,6 +2132,24 @@ const char *get_default_devices_cache_CFG(struct cmd_context *cmd, struct profil
 	return dm_pool_strdup(cmd->mem, buf);
 }
 
+const char *get_default_unconfigured_devices_cache_CFG(struct cmd_context *cmd)
+{
+	const char *cache_file_prefix = NULL;
+	static char buf[PATH_MAX];
+
+	if (find_config_tree_node(cmd, devices_cache_file_prefix_CFG, NULL))
+		cache_file_prefix = find_config_tree_str_allow_empty(cmd, devices_cache_file_prefix_CFG, NULL);
+
+	if (dm_snprintf(buf, sizeof(buf), "%s/%s.cache",
+			get_default_unconfigured_devices_cache_dir_CFG(cmd),
+			cache_file_prefix ? : DEFAULT_CACHE_FILE_PREFIX) < 0) {
+		log_error("Persistent cache filename too long.");
+		return NULL;
+	}
+
+	return dm_pool_strdup(cmd->mem, buf);
+}
+
 const char *get_default_backup_backup_dir_CFG(struct cmd_context *cmd, struct profile *profile)
 {
 	static char buf[PATH_MAX];
@@ -1946,6 +2161,11 @@ const char *get_default_backup_backup_dir_CFG(struct cmd_context *cmd, struct pr
 	}
 
 	return dm_pool_strdup(cmd->mem, buf);
+}
+
+const char *get_default_unconfigured_backup_backup_dir_CFG(struct cmd_context *cmd)
+{
+	return "@DEFAULT_SYS_DIR@/@DEFAULT_BACKUP_SUBDIR@";
 }
 
 const char *get_default_backup_archive_dir_CFG(struct cmd_context *cmd, struct profile *profile)
@@ -1961,6 +2181,11 @@ const char *get_default_backup_archive_dir_CFG(struct cmd_context *cmd, struct p
 	return dm_pool_strdup(cmd->mem, buf);
 }
 
+const char *get_default_unconfigured_backup_archive_dir_CFG(struct cmd_context *cmd)
+{
+	return "@DEFAULT_SYS_DIR@/@DEFAULT_ARCHIVE_SUBDIR@";
+}
+
 const char *get_default_config_profile_dir_CFG(struct cmd_context *cmd, struct profile *profile)
 {
 	static char buf[PATH_MAX];
@@ -1972,6 +2197,11 @@ const char *get_default_config_profile_dir_CFG(struct cmd_context *cmd, struct p
 	}
 
 	return dm_pool_strdup(cmd->mem, buf);
+}
+
+const char *get_default_unconfigured_config_profile_dir_CFG(struct cmd_context *cmd)
+{
+	return "@DEFAULT_SYS_DIR@/@DEFAULT_PROFILE_SUBDIR@";
 }
 
 const char *get_default_activation_mirror_image_fault_policy_CFG(struct cmd_context *cmd, struct profile *profile)

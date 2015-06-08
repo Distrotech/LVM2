@@ -80,6 +80,29 @@ static void _exit_handler(int sig __attribute__((unused)))
 
 #  include <stdio.h>
 
+static int _is_idle(daemon_state s)
+{
+	return s.idle && s.idle->is_idle && !s.threads->next;
+}
+
+static struct timeval *_get_timeout(daemon_state s)
+{
+	return s.idle ? s.idle->ptimeout : NULL;
+}
+
+static void _reset_timeout(daemon_state s)
+{
+	if (s.idle) {
+		s.idle->ptimeout->tv_sec = 1;
+		s.idle->ptimeout->tv_usec = 0;
+	}
+}
+
+static unsigned _get_max_timeouts(daemon_state s)
+{
+	return s.idle ? s.idle->max_timeouts : 0;
+}
+
 static int _set_oom_adj(const char *oom_adj_path, int val)
 {
 	FILE *fp;
@@ -221,9 +244,7 @@ static int _open_socket(daemon_state s)
 		goto error;
 	}
 
-	/* Set Close-on-exec & non-blocking */
-	if (fcntl(fd, F_SETFD, 1))
-		fprintf(stderr, "setting CLOEXEC on socket fd %d failed: %s\n", fd, strerror(errno));
+	/* Set non-blocking */
 	if (fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK))
 		fprintf(stderr, "setting O_NONBLOCK on socket fd %d failed: %s\n", fd, strerror(errno));
 
@@ -240,12 +261,12 @@ static int _open_socket(daemon_state s)
 		}
 
 		/* Socket already exists. If it's stale, remove it. */
-		if (stat(sockaddr.sun_path, &buf)) {
+		if (lstat(sockaddr.sun_path, &buf)) {
 			perror("stat failed");
 			goto error;
 		}
 
-		if (S_ISSOCK(buf.st_mode)) {
+		if (!S_ISSOCK(buf.st_mode)) {
 			fprintf(stderr, "%s: not a socket\n", sockaddr.sun_path);
 			goto error;
 		}
@@ -470,6 +491,9 @@ static int handle_connect(daemon_state s)
 	if (client.socket_fd < 0)
 		return 0;
 
+	 if (fcntl(client.socket_fd, F_SETFD, FD_CLOEXEC))
+		WARN(&s, "setting CLOEXEC on client socket fd %d failed", client.socket_fd);
+
 	if (!(ts = dm_malloc(sizeof(thread_state)))) {
 		if (close(client.socket_fd))
 			perror("close");
@@ -512,6 +536,7 @@ void daemon_start(daemon_state s)
 	int failed = 0;
 	log_state _log = { { 0 } };
 	thread_state _threads = { .next = NULL };
+	unsigned timeout_count = 0;
 
 	/*
 	 * Switch to C locale to avoid reading large locale-archive file used by
@@ -543,8 +568,10 @@ void daemon_start(daemon_state s)
 		 * NB. Take care to not keep stale locks around. Best not exit(...)
 		 * after this point.
 		 */
-		if (dm_create_lockfile(s.pidfile) == 0)
+		if (dm_create_lockfile(s.pidfile) == 0) {
+			ERROR(&s, "Failed to acquire lock on %s. Already running?\n", s.pidfile);
 			exit(EXIT_ALREADYRUNNING);
+		}
 
 		(void) dm_prepare_selinux_context(NULL, 0);
 	}
@@ -569,6 +596,10 @@ void daemon_start(daemon_state s)
 			failed = 1;
 	}
 
+	/* Set Close-on-exec */
+	if (!failed && fcntl(s.socket_fd, F_SETFD, 1))
+		ERROR(&s, "setting CLOEXEC on socket fd %d failed: %s\n", s.socket_fd, strerror(errno));
+
 	/* Signal parent, letting them know we are ready to go. */
 	if (!s.foreground)
 		kill(getppid(), SIGTERM);
@@ -578,15 +609,28 @@ void daemon_start(daemon_state s)
 			failed = 1;
 
 	while (!_shutdown_requested && !failed) {
+		_reset_timeout(s);
 		fd_set in;
 		FD_ZERO(&in);
 		FD_SET(s.socket_fd, &in);
-		if (select(FD_SETSIZE, &in, NULL, NULL, NULL) < 0 && errno != EINTR)
+		if (select(FD_SETSIZE, &in, NULL, NULL, _get_timeout(s)) < 0 && errno != EINTR)
 			perror("select error");
-		if (FD_ISSET(s.socket_fd, &in))
+		if (FD_ISSET(s.socket_fd, &in)) {
+			timeout_count = 0;
 			if (!_shutdown_requested && !handle_connect(s))
 				ERROR(&s, "Failed to handle a client connection.");
+		}
+
 		reap(s, 0);
+
+		/* s.idle == NULL equals no shutdown on timeout */
+		if (_is_idle(s)) {
+			DEBUGLOG(&s, "timeout occured");
+			if (++timeout_count >= _get_max_timeouts(s)) {
+				INFO(&s, "Inactive for %d seconds. Exiting.", timeout_count);
+				break;
+			}
+		}
 	}
 
 	INFO(&s, "%s waiting for client threads to finish", s.name);

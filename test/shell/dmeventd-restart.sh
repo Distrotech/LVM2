@@ -11,6 +11,8 @@
 
 . lib/inittest
 
+test -e LOCAL_LVMPOLLD && skip
+
 aux prepare_dmeventd
 
 aux prepare_vg 5
@@ -43,9 +45,12 @@ not pgrep dmeventd
 rm LOCAL_DMEVENTD
 
 # set dmeventd path
-aux lvmconf "dmeventd/executable=\"$abs_top_builddir/test/lib/dmeventd\""
+if test -n "$abs_top_builddir"; then
+    aux lvmconf "dmeventd/executable=\"$abs_top_builddir/test/lib/dmeventd\""
+fi
+
 lvchange --monitor y --verbose $vg/3way 2>&1 | tee lvchange.out
-pgrep dmeventd >LOCAL_DMEVENTD
+pgrep -o dmeventd >LOCAL_DMEVENTD
 not grep 'already monitored' lvchange.out
 
 vgremove -ff $vg

@@ -83,10 +83,15 @@ FIELD_RESERVED_BINARY_VALUE(zero, zero, "", "zero")
 FIELD_RESERVED_VALUE(lv_permissions, lv_permissions_rw, "", "writeable", "writeable", "rw", "read-write")
 FIELD_RESERVED_VALUE(lv_permissions, lv_permissions_r, "", "read-only", "read-only", "r", "ro")
 FIELD_RESERVED_VALUE(lv_permissions, lv_permissions_r_override, "", "read-only-override", "read-only-override", "ro-override", "r-override", "R")
-FIELD_RESERVED_VALUE(lv_read_ahead, lv_read_ahead_auto, "", &GET_TYPE_RESERVED_VALUE(num_undef_64), "auto")
+FIELD_RESERVED_VALUE(lv_read_ahead, lv_read_ahead_auto, "", &_siz_max, "auto")
+FIELD_RESERVED_VALUE(lv_when_full, lv_when_full_error, "", "error", "error", "error when full", "error if no space")
+FIELD_RESERVED_VALUE(lv_when_full, lv_when_full_queue, "", "queue", "queue", "queue when full", "queue if no space")
+FIELD_RESERVED_VALUE(lv_when_full, lv_when_full_undef, "", "", "", "undefined")
 
 /* Reserved values for SEG fields */
 FIELD_RESERVED_VALUE(cache_policy, cache_policy_undef, "", "", "", "undefined")
+FIELD_RESERVED_VALUE(seg_monitor, seg_monitor_undef, "", "", "", "undefined")
+FIELD_RESERVED_VALUE(lv_health_status, health_undef, "", "", "", "undefined")
 /* TODO the following 2 need STR_LIST support for reserved values
 FIELD_RESERVED_VALUE(cache_settings, cache_settings_default, "", "default", "default")
 FIELD_RESERVED_VALUE(cache_settings, cache_settings_undef, "", "undefined", "undefined") */

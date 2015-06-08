@@ -13,6 +13,8 @@ test_description='Test process_each_pv with zero mda'
 
 . lib/inittest
 
+test -e LOCAL_LVMPOLLD && skip
+
 aux prepare_devs 14
 
 # for vg1
@@ -57,4 +59,3 @@ grep "$dev11" err
 grep "$dev12" err
 grep "$dev13" err
 grep "$dev14" err
-

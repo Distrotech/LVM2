@@ -1,5 +1,35 @@
-Version 1.02.93 -
-====================================
+Version 1.02.98 - 
+===============================
+  Add dm_task_get_errno() to return any unexpected errno from a dm ioctl call.
+  Use copy of errno made after each dm ioctl call in case errno changes later.
+
+Version 1.02.97 - 15th May 2015
+===============================
+  New dm_task_get_info(DM_1_02_97) supports internal_suspend state.
+  New symbols are versioned and comes with versioned symbol name (DM_1_02_97).
+
+Version 1.02.96 - 2nd May 2015
+==============================
+  Fix selection to not match if using reserved value in criteria with >,<,>=,<.
+  Fix selection to not match reserved values for size fields if using >,<,>=,<.
+  Include uuid or device number in log message after ioctl failure.
+  Add DM_INTERNAL_SUSPEND_FLAG to dm-ioctl.h.
+  Install blkdeactivate script and its man page with make install_device-mapper.
+
+Version 1.02.95 - 15th March 2015
+=================================
+  Makefile regenerated.
+
+Version 1.02.94 - 4th March 2015
+================================
+  Add dm_report_object_is_selected for generalized interface for report/select.
+
+Version 1.02.93 - 21st January 2015
+===================================
+  Reduce severity of ioctl error message when dmeventd waitevent is interrupted.
+  Report 'unknown version' when incompatible version numbers were not obtained.
+  Report more info from thin pool status (out of data, metadata-ro, fail).
+  Support error_if_no_space for thin pool target.
   Fix segfault while using selection with regex and unbuffered reporting.
   Add dm_report_compact_fields to remove empty fields from report output.
   Remove unimplemented dm_report_set_output_selection from libdevmapper.h.

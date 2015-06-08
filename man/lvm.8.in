@@ -43,18 +43,23 @@ path of \fBlvm\fP.
 The following commands are built into lvm without links normally
 being created in the filesystem for them.
 .TP
-\fBdumpconfig\fP \(em Display the configuration information after
-loading \fBlvm.conf\fP(5) and any other configuration files.
+\fBconfig\fP \(em The same as \fBlvmconfig\fP(8) below.
 .TP
 \fBdevtypes\fP \(em Display the recognised built-in block device types.
+.TP
+\fBdumpconfig\fP \(em The same as \fBlvmconfig\fP(8) below.
 .TP
 \fBformats\fP \(em Display recognised metadata formats.
 .TP
 \fBhelp\fP \(em Display the help text.
 .TP
+\fBlvpoll\fP \(em Internal command used by lvmpolld to complete some Logical Volume operations.
+.TP
 \fBpvdata\fP \(em Not implemented in LVM2.
 .TP
 \fBsegtypes\fP \(em Display recognised Logical Volume segment types.
+.TP
+\fBsystemid\fP \(em Display the system ID, if any, currently set on this host.
 .TP
 \fBtags\fP \(em Display any tags defined on this host.
 .TP
@@ -134,6 +139,9 @@ Volumes.
 .TP
 \fBlvmchange\fP \(em Change attributes of the Logical Volume Manager.
 .TP
+\fBlvmconfig\fP \(em Display the configuration information after
+loading \fBlvm.conf\fP(5) and any other configuration files.
+.TP
 \fBlvmdiskscan\fP \(em Scan for all devices visible to LVM2.
 .TP
 \fBlvmdump\fP \(em Create lvm2 information dumps for diagnostic purposes.
@@ -210,8 +218,9 @@ match the original followed by \fBvgcfgrestore\fP(8).
 .BR \-S ", " \-\-select " " \fISelection
 For reporting commands, display only rows that match selection criteria.
 All rows are displayed with the additional "selected" column (\fB-o selected\fP)
-showing 1 if the row matches the Selection and 0 otherwise.
-See \fBSELECTION CRITERIA\fP section of this man page for more
+showing 1 if the row matches the Selection and 0 otherwise. For non-reporting
+commands which process LVM entities, the selection can be used to match items
+to process. See \fBSELECTION CRITERIA\fP section of this man page for more
 information about the way the selection criteria are constructed.
 .TP
 .BR \-M ", " \-\-metadatatype " " \fIType
@@ -241,6 +250,12 @@ Groups when clustered locking is not configured or running.  No attempt
 will be made to communicate with the device-mapper kernel driver, so
 this option is unable to report whether or not Logical Volumes are 
 actually in use.
+.TP
+.B \-\-foreign
+Cause the command to access foreign VGs, that would otherwise be skipped.
+It can be used to report or display a VG that is owned by another host.
+This option can cause a command to perform poorly because lvmetad caching
+is not used and metadata is read from disks.
 .TP
 .B \-\-addtag \fITag
 Add the tag \fITag\fP to a PV, VG or LV.
@@ -291,7 +306,9 @@ placing two stripes on the same Physical Volume.
 .IR \fB\-\-commandprofile " " \fIProfileName
 Selects the command configuration profile to use when processing an LVM command.
 See also \fBlvm.conf\fP(5) for more information about \fBcommand profile config\fP and
-the way it fits with other LVM configuration methods.
+the way it fits with other LVM configuration methods. Using \fB\-\-commandprofile\fP
+option overrides any command profile specified via \fBLVM_COMMAND_PROFILE\fP
+environment variable.
 .TP
 .IR \fB\-\-metadataprofile " " \fIProfileName
 Selects the metadata configuration profile to use when processing an LVM command.
@@ -305,8 +322,8 @@ way it fits with other LVM configuration methods.
 .IR \fB\-\-profile " " \fIProfileName
 A short form of \fB\-\-metadataprofile\fP for \fBvgcreate\fP, \fBlvcreate\fP,
 \fBvgchange\fP and \fBlvchange\fP command and a short form of \fB\-\-commandprofile\fP
-for any other command (with the exception of \fBdumpconfig\fP command where the
-\-\-profile has special meaning, see \fBlvm dumpconfig\fP(8) for more information).
+for any other command (with the exception of \fBlvmconfig\fP command where the
+\-\-profile has special meaning, see \fBlvmconfig\fP(8) for more information).
 .TP
 .IR \fB\-\-config " " \fIConfigurationString
 Uses the ConfigurationString as direct string representation of the configuration
@@ -459,6 +476,10 @@ that can be used in selection, see the output of \fB<lvm reporting command> -S h
 \fB[\fP  \(em List start
 .IP
 \fB]\fP  \(em List end
+.IP
+\fB{\fP  \(em List subset start
+.IP
+\fB}\fP  \(em List subset end
 .LP
 \fBInformal grammar specification\fP:
 .IP
@@ -466,7 +487,11 @@ that can be used in selection, see the output of \fB<lvm reporting command> -S h
 .IP
 .BR VALUE " = " [VALUE " log_op " VALUE]
 .br
-For list-based types: string list. The log_op must always be of one type within the whole list value.
+For list-based types: string list. Matches strictly. The log_op must always be of one type within the whole list value.
+.IP
+.BR VALUE " = " {VALUE " log_op " VALUE}
+.br
+For list-based types: string list. Matches a subset. The log_op must always be of one type within the whole list value.
 .IP
 .BR VALUE " = " value
 .br
@@ -479,6 +504,10 @@ All tools return a status code of zero on success or non-zero on failure.
 .B HOME
 Directory containing \fI.lvm_history\fP if the internal readline
 shell is invoked.
+.TP
+.B LVM_COMMAND_PROFILE
+Name of default command profile to use for LVM commands. This profile
+is overriden by direct use of \fB\-\-commandprofile\fP command line option.
 .TP
 .B LVM_SYSTEM_DIR
 Directory containing \fBlvm.conf\fP(5) and other LVM system files.
@@ -498,6 +527,12 @@ Path for the lvmetad pid file.
 .TP
 .B LVM_LVMETAD_SOCKET
 Path for the lvmetad socket file.
+.TP
+.B LVM_LVMPOLLD_PIDFILE
+Path for the lvmpolld pid file.
+.TP
+.B LVM_LVMPOLLD_SOCKET
+Path for the lvmpolld socket file.
 .SH FILES
 .I #DEFAULT_SYS_DIR#/lvm.conf
 .br
@@ -506,7 +541,6 @@ Path for the lvmetad socket file.
 .BR lvm.conf (5),
 .BR lvmcache (7),
 .BR lvmthin (7),
-.BR lvm\ dumpconfig (8),
 .BR clvmd (8),
 .BR dmsetup (8),
 .BR lvchange (8),
@@ -514,6 +548,7 @@ Path for the lvmetad socket file.
 .BR lvdisplay (8),
 .BR lvextend (8),
 .BR lvmchange (8),
+.BR lvmconfig (8),
 .BR lvmdiskscan (8),
 .BR lvreduce (8),
 .BR lvremove (8),

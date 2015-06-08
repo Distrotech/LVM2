@@ -36,21 +36,29 @@ typedef enum {
 	SEG_STATUS_RAID,
 	SEG_STATUS_SNAPSHOT,
 	SEG_STATUS_THIN,
-	SEG_STATUS_THIN_POOL
+	SEG_STATUS_THIN_POOL,
+	SEG_STATUS_UNKNOWN
 } lv_seg_status_type_t;
 
 struct lv_seg_status {
 	struct dm_pool *mem;			/* input */
-	struct lv_segment *seg;			/* input */
+	const struct lv_segment *seg;		/* input */
 	lv_seg_status_type_t type;		/* output */
-	void *status; /* struct dm_status_* */	/* output */
+	union {
+		struct dm_status_cache *cache;
+		struct dm_status_raid *raid;
+		struct dm_status_snapshot *snapshot;
+		struct dm_status_thin *thin;
+		struct dm_status_thin_pool *thin_pool;
+	};
 };
 
 struct lv_with_info_and_seg_status {
-	struct logical_volume *lv;		/* input */
-	struct lvinfo *info;			/* output */
+	const struct logical_volume *lv;	/* input */
+	int info_ok;
+	struct lvinfo info;			/* output */
 	int seg_part_of_lv;			/* output */
-	struct lv_seg_status *seg_status;	/* input/output, see lv_seg_status */
+	struct lv_seg_status seg_status;	/* input/output, see lv_seg_status */
 };
 
 struct lv_activate_opts {
@@ -123,19 +131,19 @@ int lv_info_by_lvid(struct cmd_context *cmd, const char *lvid_s, int use_layer,
  * Returns 1 if lv_seg_status structure has been populated,
  * else 0 on failure or if device not active locally.
  */
-int lv_status(struct cmd_context *cmd, struct lv_segment *lv_seg,
-	      struct lv_seg_status *lv_seg_status);
+int lv_status(struct cmd_context *cmd, const struct lv_segment *lv_seg,
+	      int use_layer, struct lv_seg_status *lv_seg_status);
 
 /*
  * Returns 1 if lv_info_and_seg_status structure has been populated,
  * else 0 on failure or if device not active locally.
  *
- * lv_info_with_seg_status is the same as calling lv_info and then lv_seg_status,
+ * lv_info_with_seg_status is the same as calling lv_info and then lv_status,
  * but this fn tries to do that with one ioctl if possible.
  */
 int lv_info_with_seg_status(struct cmd_context *cmd, const struct logical_volume *lv,
-			    struct lv_segment *lv_seg, int use_layer,
-			    struct lvinfo *lvinfo, struct lv_seg_status *lv_seg_status,
+			    const struct lv_segment *lv_seg, int use_layer,
+			    struct lv_with_info_and_seg_status *status,
 			    int with_open_count, int with_read_ahead);
 
 int lv_check_not_in_use(const struct logical_volume *lv);

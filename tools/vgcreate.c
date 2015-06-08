@@ -37,7 +37,7 @@ int vgcreate(struct cmd_context *cmd, int argc, char **argv)
 	argv++;
 
 	pvcreate_params_set_defaults(&pp);
-	if (!pvcreate_params_validate(cmd, argc, argv, &pp)) {
+	if (!pvcreate_params_validate(cmd, argc, &pp)) {
 		return EINVALID_CMD_LINE;
 	}
 
@@ -71,6 +71,7 @@ int vgcreate(struct cmd_context *cmd, int argc, char **argv)
 	    !vg_set_max_pv(vg, vp_new.max_pv) ||
 	    !vg_set_alloc_policy(vg, vp_new.alloc) ||
 	    !vg_set_clustered(vg, vp_new.clustered) ||
+	    !vg_set_system_id(vg, vp_new.system_id) ||
 	    !vg_set_mda_copies(vg, vp_new.vgmetadatacopies))
 		goto bad_orphan;
 
@@ -123,8 +124,9 @@ int vgcreate(struct cmd_context *cmd, int argc, char **argv)
 
 	backup(vg);
 
-	log_print_unless_silent("%s%colume group \"%s\" successfully created",
-				clustered_message, *clustered_message ? 'v' : 'V', vg->name);
+	log_print_unless_silent("%s%colume group \"%s\" successfully created%s%s",
+				clustered_message, *clustered_message ? 'v' : 'V', vg->name,
+				vg->system_id ? " with system ID " : "", vg->system_id ? : "");
 
 	release_vg(vg);
 	return ECMD_PROCESSED;

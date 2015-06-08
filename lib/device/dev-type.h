@@ -44,6 +44,7 @@ struct dev_types {
 	int device_mapper_major;
 	int emcpower_major;
 	int power2_major;
+	int dasd_major;
 	struct dev_type_def dev_type_array[NUMBER_OF_MAJORS];
 };
 
@@ -65,7 +66,7 @@ int dev_is_luks(struct device *dev, uint64_t *signature);
 #define TYPE_DM_SNAPSHOT_COW	0x004
 int wipe_known_signatures(struct cmd_context *cmd, struct device *dev, const char *name,
 			  uint32_t types_to_exclude, uint32_t types_no_prompt,
-			  int yes, force_t force);
+			  int yes, force_t force, int *wiped);
 
 /* Type-specific device properties */
 unsigned long dev_md_stripe_width(struct dev_types *dt, struct device *dev);

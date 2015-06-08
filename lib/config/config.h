@@ -72,6 +72,7 @@ typedef int (*t_fn_CFG_TYPE_INT) (struct cmd_context *cmd, struct profile *profi
 typedef float (*t_fn_CFG_TYPE_FLOAT) (struct cmd_context *cmd, struct profile *profile);
 typedef const char* (*t_fn_CFG_TYPE_STRING) (struct cmd_context *cmd, struct profile *profile);
 typedef const char* (*t_fn_CFG_TYPE_ARRAY) (struct cmd_context *cmd, struct profile *profile);
+typedef const char* (*t_fn_UNCONFIGURED) (struct cmd_context *cmd);
 
 /* configuration definition item value (for item's default value) */
 typedef union {
@@ -88,37 +89,50 @@ typedef union {
 	t_fn_CFG_TYPE_ARRAY fn_CFG_TYPE_ARRAY;
 } cfg_def_value_t;
 
+typedef union {
+	const char *v_UNCONFIGURED;
+	t_fn_UNCONFIGURED fn_UNCONFIGURED;
+} cfg_def_unconfigured_value_t;
+
 /* configuration definition item flags: */
 
+
 /* whether the configuration item name is variable */
-#define CFG_NAME_VARIABLE	0x01
+#define CFG_NAME_VARIABLE	0x001
 /* whether empty value is allowed */
-#define CFG_ALLOW_EMPTY		0x02
+#define CFG_ALLOW_EMPTY		0x002
 /* whether the configuration item is for advanced use only */
-#define CFG_ADVANCED		0x04
+#define CFG_ADVANCED		0x004
 /* whether the configuration item is not officially supported */
-#define CFG_UNSUPPORTED		0x08
+#define CFG_UNSUPPORTED		0x008
 /* whether the configuration item is customizable by a profile */
-#define CFG_PROFILABLE		0x10
+#define CFG_PROFILABLE		0x010
 /* whether the configuration item is customizable by a profile */
 /* and whether it can be attached to VG/LV metadata at the same time
  * The CFG_PROFILABLE_METADATA flag incorporates CFG_PROFILABLE flag!!! */
-#define CFG_PROFILABLE_METADATA 0x30
+#define CFG_PROFILABLE_METADATA 0x030
 /* whether the default value is undefned */
-#define CFG_DEFAULT_UNDEFINED	0x40
-/* whether the defualt value is calculated during run time */
-#define CFG_DEFAULT_RUN_TIME	0x80
+#define CFG_DEFAULT_UNDEFINED	0x040
+/* whether the default value is commented out on output */
+#define CFG_DEFAULT_COMMENTED	0x080
+/* whether the default value is calculated during run time */
+#define CFG_DEFAULT_RUN_TIME	0x100
+/* whether the configuration setting is disabled (and hence defaults always used) */
+#define CFG_DISABLED		0x200
 
 /* configuration definition item structure */
 typedef struct cfg_def_item {
-	int id;				/* ID of this item */
-	int parent;			/* ID of parent item */
-	const char *name;		/* name of the item in configuration tree */
-	int type;			/* configuration item type (bits of cfg_def_type_t) */
-	cfg_def_value_t default_value;	/* default value (only for settings) */
-	uint16_t flags;			/* configuration item definition flags */
-	uint16_t since_version;		/* version this item appeared in */
-	const char *comment;		/* brief comment */
+	int id;								/* ID of this item */
+	int parent;							/* ID of parent item */
+	const char *name;						/* name of the item in configuration tree */
+	int type;							/* configuration item type (bits of cfg_def_type_t) */
+	cfg_def_value_t default_value;					/* default value (only for settings) */
+	uint16_t flags;							/* configuration item definition flags */
+	uint16_t since_version;						/* version this item appeared in */
+	cfg_def_unconfigured_value_t default_unconfigured_value;	/* default value in terms of @FOO@, pre-configured (only for settings) */
+	uint16_t deprecated_since_version;				/* version since this item is deprecated */
+	const char *deprecation_comment;				/* comment about reasons for deprecation and settings that supersede this one */
+	const char *comment;						/* comment */
 } cfg_def_item_t;
 
 /* configuration definition tree types */
@@ -132,6 +146,7 @@ typedef enum {
 	CFG_DEF_TREE_PROFILABLE_CMD,	/* tree of all nodes that are customizable by command profiles (subset of PROFILABLE) */
 	CFG_DEF_TREE_PROFILABLE_MDA,	/* tree of all nodes that are customizable by metadata profiles (subset of PROFILABLE) */
 	CFG_DEF_TREE_DIFF,		/* tree of all nodes that differ from defaults */
+	CFG_DEF_TREE_LIST,		/* list all nodes */
 } cfg_def_tree_t;
 
 /* configuration definition tree specification */
@@ -139,10 +154,14 @@ struct config_def_tree_spec {
 	struct cmd_context *cmd;	/* command context (for run-time defaults */
 	cfg_def_tree_t type;		/* tree type */
 	uint16_t version;		/* tree at this LVM2 version */
-	unsigned ignoreadvanced:1;		/* do not include advanced configs */
+	unsigned ignoreadvanced:1;	/* do not include advanced configs */
 	unsigned ignoreunsupported:1;	/* do not include unsupported configs */
-	unsigned withcomments:1;		/* include comments */
-	unsigned withversions:1;		/* include versions */
+	unsigned ignoredeprecated:1;	/* do not include deprecated configs */
+	unsigned ignorelocal:1;		/* do not include the local section */
+	unsigned withsummary:1;		/* include first line of comments - a summary */
+	unsigned withcomments:1;	/* include all comment lines */
+	unsigned withversions:1;	/* include versions */
+	unsigned unconfigured:1;	/* use unconfigured path strings */
 	uint8_t *check_status;		/* status of last tree check (currently needed for CFG_DEF_TREE_MISSING only) */
 };
 
@@ -158,11 +177,11 @@ struct config_def_tree_spec {
  * Register ID for each possible item in the configuration tree.
  */
 enum {
-#define cfg_section(id, name, parent, flags, since_version, comment) id,
-#define cfg(id, name, parent, flags, type, default_value, since_version, comment) id,
-#define cfg_runtime(id, name, parent, flags, type, since_version, comment) id,
-#define cfg_array(id, name, parent, flags, types, default_value, since_version, comment) id,
-#define cfg_array_runtime(id, name, parent, flags, types, since_version, comment) id,
+#define cfg_section(id, name, parent, flags, since_version, deprecated_since_version, deprecation_comment, comment) id,
+#define cfg(id, name, parent, flags, type, default_value, since_version, unconfigured_value, deprecated_since_version, deprecation_comment, comment) id,
+#define cfg_runtime(id, name, parent, flags, type, since_version, deprecated_since_version, deprecation_comment, comment) id,
+#define cfg_array(id, name, parent, flags, types, default_value, since_version, unconfigured_value, deprecated_since_version, deprecation_comment, comment) id,
+#define cfg_array_runtime(id, name, parent, flags, types, since_version, deprecated_since_version, deprecation_comment, comment) id,
 #include "config_settings.h"
 #undef cfg_section
 #undef cfg
@@ -184,6 +203,8 @@ struct cft_check_handle {
 	unsigned skip_if_checked:1;	/* skip the check if already done before - return last state */
 	unsigned suppress_messages:1;	/* suppress messages during the check if config item is found invalid */
 	unsigned check_diff:1;		/* check if the value used differs from default one */
+	unsigned ignoreadvanced:1;	/* do not include advnced configs */
+	unsigned ignoreunsupported:1;	/* do not include unsupported configs */
 	uint8_t status[CFG_COUNT];	/* flags for each configuration item - the result of the check */
 };
 
@@ -202,7 +223,8 @@ typedef uint32_t (*checksum_fn_t) (uint32_t initial, const uint8_t *buf, uint32_
 struct dm_config_tree *config_open(config_source_t source, const char *filename, int keep_open);
 int config_file_read_fd(struct dm_config_tree *cft, struct device *dev,
 			off_t offset, size_t size, off_t offset2, size_t size2,
-			checksum_fn_t checksum_fn, uint32_t checksum);
+			checksum_fn_t checksum_fn, uint32_t checksum,
+			int skip_parse);
 int config_file_read(struct dm_config_tree *cft);
 struct dm_config_tree *config_file_open_and_read(const char *config_file, config_source_t source,
 						 struct cmd_context *cmd);
@@ -211,7 +233,7 @@ int config_write(struct dm_config_tree *cft, struct config_def_tree_spec *tree_s
 struct dm_config_tree *config_def_create_tree(struct config_def_tree_spec *spec);
 void config_destroy(struct dm_config_tree *cft);
 
-time_t config_file_timestamp(struct dm_config_tree *cft);
+struct timespec config_file_timestamp(struct dm_config_tree *cft);
 int config_file_changed(struct dm_config_tree *cft);
 int config_file_check(struct dm_config_tree *cft, const char **filename, struct stat *info);
 
@@ -231,6 +253,12 @@ int merge_config_tree(struct cmd_context *cmd, struct dm_config_tree *cft,
 		      struct dm_config_tree *newdata, config_merge_t);
 
 /*
+ * The next two do not check config overrides and must only be used for the tags section.
+ */
+const struct dm_config_node *find_config_node(struct cmd_context *cmd, struct dm_config_tree *cft, int id);
+int find_config_bool(struct cmd_context *cmd, struct dm_config_tree *cft, int id);
+
+/*
  * These versions check an override tree, if present, first.
  */
 const struct dm_config_node *find_config_tree_node(struct cmd_context *cmd, int id, struct profile *profile);
@@ -246,12 +274,20 @@ int find_config_tree_bool(struct cmd_context *cmd, int id, struct profile *profi
  * value is evaluated at runtime based on command context.
  */
 const char *get_default_devices_cache_dir_CFG(struct cmd_context *cmd, struct profile *profile);
+const char *get_default_unconfigured_devices_cache_dir_CFG(struct cmd_context *cmd);
 const char *get_default_devices_cache_CFG(struct cmd_context *cmd, struct profile *profile);
+const char *get_default_unconfigured_devices_cache_CFG(struct cmd_context *cmd);
 const char *get_default_backup_backup_dir_CFG(struct cmd_context *cmd, struct profile *profile);
+const char *get_default_unconfigured_backup_backup_dir_CFG(struct cmd_context *cmd);
 const char *get_default_backup_archive_dir_CFG(struct cmd_context *cmd, struct profile *profile);
+const char *get_default_unconfigured_backup_archive_dir_CFG(struct cmd_context *cmd);
 const char *get_default_config_profile_dir_CFG(struct cmd_context *cmd, struct profile *profile);
+const char *get_default_unconfigured_config_profile_dir_CFG(struct cmd_context *cmd);
 const char *get_default_activation_mirror_image_fault_policy_CFG(struct cmd_context *cmd, struct profile *profile);
+#define get_default_unconfigured_activation_mirror_image_fault_policy_CFG NULL
 int get_default_allocation_thin_pool_chunk_size_CFG(struct cmd_context *cmd, struct profile *profile);
+#define get_default_unconfigured_allocation_thin_pool_chunk_size_CFG NULL
 int get_default_allocation_cache_pool_chunk_size_CFG(struct cmd_context *cmd, struct profile *profile);
+#define get_default_unconfigured_allocation_cache_pool_chunk_size_CFG NULL
 
 #endif

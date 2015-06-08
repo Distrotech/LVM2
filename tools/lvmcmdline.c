@@ -29,6 +29,10 @@
 #include <paths.h>
 #include <locale.h>
 
+#ifdef HAVE_VALGRIND
+#include <valgrind.h>
+#endif
+
 #ifdef HAVE_GETOPTLONG
 #  include <getopt.h>
 #  define GETOPTLONG_FN(a, b, c, d, e) getopt_long((a), (b), (c), (d), (e))
@@ -973,6 +977,15 @@ static int _merge_synonym(struct cmd_context *cmd, int oldarg, int newarg)
 	return 1;
 }
 
+int systemid(struct cmd_context *cmd __attribute__((unused)),
+	     int argc __attribute__((unused)),
+	     char **argv __attribute__((unused)))
+{
+	log_print("system ID: %s", cmd->system_id ? : "");
+
+	return ECMD_PROCESSED;
+}
+
 int version(struct cmd_context *cmd __attribute__((unused)),
 	    int argc __attribute__((unused)),
 	    char **argv __attribute__((unused)))
@@ -1061,8 +1074,11 @@ static int _get_settings(struct cmd_context *cmd)
 	else
 		init_ignorelockingfailure(0);
 
-	cmd->ignore_clustered_vgs = arg_count(cmd, ignoreskippedcluster_ARG) ? 1 : 0;
-
+	cmd->ignore_clustered_vgs = arg_is_set(cmd, ignoreskippedcluster_ARG);
+	cmd->error_foreign_vgs = cmd->command->flags & ENABLE_FOREIGN_VGS ? 0 : 1;
+	cmd->include_foreign_vgs = arg_is_set(cmd, foreign_ARG) ? 1 : 0;
+	cmd->include_active_foreign_vgs = cmd->command->flags & ENABLE_FOREIGN_VGS ? 1 : 0;
+		
 	if (!arg_count(cmd, sysinit_ARG))
 		lvmetad_connect_or_warn();
 
@@ -1232,23 +1248,47 @@ static const char *_copy_command_line(struct cmd_context *cmd, int argc, char **
 
 static int _prepare_profiles(struct cmd_context *cmd)
 {
+	static const char COMMAND_PROFILE_ENV_VAR_NAME[] = "LVM_COMMAND_PROFILE";
+	static const char _cmd_profile_arg_preferred_over_env_var_msg[] = "Giving "
+				"preference to command profile specified on command "
+				"line over the one specified via environment variable.";
 	static const char _failed_to_add_profile_msg[] = "Failed to add %s %s.";
 	static const char _failed_to_apply_profile_msg[] = "Failed to apply %s %s.";
 	static const char _command_profile_source_name[] = "command profile";
 	static const char _metadata_profile_source_name[] = "metadata profile";
 	static const char _setting_global_profile_msg[] = "Setting global %s \"%s\".";
 
+	const char *env_cmd_profile_name = NULL;
 	const char *name;
 	struct profile *profile;
 	config_source_t source;
 	const char *source_name;
+
+	/* Check whether default global command profile is set via env. var. */
+	if ((env_cmd_profile_name = getenv(COMMAND_PROFILE_ENV_VAR_NAME))) {
+		if (!*env_cmd_profile_name)
+			env_cmd_profile_name = NULL;
+		else
+			log_debug("Command profile '%s' requested via "
+				  "environment variable.",
+				   env_cmd_profile_name);
+	}
+
+	if (!arg_count(cmd, profile_ARG) &&
+	    !arg_count(cmd, commandprofile_ARG) &&
+	    !arg_count(cmd, metadataprofile_ARG) &&
+	    !env_cmd_profile_name)
+		/* nothing to do */
+		return 1;
 
 	if (arg_count(cmd, profile_ARG)) {
 		/*
 		 * If --profile is used with dumpconfig, it's used
 		 * to dump the profile without the profile being applied.
 		 */
-		if (!strcmp(cmd->command->name, "dumpconfig"))
+		if (!strcmp(cmd->command->name, "dumpconfig") ||
+		    !strcmp(cmd->command->name, "lvmconfig") ||
+		    !strcmp(cmd->command->name, "config"))
 			return 1;
 
 		/*
@@ -1273,6 +1313,15 @@ static int _prepare_profiles(struct cmd_context *cmd)
 				log_error("Only one of --profile or "
 					  "--commandprofile allowed.");
 				return 0;
+			}
+			/*
+			 * Prefer command profile specified on command
+			 * line over the profile specified via
+			 * COMMAND_PROFILE_ENV_VAR_NAME env. var.
+			 */
+			if (env_cmd_profile_name) {
+				log_debug(_cmd_profile_arg_preferred_over_env_var_msg);
+				env_cmd_profile_name = NULL;
 			}
 			source = CONFIG_PROFILE_COMMAND;
 			source_name = _command_profile_source_name;
@@ -1301,8 +1350,18 @@ static int _prepare_profiles(struct cmd_context *cmd)
 
 	}
 
-	if (arg_count(cmd, commandprofile_ARG)) {
-		name = arg_str_value(cmd, commandprofile_ARG, NULL);
+	if (arg_count(cmd, commandprofile_ARG) || env_cmd_profile_name) {
+		if (arg_count(cmd, commandprofile_ARG)) {
+			/*
+			 * Prefer command profile specified on command
+			 * line over the profile specified via
+			 * COMMAND_PROFILE_ENV_VAR_NAME env. var.
+			 */
+			if (env_cmd_profile_name)
+				log_debug(_cmd_profile_arg_preferred_over_env_var_msg);
+			name = arg_str_value(cmd, commandprofile_ARG, NULL);
+		} else
+			name = env_cmd_profile_name;
 		source_name = _command_profile_source_name;
 
 		if (!(profile = add_profile(cmd, name, CONFIG_PROFILE_COMMAND))) {
@@ -1394,12 +1453,8 @@ int lvm_run_command(struct cmd_context *cmd, int argc, char **argv)
 		}
 	}
 
-	if (arg_count(cmd, profile_ARG) ||
-	    arg_count(cmd, commandprofile_ARG) ||
-	    arg_count(cmd, metadataprofile_ARG)) {
-		if (!_prepare_profiles(cmd))
-			return_ECMD_FAILED;
-	}
+	if (!_prepare_profiles(cmd))
+		return_ECMD_FAILED;
 
 	if (arg_count(cmd, readonly_ARG))
 		cmd->metadata_read_only = 1;
@@ -1415,6 +1470,7 @@ int lvm_run_command(struct cmd_context *cmd, int argc, char **argv)
 	init_dmeventd_monitor(monitoring);
 
 	log_debug("Processing: %s", cmd->cmd_line);
+	log_debug("system ID: %s", cmd->system_id ? : "");
 
 #ifdef O_DIRECT_SUPPORT
 	log_debug("O_DIRECT will be used");
@@ -1449,6 +1505,19 @@ int lvm_run_command(struct cmd_context *cmd, int argc, char **argv)
 		goto_out;
 	}
 
+	/*
+	 * Other hosts might have changed foreign VGs so enforce a rescan
+	 * before processing any command using them.
+	 */
+	if (cmd->include_foreign_vgs && lvmetad_used() &&
+	    !lvmetad_pvscan_foreign_vgs(cmd, NULL)) {
+		log_error("Failed to scan devices.");
+		return ECMD_FAILED;
+	}
+
+	/*
+	 * FIXME Break up into multiple functions.
+	 */
 	ret = cmd->command->fn(cmd, argc, argv);
 
 	fin_locking();
@@ -1494,6 +1563,8 @@ int lvm_run_command(struct cmd_context *cmd, int argc, char **argv)
 
 int lvm_return_code(int ret)
 {
+	unlink_log_file(ret);
+
 	return (ret == ECMD_PROCESSED ? 0 : ret);
 }
 
@@ -1643,6 +1714,13 @@ static int _close_stray_fds(const char *command)
 	static const char _fd_dir[] = DEFAULT_PROC_DIR "/self/fd";
 	struct dirent *dirent;
 	DIR *d;
+
+#ifdef HAVE_VALGRIND
+	if (RUNNING_ON_VALGRIND) {
+		log_debug("Skipping close of descriptors within valgrind execution.");
+		return 1;
+	}
+#endif
 
 	if (getenv("LVM_SUPPRESS_FD_WARNINGS"))
 		suppress_warnings = 1;
@@ -1847,12 +1925,12 @@ int lvm2_main(int argc, char **argv)
 		return -1;
 
 	if (is_static() && strcmp(base, "lvm.static") &&
-	    path_exists(LVM_SHARED_PATH) &&
+	    path_exists(LVM_PATH) &&
 	    !getenv("LVM_DID_EXEC")) {
 		if (setenv("LVM_DID_EXEC", base, 1))
 			log_sys_error("setenv", "LVM_DID_EXEC");
-		if (execvp(LVM_SHARED_PATH, argv) == -1)
-			log_sys_error("execvp", "LVM_SHARED_PATH");
+		if (execvp(LVM_PATH, argv) == -1)
+			log_sys_error("execvp", LVM_PATH);
 		if (unsetenv("LVM_DID_EXEC"))
 			log_sys_error("unsetenv", "LVM_DID_EXEC");
 	}

@@ -143,6 +143,12 @@ int lvmetad_pv_lookup_by_dev(struct cmd_context *cmd, struct device *dev, int *f
 int lvmetad_vg_list_to_lvmcache(struct cmd_context *cmd);
 
 /*
+ * Request a list of vgid/vgname pairs for all VGs known to lvmetad.
+ * Does not do vg_lookup's on each VG, and does not populate lvmcache.
+ */
+int lvmetad_get_vgnameids(struct cmd_context *cmd, struct dm_list *vgnameids);
+
+/*
  * Find a VG by its ID or its name in the lvmetad cache. Gives NULL if the VG is
  * not found.
  */
@@ -153,9 +159,10 @@ struct volume_group *lvmetad_vg_lookup(struct cmd_context *cmd,
  * Scan a single device and update lvmetad with the result(s).
  */
 int lvmetad_pvscan_single(struct cmd_context *cmd, struct device *dev,
-			  activation_handler handler);
+			  activation_handler handler, int ignore_obsolete);
 
 int lvmetad_pvscan_all_devs(struct cmd_context *cmd, activation_handler handler);
+int lvmetad_pvscan_foreign_vgs(struct cmd_context *cmd, activation_handler handler);
 
 #  else		/* LVMETAD_SUPPORT */
 
@@ -178,9 +185,11 @@ int lvmetad_pvscan_all_devs(struct cmd_context *cmd, activation_handler handler)
 #    define lvmetad_pv_lookup(cmd, pvid, found)	(0)
 #    define lvmetad_pv_lookup_by_dev(cmd, dev, found)	(0)
 #    define lvmetad_vg_list_to_lvmcache(cmd)	(1)
+#    define lvmetad_get_vgnameids(cmd, vgnameids)       do { } while (0)
 #    define lvmetad_vg_lookup(cmd, vgname, vgid)	(NULL)
-#    define lvmetad_pvscan_single(cmd, dev, handler)	(0)
+#    define lvmetad_pvscan_single(cmd, dev, handler, ignore_obsolete)	(0)
 #    define lvmetad_pvscan_all_devs(cmd, handler)	(0)
+#    define lvmetad_pvscan_foreign_vgs(cmd, handler)	(0)
 
 #  endif	/* LVMETAD_SUPPORT */
 

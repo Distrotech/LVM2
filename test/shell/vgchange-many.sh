@@ -12,10 +12,14 @@
 # Check perfomance of activation and deactivation
 . lib/inittest
 
+test -e LOCAL_LVMPOLLD && skip
+
 # FIXME: lvmetad fails with i.e. 1500 device on memory failure...
 
 # Number of LVs to create
 DEVICES=1000
+# On low-memory boxes let's not stress too much
+test "$(aux total_mem)" -gt 524288 || DEVICES=256
 
 aux prepare_pvs 1 400
 

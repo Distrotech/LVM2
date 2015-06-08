@@ -129,6 +129,7 @@ static int _get_segment_status_from_target_params(const char *target_name,
 {
 	struct segment_type *segtype;
 
+	seg_status->type = SEG_STATUS_UNKNOWN;
 	/*
 	 * TODO: Add support for other segment types too!
 	 * The segment to report status for must be properly
@@ -136,7 +137,7 @@ static int _get_segment_status_from_target_params(const char *target_name,
 	 * linear/striped, old snapshots and raids have proper
 	 * segment selected for status!
 	 */
-	if (strcmp(target_name, "cache"))
+	if (strcmp(target_name, "cache") && strcmp(target_name, "thin-pool"))
 		return 1;
 
 	if (!(segtype = get_segtype_from_string(seg_status->seg->lv->vg->cmd, target_name)))
@@ -150,30 +151,28 @@ static int _get_segment_status_from_target_params(const char *target_name,
 	}
 
 	if (!strcmp(segtype->name, "cache")) {
-		if (!dm_get_status_cache(seg_status->mem, params,
-			(struct dm_status_cache **) &seg_status->status))
-				return_0;
-			seg_status->type = SEG_STATUS_CACHE;
+		if (!dm_get_status_cache(seg_status->mem, params, &(seg_status->cache)))
+			return_0;
+		seg_status->type = SEG_STATUS_CACHE;
 	} else if (!strcmp(segtype->name, "raid")) {
-		if (!dm_get_status_raid(seg_status->mem, params,
-			(struct dm_status_raid **) &seg_status->status))
-				return_0;
-			seg_status->type = SEG_STATUS_RAID;
+		if (!dm_get_status_raid(seg_status->mem, params, &seg_status->raid))
+			return_0;
+		seg_status->type = SEG_STATUS_RAID;
 	} else if (!strcmp(segtype->name, "thin")) {
-		if (!dm_get_status_thin(seg_status->mem, params,
-			(struct dm_status_thin **) &seg_status->status))
-				return_0;
-			seg_status->type = SEG_STATUS_THIN;
+		if (!dm_get_status_thin(seg_status->mem, params, &seg_status->thin))
+			return_0;
+		seg_status->type = SEG_STATUS_THIN;
 	} else if (!strcmp(segtype->name, "thin-pool")) {
-		if (!dm_get_status_thin_pool(seg_status->mem, params,
-			(struct dm_status_thin_pool **) &seg_status->status))
-				return_0;
-			seg_status->type = SEG_STATUS_THIN_POOL;
+		if (!dm_get_status_thin_pool(seg_status->mem, params, &seg_status->thin_pool))
+			return_0;
+		seg_status->type = SEG_STATUS_THIN_POOL;
 	} else if (!strcmp(segtype->name, "snapshot")) {
-		if (!dm_get_status_snapshot(seg_status->mem, params,
-			(struct dm_status_snapshot **) &seg_status->status))
-				return_0;
+		if (!dm_get_status_snapshot(seg_status->mem, params, &seg_status->snapshot))
+			return_0;
 		seg_status->type = SEG_STATUS_SNAPSHOT;
+	} else {
+		log_error(INTERNAL_ERROR "Unsupported segment type %s.", segtype->name);
+		return 0;
 	}
 
 	return 1;
@@ -555,18 +554,22 @@ int device_is_usable(struct device *dev, struct dev_usable_check_params check)
 		}
 
 		/*
-		 * Snapshot origin could be sitting on top of a mirror which
-		 * could be blocking I/O.  Skip snapshot origins entirely for
-		 * now.
-		 *
-		 * FIXME: rather than skipping origin, check if mirror is
-		 * underneath and if the mirror is blocking I/O.
+		 * FIXME: Snapshot origin could be sitting on top of a mirror
+		 * which could be blocking I/O. We should add a check for the
+		 * stack here and see if there's blocked mirror underneath.
+		 * Currently, mirrors used as origin or snapshot is not
+		 * supported anymore and in general using mirrors in a stack
+		 * is disabled by default (with a warning that if enabled,
+		 * it could cause various deadlocks).
+		 * This is former check used, but it's not correct as it
+		 * disables snapshot-origins to be used in a stack in
+		 * general, not just over mirrors!
 		 */
-		if (check.check_suspended && target_type && !strcmp(target_type, "snapshot-origin")) {
+		/*if (check.check_suspended && target_type && !strcmp(target_type, "snapshot-origin")) {
 			log_debug_activation("%s: Snapshot-origin device %s not usable.",
 					     dev_name(dev), name);
 			goto out;
-		}
+		}*/
 
 		if (target_type && strcmp(target_type, "error"))
 			only_error_target = 0;
@@ -1970,14 +1973,14 @@ static int _pool_register_callback(struct dev_manager *dm,
 		data->skip_zero = 1;
 		data->exec = global_thin_check_executable_CFG;
 		data->opts = global_thin_check_options_CFG;
-		data->defaults = DEFAULT_THIN_CHECK_OPTIONS;
+		data->defaults = DEFAULT_THIN_CHECK_OPTION1 " " DEFAULT_THIN_CHECK_OPTION2;
 		data->global = "thin";
 	} else if (lv_is_cache(lv)) { /* cache pool */
 		data->pool_lv = first_seg(lv)->pool_lv;
 		data->skip_zero = dm->activation;
 		data->exec = global_cache_check_executable_CFG;
 		data->opts = global_cache_check_options_CFG;
-		data->defaults = DEFAULT_CACHE_CHECK_OPTIONS;
+		data->defaults = DEFAULT_CACHE_CHECK_OPTION1;
 		data->global = "cache";
 	} else {
 		log_error(INTERNAL_ERROR "Registering unsupported pool callback.");
@@ -2301,7 +2304,7 @@ int add_areas_line(struct dev_manager *dm, struct lv_segment *seg,
 			 * is used in the CTR table.
 			 */
 			if ((seg_type(seg, s) == AREA_UNASSIGNED) ||
-			    ((seg_lv(seg, s)->status & VISIBLE_LV) &&
+			    (lv_is_visible(seg_lv(seg, s)) &&
 			     !(seg_lv(seg, s)->status & LVM_WRITE))) {
 				/* One each for metadata area and data area */
 				if (!dm_tree_node_add_null_area(node, 0) ||

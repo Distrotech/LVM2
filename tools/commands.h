@@ -28,6 +28,35 @@ xx(e2fsadm,
     extents_ARG, size_ARG, nofsck_ARG, test_ARG)
 *********/
 
+xx(config,
+   "Display and manipulate configuration information",
+   PERMITTED_READ_ONLY,
+   "config\n"
+   "\t[-f|--file filename]\n"
+   "\t[--type {current|default|diff|list|missing|new|profilable|profilable-command|profilable-metadata}\n"
+   "\t[--atversion version]]\n"
+   "\t[--ignoreadvanced]\n"
+   "\t[--ignoreunsupported]\n"
+   "\t[--ignorelocal]\n"
+   "\t[-l|--list]\n"
+   "\t[--config ConfigurationString]\n"
+   "\t[--commandprofile ProfileName]\n"
+   "\t[--profile ProfileName]\n"
+   "\t[--metadataprofile ProfileName]\n"
+   "\t[--mergedconfig]\n"
+   "\t[--showdeprecated]\n"
+   "\t[--showunsupported]\n"
+   "\t[--validate]\n"
+   "\t[--withsummary]\n"
+   "\t[--withcomments]\n"
+   "\t[--unconfigured]\n"
+   "\t[--withversions]\n"
+   "\t[ConfigurationNode...]\n",
+   atversion_ARG, configtype_ARG, file_ARG, ignoreadvanced_ARG,
+   ignoreunsupported_ARG, ignorelocal_ARG, list_ARG, mergedconfig_ARG, metadataprofile_ARG,
+   showdeprecated_ARG, showunsupported_ARG, validate_ARG, withsummary_ARG, withcomments_ARG,
+   unconfigured_ARG, withversions_ARG)
+
 xx(devtypes,
    "Display recognised built-in block device types",
    PERMITTED_READ_ONLY,
@@ -55,26 +84,33 @@ xx(devtypes,
    unbuffered_ARG, unquoted_ARG)
 
 xx(dumpconfig,
-   "Dump configuration",
+   "Display and manipulate configuration information",
    PERMITTED_READ_ONLY,
    "dumpconfig\n"
    "\t[-f|--file filename]\n"
-   "\t[--type {current|default|diff|missing|new|profilable|profilable-command|profilable-metadata}\n"
+   "\t[--type {current|default|diff|list|missing|new|profilable|profilable-command|profilable-metadata}\n"
    "\t[--atversion version]]\n"
    "\t[--ignoreadvanced]\n"
    "\t[--ignoreunsupported]\n"
+   "\t[--ignorelocal]\n"
+   "\t[-l|--list]\n"
    "\t[--config ConfigurationString]\n"
    "\t[--commandprofile ProfileName]\n"
    "\t[--profile ProfileName]\n"
    "\t[--metadataprofile ProfileName]\n"
    "\t[--mergedconfig]\n"
+   "\t[--showdeprecated]\n"
+   "\t[--showunsupported]\n"
    "\t[--validate]\n"
+   "\t[--withsummary]\n"
    "\t[--withcomments]\n"
+   "\t[--unconfigured]\n"
    "\t[--withversions]\n"
    "\t[ConfigurationNode...]\n",
    atversion_ARG, configtype_ARG, file_ARG, ignoreadvanced_ARG,
-   ignoreunsupported_ARG, mergedconfig_ARG, metadataprofile_ARG,
-   validate_ARG, withcomments_ARG, withversions_ARG)
+   ignoreunsupported_ARG, ignorelocal_ARG, list_ARG, mergedconfig_ARG, metadataprofile_ARG,
+   showdeprecated_ARG, showunsupported_ARG, validate_ARG, withsummary_ARG, withcomments_ARG,
+   unconfigured_ARG, withversions_ARG)
 
 xx(formats,
    "List available metadata formats",
@@ -111,6 +147,7 @@ xx(lvchange,
    "\t[-d|--debug]\n"
    "\t[--deltag Tag]\n"
    "\t[--detachprofile]\n"
+   "\t[--errorwhenfull {y|n}]\n"
    "\t[-f|--force]\n"
    "\t[-h|--help]\n"
    "\t[--discards {ignore|nopassdown|passdown}]\n"
@@ -134,6 +171,7 @@ xx(lvchange,
    "\t[-r|--readahead ReadAheadSectors|auto|none]\n"
    "\t[--refresh]\n"
    "\t[--resync]\n"
+   "\t[-S|--select Selection]\n"
    "\t[--sysinit]\n"
    "\t[-t|--test]\n"
    "\t[-v|--verbose]\n"
@@ -143,16 +181,16 @@ xx(lvchange,
    "\tLogicalVolume[Path] [LogicalVolume[Path]...]\n",
 
    activationmode_ARG, addtag_ARG, alloc_ARG, autobackup_ARG, activate_ARG,
-   available_ARG,
-   cachepolicy_ARG, cachesettings_ARG, contiguous_ARG, deltag_ARG, discards_ARG, detachprofile_ARG, force_ARG,
+   available_ARG, cachepolicy_ARG, cachesettings_ARG, contiguous_ARG, deltag_ARG,
+   discards_ARG, detachprofile_ARG, errorwhenfull_ARG, force_ARG,
    ignorelockingfailure_ARG, ignoremonitoring_ARG, ignoreactivationskip_ARG,
    ignoreskippedcluster_ARG, major_ARG, metadataprofile_ARG, minor_ARG,
    monitor_ARG, minrecoveryrate_ARG, maxrecoveryrate_ARG, noudevsync_ARG,
    partial_ARG, permission_ARG, persistent_ARG, poll_ARG,
    raidminrecoveryrate_ARG, raidmaxrecoveryrate_ARG, raidsyncaction_ARG,
    raidwritebehind_ARG, raidwritemostly_ARG, readahead_ARG, resync_ARG,
-   refresh_ARG, setactivationskip_ARG, syncaction_ARG, sysinit_ARG, test_ARG,
-   writebehind_ARG, writemostly_ARG, zero_ARG)
+   refresh_ARG, select_ARG, setactivationskip_ARG, syncaction_ARG, sysinit_ARG,
+   test_ARG, writebehind_ARG, writemostly_ARG, zero_ARG)
 
 #define COMMON_OPTS \
 	"\t[--commandprofile ProfileName] [-d|--debug] [-h|-?|--help]\n" \
@@ -267,6 +305,7 @@ xx(lvcreate,
    "\t[--commandprofile ProfileName]\n"
    "\t[-d|--debug]\n"
    "\t[-h|-?|--help]\n"
+   "\t[--errorwhenfull {y|n}]\n"
    "\t[--ignoremonitoring]\n"
    "\t[--monitor {y|n}]\n"
    "\t[-i|--stripes Stripes [-I|--stripesize StripeSize]]\n"
@@ -339,7 +378,7 @@ xx(lvcreate,
 
    addtag_ARG, alloc_ARG, autobackup_ARG, activate_ARG, available_ARG,
    cache_ARG, cachemode_ARG, cachepool_ARG, cachepolicy_ARG, cachesettings_ARG,
-   chunksize_ARG, contiguous_ARG, corelog_ARG, discards_ARG,
+   chunksize_ARG, contiguous_ARG, corelog_ARG, discards_ARG, errorwhenfull_ARG,
    extents_ARG, ignoreactivationskip_ARG, ignoremonitoring_ARG, major_ARG,
    metadataprofile_ARG, minor_ARG, mirrorlog_ARG, mirrors_ARG, monitor_ARG,
    minrecoveryrate_ARG, maxrecoveryrate_ARG, name_ARG, nosync_ARG,
@@ -353,12 +392,13 @@ xx(lvcreate,
 
 xx(lvdisplay,
    "Display information about a logical volume",
-   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT,
+   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT | ENABLE_FOREIGN_VGS,
    "lvdisplay\n"
    "\t[-a|--all]\n"
    "\t[-c|--colon]\n"
    "\t[--commandprofile ProfileName]\n"
    "\t[-d|--debug]\n"
+   "\t[--foreign]\n"
    "\t[-h|--help]\n"
    "\t[--ignorelockingfailure]\n"
    "\t[--ignoreskippedcluster]\n"
@@ -366,6 +406,7 @@ xx(lvdisplay,
    "\t[--nosuffix]\n"
    "\t[-P|--partial]\n"
    "\t[--readonly]\n"
+   "\t[-S|--select Selection]\n"
    "\t[--units hHbBsSkKmMgGtTpPeE]\n"
    "\t[-v|--verbose]\n"
    "\t[--version]\n"
@@ -377,6 +418,7 @@ xx(lvdisplay,
    "\t[--binary]\n"
    "\t[--commandprofile ProfileName]\n"
    "\t[-d|--debug]\n"
+   "\t[--foreign]\n"
    "\t[-h|--help]\n"
    "\t[--ignorelockingfailure]\n"
    "\t[--ignoreskippedcluster]\n"
@@ -395,7 +437,7 @@ xx(lvdisplay,
    "\t[--version]\n"
    "\t[LogicalVolume[Path] [LogicalVolume[Path]...]]\n",
 
-    aligned_ARG, all_ARG, binary_ARG, colon_ARG, columns_ARG,
+    aligned_ARG, all_ARG, binary_ARG, colon_ARG, columns_ARG, foreign_ARG,
     ignorelockingfailure_ARG, ignoreskippedcluster_ARG, maps_ARG,
     noheadings_ARG, nosuffix_ARG, options_ARG, sort_ARG, partial_ARG,
     readonly_ARG, segments_ARG, select_ARG, separator_ARG,
@@ -444,6 +486,35 @@ xx(lvmchange,
    "\t[--version]\n",
 
     reset_ARG)
+
+xx(lvmconfig,
+   "Display and manipulate configuration information",
+   PERMITTED_READ_ONLY,
+   "lvmconfig\n"
+   "\t[-f|--file filename]\n"
+   "\t[--type {current|default|diff|list|missing|new|profilable|profilable-command|profilable-metadata}\n"
+   "\t[--atversion version]]\n"
+   "\t[--ignoreadvanced]\n"
+   "\t[--ignoreunsupported]\n"
+   "\t[--ignorelocal]\n"
+   "\t[-l|--list]\n"
+   "\t[--config ConfigurationString]\n"
+   "\t[--commandprofile ProfileName]\n"
+   "\t[--profile ProfileName]\n"
+   "\t[--metadataprofile ProfileName]\n"
+   "\t[--mergedconfig]\n"
+   "\t[--showdeprecated]\n"
+   "\t[--showunsupported]\n"
+   "\t[--validate]\n"
+   "\t[--withsummary]\n"
+   "\t[--withcomments]\n"
+   "\t[--unconfigured]\n"
+   "\t[--withversions]\n"
+   "\t[ConfigurationNode...]\n",
+   atversion_ARG, configtype_ARG, file_ARG, ignoreadvanced_ARG,
+   ignoreunsupported_ARG, ignorelocal_ARG, list_ARG, mergedconfig_ARG, metadataprofile_ARG,
+   showdeprecated_ARG, showunsupported_ARG, validate_ARG, withsummary_ARG, withcomments_ARG,
+   unconfigured_ARG, withversions_ARG)
 
 xx(lvmdiskscan,
    "List devices that may be used as physical volumes",
@@ -509,7 +580,7 @@ xx(lvreduce,
 
 xx(lvremove,
    "Remove logical volume(s) from the system",
-   0,
+   ALL_VGS_IS_DEFAULT, /* all VGs only with --select */
    "lvremove\n"
    "\t[-A|--autobackup y|n]\n"
    "\t[--commandprofile ProfileName]\n"
@@ -517,12 +588,13 @@ xx(lvremove,
    "\t[-f|--force]\n"
    "\t[-h|--help]\n"
    "\t[--noudevsync]\n"
+   "\t[-S|--select Selection]\n"
    "\t[-t|--test]\n"
    "\t[-v|--verbose]\n"
    "\t[--version]\n"
    "\tLogicalVolume[Path] [LogicalVolume[Path]...]\n",
 
-   autobackup_ARG, force_ARG, noudevsync_ARG, test_ARG)
+   autobackup_ARG, force_ARG, noudevsync_ARG, select_ARG, test_ARG)
 
 xx(lvrename,
    "Rename a logical volume",
@@ -571,13 +643,14 @@ xx(lvresize,
 
 xx(lvs,
    "Display information about logical volumes",
-   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT,
+   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT | ENABLE_FOREIGN_VGS,
    "lvs\n"
    "\t[-a|--all]\n"
    "\t[--aligned]\n"
    "\t[--binary]\n"
    "\t[--commandprofile ProfileName]\n"
    "\t[-d|--debug]\n"
+   "\t[--foreign]\n"
    "\t[-h|--help]\n"
    "\t[--ignorelockingfailure]\n"
    "\t[--ignoreskippedcluster]\n"
@@ -600,7 +673,7 @@ xx(lvs,
    "\t[--version]\n"
    "\t[LogicalVolume[Path] [LogicalVolume[Path]...]]\n",
 
-   aligned_ARG, all_ARG, binary_ARG, ignorelockingfailure_ARG,
+   aligned_ARG, all_ARG, binary_ARG, foreign_ARG, ignorelockingfailure_ARG,
    ignoreskippedcluster_ARG, nameprefixes_ARG, noheadings_ARG,
    nolocking_ARG, nosuffix_ARG, options_ARG, partial_ARG,
    readonly_ARG, rows_ARG, segments_ARG, select_ARG, separator_ARG,
@@ -635,10 +708,12 @@ xx(pvchange,
    "\t[-d|--debug]\n"
    "\t[-f|--force]\n"
    "\t[-h|--help]\n"
+   "\t[--ignoreskippedcluster]\n"
+   "\t[--metadataignore y|n]\n"
+   "\t[-S|--select Selection]\n"
    "\t[-t|--test]\n"
    "\t[-u|--uuid]\n"
    "\t[-x|--allocatable y|n]\n"
-   "\t[--metadataignore y|n]\n"
    "\t[-v|--verbose]\n"
    "\t[--addtag Tag]\n"
    "\t[--deltag Tag]\n"
@@ -646,7 +721,8 @@ xx(pvchange,
    "\t[PhysicalVolumePath...]\n",
 
    all_ARG, allocatable_ARG, allocation_ARG, autobackup_ARG, deltag_ARG,
-   addtag_ARG, force_ARG, metadataignore_ARG, test_ARG, uuid_ARG)
+   addtag_ARG, force_ARG, ignoreskippedcluster_ARG, metadataignore_ARG,
+   select_ARG, test_ARG, uuid_ARG)
 
 xx(pvresize,
    "Resize physical volume(s)",
@@ -731,17 +807,19 @@ xx(pvdata,
 
 xx(pvdisplay,
    "Display various attributes of physical volume(s)",
-   CACHE_VGMETADATA | PERMITTED_READ_ONLY | ENABLE_ALL_DEVS,
+   CACHE_VGMETADATA | PERMITTED_READ_ONLY | ENABLE_ALL_DEVS | ENABLE_FOREIGN_VGS,
    "pvdisplay\n"
    "\t[-c|--colon]\n"
    "\t[--commandprofile ProfileName]\n"
    "\t[-d|--debug]\n"
+   "\t[--foreign]\n"
    "\t[-h|--help]\n"
    "\t[--ignorelockingfailure]\n"
    "\t[--ignoreskippedcluster]\n"
    "\t[-m|--maps]\n"
    "\t[--nosuffix]\n"
    "\t[--readonly]\n"
+   "\t[-S|--select Selection]\n"
    "\t[-s|--short]\n"
    "\t[--units hHbBsSkKmMgGtTpPeE]\n"
    "\t[-v|--verbose]\n"
@@ -754,6 +832,7 @@ xx(pvdisplay,
    "\t[--binary]\n"
    "\t[--commandprofile ProfileName]\n"
    "\t[-d|--debug]\n"
+   "\t[--foreign]\n"
    "\t[-h|--help]\n"
    "\t[--ignorelockingfailure]\n"
    "\t[--ignoreskippedcluster]\n"
@@ -770,7 +849,7 @@ xx(pvdisplay,
    "\t[--version]\n"
    "\t[PhysicalVolumePath [PhysicalVolumePath...]]\n",
 
-   aligned_ARG, all_ARG, binary_ARG, colon_ARG, columns_ARG,
+   aligned_ARG, all_ARG, binary_ARG, colon_ARG, columns_ARG, foreign_ARG,
    ignorelockingfailure_ARG, ignoreskippedcluster_ARG, maps_ARG,
    noheadings_ARG, nosuffix_ARG, options_ARG, readonly_ARG,
    select_ARG, separator_ARG, short_ARG, sort_ARG, unbuffered_ARG,
@@ -801,6 +880,24 @@ xx(pvmove,
    abort_ARG, alloc_ARG, atomic_ARG, autobackup_ARG, background_ARG,
    interval_ARG, name_ARG, noudevsync_ARG, test_ARG)
 
+xx(lvpoll,
+   "Continue already initiated poll operation on a logical volume",
+   0,
+   "\t[--abort]\n"
+   "\t[-A|--autobackup {y|n}]\n"
+   "\t[--commandprofile ProfileName]\n"
+   "\t[-d|--debug]\n "
+   "\t[-h|-?|--help]\n"
+   "\t[--handlemissingpvs]\n"
+   "\t[-i|--interval seconds]\n"
+   "\t[--polloperation]\n"
+   "\t[-t|--test]\n "
+   "\t[-v|--verbose]\n "
+   "\t[--version]\n",
+
+   abort_ARG, autobackup_ARG, handlemissingpvs_ARG, interval_ARG, polloperation_ARG,
+   test_ARG)
+
 xx(pvremove,
    "Remove LVM label(s) from physical volume(s)",
    0,
@@ -819,13 +916,14 @@ xx(pvremove,
 
 xx(pvs,
    "Display information about physical volumes",
-   CACHE_VGMETADATA | PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT | ENABLE_ALL_DEVS,
+   CACHE_VGMETADATA | PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT | ENABLE_ALL_DEVS | ENABLE_FOREIGN_VGS,
    "pvs\n"
    "\t[-a|--all]\n"
    "\t[--aligned]\n"
    "\t[--binary]\n"
    "\t[--commandprofile ProfileName]\n"
    "\t[-d|--debug]\n"
+   "\t[--foreign]\n"
    "\t[-h|-?|--help]\n"
    "\t[--ignorelockingfailure]\n"
    "\t[--ignoreskippedcluster]\n"
@@ -848,7 +946,7 @@ xx(pvs,
    "\t[--version]\n"
    "\t[PhysicalVolume [PhysicalVolume...]]\n",
 
-   aligned_ARG, all_ARG, binary_ARG, ignorelockingfailure_ARG,
+   aligned_ARG, all_ARG, binary_ARG, foreign_ARG, ignorelockingfailure_ARG,
    ignoreskippedcluster_ARG, nameprefixes_ARG, noheadings_ARG, nolocking_ARG,
    nosuffix_ARG, options_ARG, partial_ARG, readonly_ARG, rows_ARG,
    segments_ARG, select_ARG, separator_ARG, sort_ARG, trustcache_ARG,
@@ -856,7 +954,7 @@ xx(pvs,
 
 xx(pvscan,
    "List all physical volumes",
-   PERMITTED_READ_ONLY,
+   PERMITTED_READ_ONLY | ENABLE_FOREIGN_VGS,
    "pvscan\n"
    "\t[-b|--background]\n"
    "\t[--cache [-a|--activate ay] [ DevicePath | -j|--major major --minor minor]...]\n"
@@ -881,6 +979,11 @@ xx(segtypes,
    PERMITTED_READ_ONLY,
    "segtypes\n")
 
+xx(systemid,
+   "Display the system ID, if any, currently set on this host",
+   PERMITTED_READ_ONLY,
+   "systemid\n")
+
 xx(tags,
    "List tags defined on this host",
    PERMITTED_READ_ONLY,
@@ -888,11 +991,12 @@ xx(tags,
 
 xx(vgcfgbackup,
    "Backup volume group configuration(s)",
-   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT,
+   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT | ENABLE_FOREIGN_VGS,
    "vgcfgbackup\n"
    "\t[--commandprofile ProfileName]\n"
    "\t[-d|--debug]\n"
    "\t[-f|--file filename]\n"
+   "\t[--foreign]\n"
    "\t[-h|-?|--help]\n"
    "\t[--ignorelockingfailure]\n"
    "\t[-P|--partial]\n"
@@ -901,7 +1005,7 @@ xx(vgcfgbackup,
    "\t[--version]\n"
    "\t[VolumeGroupName...]\n",
 
-   file_ARG, ignorelockingfailure_ARG, partial_ARG, readonly_ARG)
+   file_ARG, foreign_ARG, ignorelockingfailure_ARG, partial_ARG, readonly_ARG)
 
 xx(vgcfgrestore,
    "Restore volume group configuration",
@@ -942,7 +1046,9 @@ xx(vgchange,
    "\t[--poll {y|n}]\n"
    "\t[--noudevsync]\n"
    "\t[--refresh]\n"
+   "\t[-S|--select Selection]\n"
    "\t[--sysinit]\n"
+   "\t[--systemid SystemID]\n"
    "\t[-t|--test]\n"
    "\t[-u|--uuid]\n"
    "\t[-v|--verbose]\n"
@@ -959,13 +1065,13 @@ xx(vgchange,
    "\t[VolumeGroupName...]\n",
 
    activationmode_ARG, addtag_ARG, alloc_ARG, allocation_ARG, autobackup_ARG,
-   activate_ARG,
-   available_ARG, clustered_ARG, deltag_ARG, detachprofile_ARG,
+   activate_ARG, available_ARG, clustered_ARG, deltag_ARG, detachprofile_ARG,
    ignoreactivationskip_ARG, ignorelockingfailure_ARG, ignoremonitoring_ARG,
    ignoreskippedcluster_ARG, logicalvolume_ARG, maxphysicalvolumes_ARG,
    metadataprofile_ARG, monitor_ARG, noudevsync_ARG, metadatacopies_ARG,
    vgmetadatacopies_ARG, partial_ARG, physicalextentsize_ARG, poll_ARG,
-   refresh_ARG, resizeable_ARG, resizable_ARG, sysinit_ARG, test_ARG, uuid_ARG)
+   refresh_ARG, resizeable_ARG, resizable_ARG, select_ARG, sysinit_ARG,
+   systemid_ARG, test_ARG, uuid_ARG)
 
 xx(vgck,
    "Check the consistency of volume group(s)",
@@ -1016,6 +1122,7 @@ xx(vgcreate,
    "\t[--[vg]metadatacopies #copies]\n"
    "\t[-p|--maxphysicalvolumes MaxPhysicalVolumes]\n"
    "\t[-s|--physicalextentsize PhysicalExtentSize[bBsSkKmMgGtTpPeE]]\n"
+   "\t[--systemid SystemID]\n"
    "\t[-t|--test]\n"
    "\t[-v|--verbose]\n"
    "\t[--version]\n"
@@ -1027,22 +1134,25 @@ xx(vgcreate,
    maxphysicalvolumes_ARG, metadataprofile_ARG, metadatatype_ARG,
    physicalextentsize_ARG, test_ARG, force_ARG, zero_ARG, labelsector_ARG,
    metadatasize_ARG, pvmetadatacopies_ARG, metadatacopies_ARG,
-   vgmetadatacopies_ARG, dataalignment_ARG, dataalignmentoffset_ARG)
+   vgmetadatacopies_ARG, dataalignment_ARG, dataalignmentoffset_ARG,
+   systemid_ARG)
 
 xx(vgdisplay,
    "Display volume group information",
-   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT,
+   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT | ENABLE_FOREIGN_VGS,
    "vgdisplay\n"
    "\t[-A|--activevolumegroups]\n"
    "\t[-c|--colon | -s|--short | -v|--verbose]\n"
    "\t[--commandprofile ProfileName]\n"
    "\t[-d|--debug]\n"
+   "\t[--foreign]\n"
    "\t[-h|--help]\n"
    "\t[--ignorelockingfailure]\n"
    "\t[--ignoreskippedcluster]\n"
    "\t[--nosuffix]\n"
    "\t[-P|--partial]\n"
    "\t[--readonly]\n"
+   "\t[-S|--select Selection]\n"
    "\t[--units hHbBsSkKmMgGtTpPeE]\n"
    "\t[--version]\n"
    "\t[VolumeGroupName [VolumeGroupName...]]\n"
@@ -1052,6 +1162,7 @@ xx(vgdisplay,
    "\t[--binary]\n"
    "\t[--commandprofile ProfileName]\n"
    "\t[-d|--debug]\n"
+   "\t[--foreign]\n"
    "\t[-h|--help]\n"
    "\t[--ignorelockingfailure]\n"
    "\t[--ignoreskippedcluster]\n"
@@ -1070,9 +1181,9 @@ xx(vgdisplay,
    "\t[VolumeGroupName [VolumeGroupName...]]\n",
 
    activevolumegroups_ARG, aligned_ARG, binary_ARG, colon_ARG, columns_ARG,
-   ignorelockingfailure_ARG, ignoreskippedcluster_ARG, noheadings_ARG,
-   nosuffix_ARG, options_ARG, partial_ARG, readonly_ARG, select_ARG,
-   short_ARG, separator_ARG, sort_ARG, unbuffered_ARG, units_ARG)
+   foreign_ARG, ignorelockingfailure_ARG, ignoreskippedcluster_ARG,
+   noheadings_ARG, nosuffix_ARG, options_ARG, partial_ARG, readonly_ARG,
+   select_ARG, short_ARG, separator_ARG, sort_ARG, unbuffered_ARG, units_ARG)
 
 xx(vgexport,
    "Unregister volume group(s) from the system",
@@ -1082,11 +1193,12 @@ xx(vgexport,
    "\t[--commandprofile ProfileName]\n"
    "\t[-d|--debug]\n"
    "\t[-h|--help]\n"
+   "\t[-S|--select Selection]\n"
    "\t[-v|--verbose]\n"
    "\t[--version]\n"
    "\tVolumeGroupName [VolumeGroupName...]\n",
 
-   all_ARG, test_ARG)
+   all_ARG, select_ARG, test_ARG)
 
 xx(vgextend,
    "Add physical volumes to a volume group",
@@ -1120,12 +1232,13 @@ xx(vgimport,
    "\t[-d|--debug]\n"
    "\t[-f|--force]\n"
    "\t[-h|--help]\n"
+   "\t[-S|--select Selection]\n"
    "\t[-t|--test]\n"
    "\t[-v|--verbose]\n"
    "\t[--version]\n"
    "\tVolumeGroupName...\n",
 
-   all_ARG, force_ARG, test_ARG)
+   all_ARG, force_ARG, select_ARG, test_ARG)
 
 xx(vgmerge,
    "Merge volume groups",
@@ -1181,19 +1294,20 @@ xx(vgreduce,
 
 xx(vgremove,
    "Remove volume group(s)",
-   0,
+   ALL_VGS_IS_DEFAULT, /* all VGs only with select */
    "vgremove\n"
    "\t[--commandprofile ProfileName]\n"
    "\t[-d|--debug]\n"
    "\t[-f|--force]\n"
    "\t[-h|--help]\n"
    "\t[--noudevsync]\n"
+   "\t[-S|--select Selection]\n"
    "\t[-t|--test]\n"
    "\t[-v|--verbose]\n"
    "\t[--version]\n"
    "\tVolumeGroupName [VolumeGroupName...]\n",
 
-   force_ARG, noudevsync_ARG, test_ARG)
+   force_ARG, noudevsync_ARG, select_ARG, test_ARG)
 
 xx(vgrename,
    "Rename a volume group",
@@ -1213,13 +1327,14 @@ xx(vgrename,
 
 xx(vgs,
    "Display information about volume groups",
-   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT,
+   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT | ENABLE_FOREIGN_VGS,
    "vgs\n"
    "\t[--aligned]\n"
    "\t[--binary]\n"
    "\t[-a|--all]\n"
    "\t[--commandprofile ProfileName]\n"
    "\t[-d|--debug]\n"
+   "\t[--foreign]\n"
    "\t[-h|--help]\n"
    "\t[--ignorelockingfailure]\n"
    "\t[--ignoreskippedcluster]\n"
@@ -1241,7 +1356,7 @@ xx(vgs,
    "\t[--version]\n"
    "\t[VolumeGroupName [VolumeGroupName...]]\n",
 
-   aligned_ARG, all_ARG, binary_ARG, ignorelockingfailure_ARG,
+   aligned_ARG, all_ARG, binary_ARG, foreign_ARG, ignorelockingfailure_ARG,
    ignoreskippedcluster_ARG, nameprefixes_ARG, noheadings_ARG,
    nolocking_ARG, nosuffix_ARG, options_ARG, partial_ARG,
    readonly_ARG, rows_ARG, select_ARG, separator_ARG, sort_ARG,
@@ -1249,7 +1364,7 @@ xx(vgs,
 
 xx(vgscan,
    "Search for all volume groups",
-   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT,
+   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT | ENABLE_FOREIGN_VGS,
    "vgscan "
    "\t[--cache]\n"
    "\t[--commandprofile ProfileName]\n"

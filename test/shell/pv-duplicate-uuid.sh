@@ -12,6 +12,8 @@
 # Test 'Found duplicate' is shown
 . lib/inittest
 
+test -e LOCAL_LVMPOLLD && skip
+
 aux prepare_devs 3
 
 pvcreate "$dev1"
@@ -19,7 +21,7 @@ UUID1=$(get pv_field "$dev1" uuid)
 pvcreate --config "devices{filter=[\"a|$dev2|\",\"r|.*|\"]}" -u "$UUID1" --norestorefile "$dev2"
 pvcreate --config "devices{filter=[\"a|$dev3|\",\"r|.*|\"]}" -u "$UUID1" --norestorefile "$dev3"
 
-pvs -o+uuid |& tee out
+pvs -o+uuid 2>&1 | tee out
 COUNT=$(should grep --count "Found duplicate" out)
 
 # FIXME  lvmetad is not able to serve properly this case

@@ -41,6 +41,14 @@ struct volume_group *alloc_vg(const char *pool_name, struct cmd_context *cmd,
 		return NULL;
 	}
 
+	if (!(vg->lvm1_system_id = dm_pool_zalloc(vgmem, NAME_LEN + 1))) {
+		log_error("Failed to allocate VG systemd id.");
+		dm_pool_destroy(vgmem);
+		return NULL;
+	}
+
+	vg->system_id = "";
+
 	vg->cmd = cmd;
 	vg->vgmem = vgmem;
 	vg->alloc = ALLOC_NORMAL;
@@ -53,8 +61,10 @@ struct volume_group *alloc_vg(const char *pool_name, struct cmd_context *cmd,
 
 	dm_list_init(&vg->pvs);
 	dm_list_init(&vg->pvs_to_create);
+	dm_list_init(&vg->pvs_outdated);
 	dm_list_init(&vg->lvs);
 	dm_list_init(&vg->tags);
+	dm_list_init(&vg->removed_lvs);
 	dm_list_init(&vg->removed_pvs);
 
 	log_debug_mem("Allocated VG %s at %p.", vg->name, vg);
@@ -121,7 +131,7 @@ char *vg_name_dup(const struct volume_group *vg)
 
 char *vg_system_id_dup(const struct volume_group *vg)
 {
-	return dm_pool_strdup(vg->vgmem, vg->system_id);
+	return dm_pool_strdup(vg->vgmem, vg->system_id ? : vg->lvm1_system_id ? : "");
 }
 
 char *vg_uuid_dup(const struct volume_group *vg)
@@ -597,6 +607,32 @@ int vg_set_clustered(struct volume_group *vg, int clustered)
 
 	log_debug_metadata("Setting volume group %s as %sclustered.",
 			   vg->name, clustered ? "" : "not " );
+
+	return 1;
+}
+
+/* The input string has already been validated. */
+
+int vg_set_system_id(struct volume_group *vg, const char *system_id)
+{
+	if (!system_id || !*system_id) {
+		vg->system_id = NULL;
+		return 1;
+	}
+
+	if (systemid_on_pvs(vg)) {
+		log_error("Metadata format %s does not support this type of system ID.",
+			  vg->fid->fmt->name);
+		return 0;
+	}
+
+	if (!(vg->system_id = dm_pool_strdup(vg->vgmem, system_id))) {
+		log_error("Failed to allocate memory for system_id in vg_set_system_id.");
+		return 0;
+	}
+
+	if (vg->lvm1_system_id)
+		*vg->lvm1_system_id = '\0';
 
 	return 1;
 }

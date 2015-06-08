@@ -11,7 +11,11 @@
 
 . lib/inittest
 
+test -e LOCAL_LVMPOLLD && skip
+
 lvm version
+
+test -n "$abs_top_builddir" || skip
 
 v=$abs_top_builddir/lib/misc/lvm-version.h
 sed -n "/#define LVM_VERSION ./s///p" "$v" | sed "s/ .*//" > expected

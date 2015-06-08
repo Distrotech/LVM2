@@ -13,6 +13,8 @@
 
 . lib/inittest
 
+test -e LOCAL_LVMPOLLD && skip
+
 which mkfs.ext2 || skip
 
 aux lvmconf "activation/snapshot_autoextend_percent = 0" \
@@ -30,14 +32,17 @@ lvchange --monitor y $vg/snap
 
 mkdir "$mntdir"
 mount "$DM_DEV_DIR/mapper/$vg-snap" "$mntdir"
-mount
+
 cat /proc/mounts | grep "$mntdir"
-dd if=/dev/zero of="$mntdir/file$1" bs=1M count=5
-sync
-#dmeventd only checks every 10 seconds :(
-for i in {1..10}; do
-	cat /proc/mounts | grep "$mntdir" || break
-	sleep 1
+not dd if=/dev/zero of="$mntdir/file$1" bs=1M count=5 oflag=direct
+
+# Should be nearly instant check of dmeventd for invalid snapshot.
+# Wait here for umount and open_count drops to 0 as it may
+# take a while to finalize umount operation (it might be already
+# removed from /proc/mounts, but still opened).
+for i in {1..100}; do
+	test $(dmsetup info -c --noheadings -o open $vg-snap) -eq 0 && break
+	sleep .1
 done
 
 cat /proc/mounts | not grep "$mntdir"

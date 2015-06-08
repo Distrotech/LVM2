@@ -50,6 +50,9 @@ static int _do_def_check(struct config_def_tree_spec *spec,
 		handle->check_diff = 0;
 	}
 
+	handle->ignoreunsupported = spec->ignoreunsupported;
+	handle->ignoreadvanced = spec->ignoreadvanced;
+
 	config_def_check(handle);
 	*cft_check_handle = handle;
 
@@ -88,7 +91,7 @@ static int _config_validate(struct cmd_context *cmd, struct dm_config_tree *cft)
 int dumpconfig(struct cmd_context *cmd, int argc, char **argv)
 {
 	const char *file = arg_str_value(cmd, file_ARG, NULL);
-	const char *type = arg_str_value(cmd, configtype_ARG, "current");
+	const char *type = arg_str_value(cmd, configtype_ARG, arg_count(cmd, list_ARG) ? "list" : "current");
 	struct config_def_tree_spec tree_spec = {0};
 	struct dm_config_tree *cft = NULL;
 	struct cft_check_handle *cft_check_handle = NULL;
@@ -102,16 +105,54 @@ int dumpconfig(struct cmd_context *cmd, int argc, char **argv)
 		return EINVALID_CMD_LINE;
 	}
 
-	if (arg_count(cmd, atversion_ARG) && !arg_count(cmd, configtype_ARG)) {
-		log_error("--atversion requires --type");
+	if (arg_count(cmd, configtype_ARG) && arg_count(cmd, list_ARG)) {
+		log_error("Only one of --type and --list permitted.");
+		return EINVALID_CMD_LINE;
+	}
+
+	if (arg_count(cmd, atversion_ARG) && !arg_count(cmd, configtype_ARG) &&
+	    !arg_count(cmd, list_ARG)) {
+		log_error("--atversion requires --type or --list");
 		return EINVALID_CMD_LINE;
 	}
 
 	if (arg_count(cmd, ignoreadvanced_ARG))
 		tree_spec.ignoreadvanced = 1;
 
-	if (arg_count(cmd, ignoreunsupported_ARG))
+	if (arg_count(cmd, ignoreunsupported_ARG)) {
+		if (arg_count(cmd, showunsupported_ARG)) {
+			log_error("Only one of --ignoreunsupported and --showunsupported permitted.");
+			return EINVALID_CMD_LINE;
+		}
 		tree_spec.ignoreunsupported = 1;
+	} else if (arg_count(cmd, showunsupported_ARG)) {
+		tree_spec.ignoreunsupported = 0;
+	} else if (strcmp(type, "current") && strcmp(type, "diff")) {
+		/*
+		 * By default hide unsupported settings
+		 * for all display types except "current"
+		 * and "diff".
+		 */
+		tree_spec.ignoreunsupported = 1;
+	}
+
+	if (strcmp(type, "current") && strcmp(type, "diff")) {
+		/*
+		 * By default hide deprecated settings
+		 * for all display types except "current"
+		 * and "diff" unless --showdeprecated is set.
+		 *
+		 * N.B. Deprecated settings are visible if
+		 * --atversion is used with a version that
+		 * is lower than the version in which the
+		 * setting was deprecated.
+		 */
+		if (!arg_count(cmd, showdeprecated_ARG))
+			tree_spec.ignoredeprecated = 1;
+	}
+
+	if (arg_count(cmd, ignorelocal_ARG))
+		tree_spec.ignorelocal = 1;
 
 	if (!strcmp(type, "current")) {
 		if (arg_count(cmd, atversion_ARG)) {
@@ -119,7 +160,9 @@ int dumpconfig(struct cmd_context *cmd, int argc, char **argv)
 			return EINVALID_CMD_LINE;
 		}
 
-		if ((tree_spec.ignoreadvanced || tree_spec.ignoreunsupported)) {
+		if (arg_count(cmd, ignoreunsupported_ARG) ||
+		    arg_count(cmd, ignoreadvanced_ARG)) {
+			/* FIXME: allow these even for --type current */
 			log_error("--ignoreadvanced and --ignoreunsupported has "
 				  "no effect with --type current");
 			return EINVALID_CMD_LINE;
@@ -168,7 +211,14 @@ int dumpconfig(struct cmd_context *cmd, int argc, char **argv)
 		}
 	}
 
-	if (!strcmp(type, "current")) {
+	if (!strcmp(type, "list") || arg_count(cmd, list_ARG)) {
+		tree_spec.type = CFG_DEF_TREE_LIST;
+		if (arg_count(cmd, withcomments_ARG)) {
+			log_error("--withcomments has no effect with --type list");
+			return EINVALID_CMD_LINE;
+		}
+		/* list type does not require status check */
+	} else if (!strcmp(type, "current")) {
 		tree_spec.type = CFG_DEF_TREE_CURRENT;
 		if (!_do_def_check(&tree_spec, cft, &cft_check_handle)) {
 			r = ECMD_FAILED;
@@ -211,14 +261,18 @@ int dumpconfig(struct cmd_context *cmd, int argc, char **argv)
 	}
 	else {
 		log_error("Incorrect type of configuration specified. "
-			  "Expected one of: current, default, missing, new, "
+			  "Expected one of: current, default, list, missing, new, "
 			  "profilable, profilable-command, profilable-metadata.");
 		r = EINVALID_CMD_LINE;
 		goto out;
 	}
 
+	if (arg_count(cmd, withsummary_ARG) || arg_count(cmd, list_ARG))
+		tree_spec.withsummary = 1;
 	if (arg_count(cmd, withcomments_ARG))
 		tree_spec.withcomments = 1;
+	if (arg_count(cmd, unconfigured_ARG))
+		tree_spec.unconfigured = 1;
 
 	if (arg_count(cmd, withversions_ARG))
 		tree_spec.withversions = 1;
@@ -249,4 +303,14 @@ out:
 	 */
 
 	return r;
+}
+
+int config(struct cmd_context *cmd, int argc, char **argv)
+{
+	return dumpconfig(cmd, argc, argv);
+}
+
+int lvmconfig(struct cmd_context *cmd, int argc, char **argv)
+{
+	return dumpconfig(cmd, argc, argv);
 }

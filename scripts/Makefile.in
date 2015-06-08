@@ -33,14 +33,15 @@ ifeq ("@DMEVENTD@", "yes")
 	LVMLIBS += -ldevmapper-event
 endif
 
-SCRIPTS = lvmdump.sh lvmconf.sh vgimportclone.sh
+LVM_SCRIPTS = lvmdump.sh lvmconf.sh vgimportclone.sh
+DM_SCRIPTS =
 
 ifeq ("@FSADM@", "yes")
-	SCRIPTS += fsadm.sh
+	LVM_SCRIPTS += fsadm.sh
 endif
 
 ifeq ("@BLKDEACTIVATE@", "yes")
-	SCRIPTS += blkdeactivate.sh
+	DM_SCRIPTS += blkdeactivate.sh
 endif
 
 OCF_SCRIPTS =
@@ -58,11 +59,12 @@ vpath %.ocf $(srcdir)
 	$(INSTALL_DIR) $(ocf_scriptdir)
 	$(INSTALL_SCRIPT) $< $(ocf_scriptdir)/$(basename $(<F))
 
-install_lvm2: $(SCRIPTS:.sh=_install)
+install_lvm2: $(LVM_SCRIPTS:.sh=_install)
+install_device-mapper: $(DM_SCRIPTS:.sh=_install)
 
 install_ocf: $(OCF_SCRIPTS:.ocf=_install)
 
-install: install_lvm2 install_ocf
+install: install_lvm2 install_ocf install_device-mapper
 
 # FIXME Customise for other distributions
 install_initscripts:
@@ -72,6 +74,9 @@ ifeq ("@BUILD_DMEVENTD@", "yes")
 endif
 ifeq ("@BUILD_LVMETAD@", "yes")
 	$(INSTALL_SCRIPT) lvm2_lvmetad_init_red_hat $(initdir)/lvm2-lvmetad
+endif
+ifeq ("@BUILD_LVMPOLLD@", "yes")
+	$(INSTALL_SCRIPT) lvm2_lvmpolld_init_red_hat $(initdir)/lvm2-lvmpolld
 endif
 ifneq ("@CLVMD@", "none")
 	$(INSTALL_SCRIPT) clvmd_init_red_hat $(initdir)/clvmd
@@ -112,6 +117,10 @@ ifeq ("@BUILD_LVMETAD@", "yes")
 	$(INSTALL_DATA) lvm2_lvmetad_systemd_red_hat.service $(systemd_unit_dir)/lvm2-lvmetad.service
 	$(INSTALL_DATA) lvm2_pvscan_systemd_red_hat@.service $(systemd_unit_dir)/lvm2-pvscan@.service
 endif
+ifeq ("@BUILD_LVMPOLLD@", "yes")
+	$(INSTALL_DATA) lvm2_lvmpolld_systemd_red_hat.socket $(systemd_unit_dir)/lvm2-lvmpolld.socket
+	$(INSTALL_DATA) lvm2_lvmpolld_systemd_red_hat.service $(systemd_unit_dir)/lvm2-lvmpolld.service
+endif
 ifneq ("@CLVMD@", "none")
 	$(INSTALL_DATA) lvm2_clvmd_systemd_red_hat.service $(systemd_unit_dir)/lvm2-clvmd.service
 	$(INSTALL_DATA) lvm2_cluster_activation_systemd_red_hat.service $(systemd_unit_dir)/lvm2-cluster-activation.service
@@ -140,6 +149,8 @@ DISTCLEAN_TARGETS += \
 	lvm2_lvmetad_init_red_hat \
 	lvm2_lvmetad_systemd_red_hat.service \
 	lvm2_lvmetad_systemd_red_hat.socket \
+	lvm2_lvmpolld_systemd_red_hat.service \
+	lvm2_lvmpolld_systemd_red_hat.socket \
 	lvm2_monitoring_init_red_hat \
 	lvm2_monitoring_systemd_red_hat.service \
 	lvm2_pvscan_systemd_red_hat@.service \

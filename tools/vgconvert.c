@@ -17,7 +17,7 @@
 
 static int vgconvert_single(struct cmd_context *cmd, const char *vg_name,
 			    struct volume_group *vg,
-			    void *handle __attribute__((unused)))
+			    struct processing_handle *handle __attribute__((unused)))
 {
 	struct physical_volume *pv, *existing_pv;
 	struct pvcreate_restorable_params rp;
@@ -93,6 +93,13 @@ static int vgconvert_single(struct cmd_context *cmd, const char *vg_name,
 					  " metadata format.", lvl->lv->name);
 				return ECMD_FAILED;
 			}
+
+	/* New-style system ID supported? */ 
+	if (vg->system_id && *vg->system_id && (cmd->fmt->features & FMT_SYSTEMID_ON_PVS)) {
+		log_error("Unable to convert VG %s while it has a system ID set (%s).", vg->name,
+			  vg->system_id);
+		return ECMD_FAILED;
+	}
 
 	/* Attempt to change any LVIDs that are too big */
 	if (cmd->fmt->features & FMT_RESTRICTED_LVIDS) {
@@ -204,6 +211,11 @@ int vgconvert(struct cmd_context *cmd, int argc, char **argv)
 {
 	if (!argc) {
 		log_error("Please enter volume group(s)");
+		return EINVALID_CMD_LINE;
+	}
+
+	if (arg_is_set(cmd, metadatatype_ARG) && lvmetad_used()) {
+		log_error("lvmetad must be disabled to change metadata types.");
 		return EINVALID_CMD_LINE;
 	}
 

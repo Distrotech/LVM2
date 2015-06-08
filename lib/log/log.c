@@ -18,10 +18,13 @@
 #include "memlock.h"
 #include "defaults.h"
 
+#include <stdio.h>
 #include <stdarg.h>
 #include <syslog.h>
+#include <ctype.h>
 
 static FILE *_log_file;
+static char _log_file_path[PATH_MAX];
 static struct device _log_dev;
 static struct dm_str_list _log_dev_alias;
 
@@ -52,16 +55,88 @@ void init_log_fn(lvm2_log_fn_t log_fn)
 		_lvm2_log_fn = NULL;
 }
 
+/*
+ * Support envvar LVM_LOG_FILE_EPOCH and allow to attach
+ * extra keyword (consist of upto 32 alpha chars) to
+ * opened log file. After this 'epoch' word pid and starttime
+ * (in kernel units, read from /proc/self/stat)
+ * is automatically attached.
+ * If command/daemon forks multiple times, it could create multiple
+ * log files ensuring, there are no overwrites.
+ */
 void init_log_file(const char *log_file, int append)
 {
-	const char *open_mode = append ? "a" : "w";
+	static const char statfile[] = "/proc/self/stat";
+	const char *env;
+	int pid;
+	long long starttime;
+	FILE *st;
+	int i = 0;
 
-	if (!(_log_file = fopen(log_file, open_mode))) {
+	_log_file_path[0] = '\0';
+	if ((env = getenv("LVM_LOG_FILE_EPOCH"))) {
+		while (isalpha(env[i]) && i < 32) /* Up to 32 alphas */
+			i++;
+		if (env[i]) {
+			if (i)
+				log_warn("WARNING: Ignoring invalid LVM_LOG_FILE_EPOCH envvar \"%s\".", env);
+			goto no_epoch;
+		}
+
+		if (!(st = fopen(statfile, "r")))
+			log_sys_error("fopen", statfile);
+		else if (fscanf(st, "%d %*s %*c %*d %*d %*d %*d " /* tty_nr */
+			   "%*d %*u %*u %*u %*u " /* mjflt */
+			   "%*u %*u %*u %*d %*d " /* cstim */
+			   "%*d %*d %*d %*d " /* itrealvalue */
+			   "%llu", &pid, &starttime) != 2) {
+			log_warn("WARNING: Cannot parse content of %s.", statfile);
+		} else {
+			if (fclose(st))
+				log_sys_debug("fclose", statfile);
+
+			if (dm_snprintf(_log_file_path, sizeof(_log_file_path),
+					"%s_%s_%d_%lld", log_file, env, pid, starttime) < 0) {
+				log_warn("WARNING: Debug log file path is too long for epoch.");
+				_log_file_path[0] = '\0';
+			} else {
+				log_file = _log_file_path;
+				append = 1; /* force */
+			}
+		}
+	}
+no_epoch:
+	if (!(_log_file = fopen(log_file, append ? "a" : "w"))) {
 		log_sys_error("fopen", log_file);
 		return;
 	}
 
 	_log_to_file = 1;
+}
+
+/*
+ * Unlink the log file depeding on command's return value
+ *
+ * When envvar LVM_EXPECTED_EXIT_STATUS is set, compare
+ * resulting status with this string.
+ *
+ * It's possible to specify 2 variants - having it equal to
+ * a single number or having it different from a single number.
+ *
+ * i.e.  LVM_EXPECTED_EXIT_STATUS=">1"  # delete when ret > 1.
+ */
+void unlink_log_file(int ret)
+{
+	const char *env;
+
+	if (_log_file_path[0] &&
+	    (env = getenv("LVM_EXPECTED_EXIT_STATUS")) &&
+	    ((env[0] == '>' && ret > atoi(env + 1)) ||
+	     (atoi(env) == ret))) {
+		if (unlink(_log_file_path))
+			log_sys_error("unlink", _log_file_path);
+		_log_file_path[0] = '\0';
+	}
 }
 
 void init_log_direct(const char *log_file, int append)
@@ -299,12 +374,12 @@ void print_log(int level, const char *file, int line, int dm_errno_or_class,
 		va_start(ap, format);
 		switch (level) {
 		case _LOG_DEBUG:
-			if ((verbose_level() == level) &&
-			    (strcmp("<backtrace>", format) == 0))
-				break;
 			if (verbose_level() < _LOG_DEBUG)
 				break;
 			if (!debug_class_is_logged(dm_errno_or_class))
+				break;
+			if ((verbose_level() == level) &&
+			    (strcmp("<backtrace>", format) == 0))
 				break;
 			/* fall through */
 		default:
@@ -333,7 +408,7 @@ void print_log(int level, const char *file, int line, int dm_errno_or_class,
 		vfprintf(_log_file, trformat, ap);
 		va_end(ap);
 
-		fprintf(_log_file, "\n");
+		fputc('\n', _log_file);
 		fflush(_log_file);
 	}
 

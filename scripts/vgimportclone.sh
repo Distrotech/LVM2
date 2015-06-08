@@ -204,11 +204,6 @@ for ARG
 do
     if [ -b "$ARG" ]
     then
-        PVS_OUT=`"${LVM}" pvs ${LVM_OPTS} --noheadings -o vg_name "$ARG"`
-        checkvalue $? "$ARG could not be verified to be a PV without errors."
-        PV_VGNAME=$(echo $PVS_OUT | $GREP -v '[[:space:]]+$')
-        [ -z "$PV_VGNAME" ] && die 3 "$ARG is not in a VG."
-
         ln -s "$ARG" ${TMP_LVM_SYSTEM_DIR}/vgimport${DEVNO}
         DISKS="${DISKS} ${TMP_LVM_SYSTEM_DIR}/vgimport${DEVNO}"
         DEVNO=$((${DEVNO}+1))
@@ -369,6 +364,7 @@ then
     if [ "$use_lvmetad" = "1" ]
     then
       echo "Notifying lvmetad about changes since it was disabled temporarily."
+      echo "(This resolves any WARNING message about restarting lvmetad that appears above.)"
       LVM_OPTS="${LVM_OPTS} --cache"
     fi
 

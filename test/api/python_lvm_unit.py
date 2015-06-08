@@ -18,6 +18,10 @@ import string
 import lvm
 import os
 import itertools
+import sys
+
+if sys.version_info[0] > 2:
+	long = int
 
 # Set of basic unit tests for the python bindings.
 #
@@ -44,8 +48,8 @@ def rs(rand_len=10):
 	"""
 	Generate a random string
 	"""
-	return ''.join(random.choice(string.ascii_uppercase)
-				   for x in range(rand_len))
+	return ''.join(
+		random.choice(string.ascii_uppercase)for x in range(rand_len))
 
 
 def _get_allowed_devices():
@@ -54,18 +58,6 @@ def _get_allowed_devices():
 		rc = rc.splitlines()
 		rc.sort()
 	return rc
-
-
-def compare_pv(right, left):
-	r_name = right.getName()
-	l_name = left.getName()
-
-	if r_name > l_name:
-		return 1
-	elif r_name == l_name:
-		return 0
-	else:
-		return -1
 
 
 class AllowedPVS(object):
@@ -92,7 +84,7 @@ class AllowedPVS(object):
 					rc.append(p)
 
 		#Sort them consistently
-		rc.sort(compare_pv)
+		rc.sort(key=lambda x: x.getName())
 		return rc
 
 	def __exit__(self, t_type, value, traceback):
@@ -131,15 +123,15 @@ class TestLvm(unittest.TestCase):
 		for d in device_list:
 			vg.extend(d)
 
-		vg.createLvThinpool(pool_name, vg.getSize()/2, 0, 0,
-				    lvm.THIN_DISCARDS_PASSDOWN, 1)
+		vg.createLvThinpool(
+			pool_name, vg.getSize() / 2, 0, 0, lvm.THIN_DISCARDS_PASSDOWN, 1)
 		return vg
 
 	@staticmethod
 	def _create_thin_lv(pv_devices, name):
 		thin_pool_name = 'thin_vg_pool_' + rs(4)
 		vg = TestLvm._create_thin_pool(pv_devices, thin_pool_name)
-		vg.createLvThin(thin_pool_name, name, vg.getSize()/8)
+		vg.createLvThin(thin_pool_name, name, vg.getSize() / 8)
 		vg.close()
 		vg = None
 
@@ -239,7 +231,7 @@ class TestLvm(unittest.TestCase):
 			curr_size = pv.getSize()
 			dev_size = pv.getDevSize()
 			self.assertTrue(curr_size == dev_size)
-			pv.resize(curr_size/2)
+			pv.resize(curr_size / 2)
 		with AllowedPVS() as pvs:
 			pv = pvs[0]
 			resized_size = pv.getSize()
@@ -298,22 +290,30 @@ class TestLvm(unittest.TestCase):
 			self.assertEqual(type(pv.getUuid()), str)
 			self.assertTrue(len(pv.getUuid()) > 0)
 
-			self.assertTrue(type(pv.getMdaCount()) == int or
-							type(pv.getMdaCount()) == long)
+			self.assertTrue(
+				type(pv.getMdaCount()) == int or
+				type(pv.getMdaCount()) == long)
 
-			self.assertTrue(type(pv.getSize()) == int or
-							type(pv.getSize()) == long)
+			self.assertTrue(
+				type(pv.getSize()) == int or
+				type(pv.getSize()) == long)
 
-			self.assertTrue(type(pv.getDevSize()) == int or
-							type(pv.getSize()) == long)
+			self.assertTrue(
+				type(pv.getDevSize()) == int or
+				type(pv.getSize()) == long)
 
-			self.assertTrue(type(pv.getFree()) == int or
-							type(pv.getFree()) == long)
+			self.assertTrue(
+				type(pv.getFree()) == int or
+				type(pv.getFree()) == long)
 
 	def _test_prop(self, prop_obj, prop, var_type, settable):
 		result = prop_obj.getProperty(prop)
 
-		self.assertEqual(type(result[0]), var_type)
+		#If we have no string value we can get a None type back
+		if result[0] is not None:
+			self.assertEqual(type(result[0]), var_type)
+		else:
+			self.assertTrue(str == var_type)
 		self.assertEqual(type(result[1]), bool)
 		self.assertTrue(result[1] == settable)
 
@@ -336,7 +336,53 @@ class TestLvm(unittest.TestCase):
 		lv_name = 'lv_test'
 		TestLvm._create_thin_lv(TestLvm._get_pv_device_names(), lv_name)
 		lv, vg = TestLvm._get_lv(None, lv_name)
-		self._test_prop(lv, 'seg_count', long, False)
+
+		lv_seg_properties = [
+			('chunk_size', long, False), ('devices', str, False),
+			('discards', str, False), ('region_size', long, False),
+			('segtype', str, False), ('seg_pe_ranges', str, False),
+			('seg_size', long, False), ('seg_size_pe', long, False),
+			('seg_start', long, False), ('seg_start_pe', long, False),
+			('seg_tags', str, False), ('stripes', long, False),
+			('stripe_size', long, False), ('thin_count', long, False),
+			('transaction_id', long, False), ('zero', long, False)]
+
+		lv_properties = [
+			('convert_lv', str, False), ('copy_percent', long, False),
+			('data_lv', str, False), ('lv_attr', str, False),
+			('lv_host', str, False), ('lv_kernel_major', long, False),
+			('lv_kernel_minor', long, False),
+			('lv_kernel_read_ahead', long, False),
+			('lv_major', long, False), ('lv_minor', long, False),
+			('lv_name', str, False), ('lv_path', str, False),
+			('lv_profile', str, False), ('lv_read_ahead', long, False),
+			('lv_size', long, False), ('lv_tags', str, False),
+			('lv_time', str, False), ('lv_uuid', str, False),
+			('metadata_lv', str, False), ('mirror_log', str, False),
+			('lv_modules', str, False), ('move_pv', str, False),
+			('origin', str, False), ('origin_size', long, False),
+			('pool_lv', str, False), ('raid_max_recovery_rate', long, False),
+			('raid_min_recovery_rate', long, False),
+			('raid_mismatch_count', long, False),
+			('raid_sync_action', str, False),
+			('raid_write_behind', long, False), ('seg_count', long, False),
+			('snap_percent', long, False), ('sync_percent', long, False)]
+
+		# Generic test case, make sure we get what we expect
+		for t in lv_properties:
+			self._test_prop(lv, *t)
+
+		segments = lv.listLVsegs()
+		if segments and len(segments):
+			for s in segments:
+				for t in lv_seg_properties:
+					self._test_prop(s, *t)
+
+		# Test specific cases
+		tag = 'hello_world'
+		lv.addTag(tag)
+		tags = lv.getProperty('lv_tags')
+		self.assertTrue(tag in tags[0])
 		vg.close()
 
 	def test_lv_tags(self):
@@ -367,6 +413,100 @@ class TestLvm(unittest.TestCase):
 		self.assertEqual(lv.getName(), new_name)
 		lv.rename(current_name)
 		vg.close()
+
+	def test_lv_persistence(self):
+		# Make changes to the lv, close the vg and re-open to make sure that
+		# the changes persist
+		lv_name = 'lv_test_persist'
+		TestLvm._create_thick_lv(TestLvm._get_pv_device_names(), lv_name)
+
+		# Test rename
+		lv, vg = TestLvm._get_lv(None, lv_name)
+		current_name = lv.getName()
+		new_name = rs()
+		lv.rename(new_name)
+
+		vg.close()
+		vg = None
+
+		lv, vg = TestLvm._get_lv(None, new_name)
+
+		self.assertTrue(lv is not None)
+
+		if lv and vg:
+			lv.rename(lv_name)
+			vg.close()
+			vg = None
+
+		# Test lv tag add
+		tag = 'hello_world'
+
+		lv, vg = TestLvm._get_lv(None, lv_name)
+		lv.addTag(tag)
+		vg.close()
+		vg = None
+
+		lv, vg = TestLvm._get_lv(None, lv_name)
+		tags = lv.getTags()
+
+		self.assertTrue(tag in tags)
+		vg.close()
+		vg = None
+
+		# Test lv tag delete
+		lv, vg = TestLvm._get_lv(None, lv_name)
+		self.assertTrue(lv is not None and vg is not None)
+
+		if lv and vg:
+			tags = lv.getTags()
+
+			for t in tags:
+				lv.removeTag(t)
+
+			vg.close()
+			vg = None
+
+		lv, vg = TestLvm._get_lv(None, lv_name)
+		self.assertTrue(lv is not None and vg is not None)
+
+		if lv and vg:
+			tags = lv.getTags()
+
+			if tags:
+				self.assertEqual(len(tags), 0)
+			vg.close()
+			vg = None
+
+		# Test lv deactivate
+		lv, vg = TestLvm._get_lv(None, lv_name)
+		self.assertTrue(lv is not None and vg is not None)
+
+		if lv and vg:
+			lv.deactivate()
+			vg.close()
+			vg = None
+
+		lv, vg = TestLvm._get_lv(None, lv_name)
+		self.assertTrue(lv is not None and vg is not None)
+		if lv and vg:
+			self.assertFalse(lv.isActive())
+			vg.close()
+			vg = None
+
+		# Test lv activate
+		lv, vg = TestLvm._get_lv(None, lv_name)
+		self.assertTrue(lv is not None and vg is not None)
+		if lv and vg:
+			lv.activate()
+			vg.close()
+			vg = None
+
+		lv, vg = TestLvm._get_lv(None, lv_name)
+		self.assertTrue(lv is not None and vg is not None)
+		if lv and vg:
+			self.assertTrue(lv.isActive())
+			vg.close()
+			vg = None
 
 	def test_lv_snapshot(self):
 
@@ -422,7 +562,7 @@ class TestLvm(unittest.TestCase):
 		lv, vg = TestLvm._get_lv(None, lv_name)
 
 		curr_size = lv.getSize()
-		lv.resize(curr_size+(1024*1024))
+		lv.resize(curr_size + (1024 * 1024))
 		latest = lv.getSize()
 		self.assertTrue(curr_size != latest)
 
@@ -448,8 +588,9 @@ class TestLvm(unittest.TestCase):
 
 		new_extent = 1024 * 1024 * 4
 
-		self.assertFalse(vg.getExtentSize() != new_extent,
-						 "Cannot determine if it works if they are the same")
+		self.assertFalse(
+			vg.getExtentSize() != new_extent,
+			"Cannot determine if it works if they are the same")
 
 		vg.setExtentSize(new_extent)
 		self.assertEqual(vg.getExtentSize(), new_extent)
@@ -508,8 +649,8 @@ class TestLvm(unittest.TestCase):
 			if len(lvs):
 				lv = lvs[0]
 				lv_name = lv.getName()
-				self.assertRaises(lvm.LibLVMError, vg.createLvLinear, lv_name,
-								  lv.getSize())
+				self.assertRaises(
+					lvm.LibLVMError, vg.createLvLinear, lv_name, lv.getSize())
 			vg.close()
 
 	def test_vg_uuids(self):
@@ -559,10 +700,10 @@ class TestLvm(unittest.TestCase):
 				pv_name_lookup = vg.pvFromName(name)
 				pv_uuid_lookup = vg.pvFromUuid(uuid)
 
-				self.assertTrue(pv_name_lookup.getName() ==
-								pv_uuid_lookup.getName())
-				self.assertTrue(pv_name_lookup.getUuid() ==
-								pv_uuid_lookup.getUuid())
+				self.assertTrue(
+					pv_name_lookup.getName() == pv_uuid_lookup.getName())
+				self.assertTrue(
+					pv_name_lookup.getUuid() == pv_uuid_lookup.getUuid())
 
 				self.assertTrue(name == pv_name_lookup.getName())
 				self.assertTrue(uuid == pv_uuid_lookup.getUuid())
@@ -644,9 +785,10 @@ class TestLvm(unittest.TestCase):
 			self.assertTrue(len(uuid) > 0)
 			vg.close()
 
-	RETURN_NUMERIC = ["getSeqno", "getSize", "getFreeSize", "getFreeSize",
-					  "getExtentSize", "getExtentCount", "getFreeExtentCount",
-					  "getPvCount", "getMaxPv", "getMaxLv"]
+	RETURN_NUMERIC = [
+		"getSeqno", "getSize", "getFreeSize", "getFreeSize",
+		"getExtentSize", "getExtentCount", "getFreeExtentCount",
+		"getPvCount", "getMaxPv", "getMaxLv"]
 
 	def test_vg_getters(self):
 		device_names = TestLvm._get_pv_device_names()
@@ -710,7 +852,7 @@ class TestLvm(unittest.TestCase):
 		i = 0
 		for d in device_names:
 			if i % 2 == 0:
-				TestLvm._create_thin_lv([d],  "thin_lv%d" % i)
+				TestLvm._create_thin_lv([d], "thin_lv%d" % i)
 			else:
 				TestLvm._create_thick_lv([d], "thick_lv%d" % i)
 			i += 1
@@ -760,7 +902,7 @@ class TestLvm(unittest.TestCase):
 			lvm.pvCreate(d)
 
 	def test_pv_create(self):
-		size = [0, 1024*1024*4]
+		size = [0, 1024 * 1024 * 4]
 		pvmeta_copies = [0, 1, 2]
 		pvmeta_size = [0, 255, 512, 1024]
 		data_alignment = [0, 2048, 4096]
@@ -779,9 +921,9 @@ class TestLvm(unittest.TestCase):
 		self.assertRaises(lvm.LibLVMError, lvm.pvCreate, '')
 		self.assertRaises(lvm.LibLVMError, lvm.pvCreate, d, 4)
 		self.assertRaises(lvm.LibLVMError, lvm.pvCreate, d, 0, 4)
-		self.assertRaises(lvm.LibLVMError, lvm.pvCreate, d, 0, 0, 0, 2**34)
-		self.assertRaises(lvm.LibLVMError, lvm.pvCreate, d, 0, 0, 0, 4096,
-						  2**34)
+		self.assertRaises(lvm.LibLVMError, lvm.pvCreate, d, 0, 0, 0, 2 ** 34)
+		self.assertRaises(
+			lvm.LibLVMError, lvm.pvCreate, d, 0, 0, 0, 4096, 2 ** 34)
 
 		#Try a number of combinations and permutations
 		for s in size:
@@ -797,12 +939,14 @@ class TestLvm(unittest.TestCase):
 						lvm.pvCreate(d, s, copies, pv_size, align)
 						lvm.pvRemove(d)
 						for align_offset in data_alignment_offset:
-							lvm.pvCreate(d, s, copies, pv_size, align,
-										 align * align_offset)
+							lvm.pvCreate(
+								d, s, copies, pv_size, align,
+								align * align_offset)
 							lvm.pvRemove(d)
 							for z in zero:
-								lvm.pvCreate(d, s, copies, pv_size, align,
-											 align * align_offset, z)
+								lvm.pvCreate(
+									d, s, copies, pv_size, align,
+									align * align_offset, z)
 								lvm.pvRemove(d)
 
 		#Restore
@@ -866,7 +1010,7 @@ class TestLvm(unittest.TestCase):
 				method(t)
 
 	def _test_bad_names(self, method, dupe_name):
-		 # Test for duplicate name
+		# Test for duplicate name
 		self.assertRaises(lvm.LibLVMError, method, dupe_name)
 
 		# Test for too long a name
@@ -889,8 +1033,9 @@ class TestLvm(unittest.TestCase):
 
 	def _lv_reserved_names(self, method):
 		prefixes = ['snapshot', 'pvmove']
-		reserved = ['_mlog', '_mimage', '_pmspare', '_rimage', '_rmeta',
-					'_vorigin', '_tdata', '_tmeta']
+		reserved = [
+			'_mlog', '_mimage', '_pmspare', '_rimage', '_rmeta',
+			'_vorigin', '_tdata', '_tmeta']
 
 		for p in prefixes:
 			self.assertRaises(lvm.LibLVMError, method, p + rs(3))

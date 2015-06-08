@@ -110,7 +110,7 @@ void dm_lib_init(void)
 __attribute__((format(printf, 5, 0)))
 static void _default_log_line(int level,
 	    const char *file __attribute__((unused)),
-	    int line __attribute__((unused)), int dm_errno_or_class, 
+	    int line __attribute__((unused)), int dm_errno_or_class,
 	    const char *f, va_list ap)
 {
 	static int _abort_on_internal_errors = -1;
@@ -138,7 +138,7 @@ static void _default_log_line(int level,
 __attribute__((format(printf, 5, 6)))
 static void _default_log_with_errno(int level,
 	    const char *file __attribute__((unused)),
-	    int line __attribute__((unused)), int dm_errno_or_class, 
+	    int line __attribute__((unused)), int dm_errno_or_class,
 	    const char *f, ...)
 {
 	va_list ap;
@@ -959,7 +959,7 @@ static int _add_dev_node(const char *dev_name, uint32_t major, uint32_t minor,
 {
 	char path[PATH_MAX];
 	struct stat info;
-	dev_t dev = MKDEV((dev_t)major, minor);
+	dev_t dev = MKDEV((dev_t)major, (dev_t)minor);
 	mode_t old_mask;
 
 	if (!_build_dev_path(path, sizeof(path), dev_name))

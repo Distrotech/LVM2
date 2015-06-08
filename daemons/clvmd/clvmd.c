@@ -172,6 +172,7 @@ static void usage(const char *prog, FILE *file)
 #ifdef USE_SINGLENODE
 		"singlenode "
 #endif
+		"\n"
 		"   -R       Tell all running clvmds in the cluster to reload their device cache\n"
 		"   -S       Restart clvmd, preserving exclusive locks\n"
 		"   -t<secs> Command timeout (default: 60 seconds)\n"
@@ -899,8 +900,10 @@ static void main_loop(int cmd_timeout)
 					ret = thisfd->callback(thisfd, buf, sizeof(buf),
 							       csid, &newfd);
 					/* Ignore EAGAIN */
-					if (ret < 0 && (errno == EAGAIN || errno == EINTR))
+					if (ret < 0 && (errno == EAGAIN || errno == EINTR)) {
+						lastfd = thisfd;
 						continue;
+                                        }
 
 					/* Got error or EOF: Remove it from the list safely */
 					if (ret <= 0) {

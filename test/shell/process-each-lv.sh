@@ -11,7 +11,12 @@
 
 test_description='Exercise toollib process_each_lv'
 
+# disable lvmetad logging as it bogs down test systems
+export LVM_TEST_LVMETAD_DEBUG_OPTS=${LVM_TEST_LVMETAD_DEBUG_OPTS-}
+
 . lib/inittest
+
+test -e LOCAL_LVMPOLLD && skip
 
 aux prepare_devs 10
 

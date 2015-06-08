@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.  
- * Copyright (C) 2004-2007 Red Hat, Inc. All rights reserved.
+ * Copyright (C) 2004-2015 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
  *
@@ -102,10 +102,14 @@ struct arg_value_group_list {
 
 #define CACHE_VGMETADATA	0x00000001
 #define PERMITTED_READ_ONLY 	0x00000002
-/* Process all vgs if none specified on the command line. */
+/* Process all VGs if none specified on the command line. */
 #define ALL_VGS_IS_DEFAULT	0x00000004
 /* Process all devices with --all if none are specified on the command line. */
 #define ENABLE_ALL_DEVS		0x00000008	
+/* Exactly one VG name argument required. */
+#define ONE_VGNAME_ARG		0x00000010
+/* Command is allowed to read foreign VGs. */
+#define ENABLE_FOREIGN_VGS	0x00000020
  
 /* a register of the lvm commands */
 struct command {
@@ -172,7 +176,8 @@ int32_t grouped_arg_int_value(const struct arg_values *av, int a, const int32_t 
 
 const char *command_name(struct cmd_context *cmd);
 
-int pvmove_poll(struct cmd_context *cmd, const char *pv, unsigned background);
+int pvmove_poll(struct cmd_context *cmd, const char *pv_name, const char *uuid,
+		const char *vg_name, const char *lv_name, unsigned background);
 int lvconvert_poll(struct cmd_context *cmd, struct logical_volume *lv, unsigned background);
 
 int mirror_remove_missing(struct cmd_context *cmd,

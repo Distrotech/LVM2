@@ -1018,7 +1018,6 @@ struct volume_group *vg_create(struct cmd_context *cmd, const char *vg_name)
 		.context.vg_ref.vg_name = vg_name
 	};
 	struct format_instance *fid;
-	int consistent = 0;
 	uint32_t rc;
 
 	if (!validate_name(vg_name)) {
@@ -1031,15 +1030,6 @@ struct volume_group *vg_create(struct cmd_context *cmd, const char *vg_name)
 	if (rc != SUCCESS)
 		/* NOTE: let caller decide - this may be check for existence */
 		return _vg_make_handle(cmd, NULL, rc);
-
-	/* FIXME: Is this vg_read_internal necessary? Move it inside
-	   vg_lock_newname? */
-	/* is this vg name already in use ? */
-	if ((vg = vg_read_internal(cmd, vg_name, NULL, WARN_PV_READ, &consistent))) {
-		log_error("A volume group called '%s' already exists.", vg_name);
-		unlock_and_release_vg(cmd, vg, vg_name);
-		return _vg_make_handle(cmd, NULL, FAILED_EXIST);
-	}
 
 	/* Strip dev_dir if present */
 	vg_name = strip_dir(vg_name, cmd->dev_dir);
@@ -1054,10 +1044,10 @@ struct volume_group *vg_create(struct cmd_context *cmd, const char *vg_name)
 	}
 
 	vg->status = (RESIZEABLE_VG | LVM_READ | LVM_WRITE);
-	if (!(vg->system_id = dm_pool_zalloc(vg->vgmem, NAME_LEN + 1)))
+	vg->system_id = NULL;
+	if (!(vg->lvm1_system_id = dm_pool_zalloc(vg->vgmem, NAME_LEN + 1)))
 		goto_bad;
 
-	*vg->system_id = '\0';
 	vg->extent_size = DEFAULT_EXTENT_SIZE * 2;
 	vg->max_lv = DEFAULT_MAX_LV;
 	vg->max_pv = DEFAULT_MAX_PV;
@@ -1425,7 +1415,7 @@ int vg_split_mdas(struct cmd_context *cmd __attribute__((unused)),
  * 0 indicates we may not.
  */
 static int _pvcreate_check(struct cmd_context *cmd, const char *name,
-			   struct pvcreate_params *pp)
+			   struct pvcreate_params *pp, int *wiped)
 {
 	struct physical_volume *pv;
 	struct device *dev;
@@ -1434,6 +1424,8 @@ static int _pvcreate_check(struct cmd_context *cmd, const char *name,
 	int filter_refresh_needed = 0;
 
 	/* FIXME Check partition type is LVM unless --force is given */
+
+	*wiped = 0;
 
 	/* Is there a pv here already? */
 	pv = find_pv_by_name(cmd, name, 1, 1);
@@ -1459,6 +1451,33 @@ static int _pvcreate_check(struct cmd_context *cmd, const char *name,
 
 	dev = dev_cache_get(name, cmd->full_filter);
 
+	/*
+	 * Refresh+rescan at the end is needed if:
+	 *   - we don't obtain device list from udev,
+	 *     hence persistent cache file is used
+	 *     and we need to trash it and reevaluate
+	 *     for any changes done outside - adding
+	 *     any new foreign signature which may affect
+	 *     filtering - before we do pvcreate, we
+	 *     need to be sure that we have up-to-date
+	 *     view for filters
+	 *
+	 *   - we have wiped existing foreign signatures
+	 *     from dev as this may affect what's filtered
+	 *     as well
+	 *
+	 *
+	 * Only rescan at the end is needed if:
+	 *   - we've just checked whether dev is fileterd
+	 *     by MD filter. We do the refresh in-situ,
+	 *     so no need to require the refresh at the
+	 *     end of this fn. This is to allow for
+	 *     wiping MD signature during pvcreate for
+	 *     the dev - the dev would normally be
+	 *     filtered because of MD filter.
+	 *     This is an exception.
+	 */
+
 	/* Is there an md superblock here? */
 	if (!dev && md_filtering()) {
 		if (!refresh_filters(cmd))
@@ -1469,7 +1488,8 @@ static int _pvcreate_check(struct cmd_context *cmd, const char *name,
 		init_md_filtering(1);
 
 		scan_needed = 1;
-	}
+	} else if (!obtain_device_list_from_udev())
+		filter_refresh_needed = scan_needed = 1;
 
 	if (!dev) {
 		log_error("Device %s not found (or ignored by filtering).", name);
@@ -1488,12 +1508,13 @@ static int _pvcreate_check(struct cmd_context *cmd, const char *name,
 
 	if (!wipe_known_signatures(cmd, dev, name,
 				   TYPE_LVM1_MEMBER | TYPE_LVM2_MEMBER,
-				   0, pp->yes, pp->force)) {
+				   0, pp->yes, pp->force, wiped)) {
 		log_error("Aborting pvcreate on %s.", name);
 		goto out;
-	} else
+	}
+
+	if (*wiped)
 		filter_refresh_needed = scan_needed = 1;
-	
 
 	if (sigint_caught())
 		goto_out;
@@ -1514,11 +1535,12 @@ out:
 			r = 0;
 		}
 
-	if (scan_needed)
+	if (scan_needed) {
 		if (!lvmcache_label_scan(cmd, 2)) {
 			stack;
 			r = 0;
 		}
+	}
 
 	free_pv_fid(pv);
 	return r;
@@ -1629,9 +1651,11 @@ struct physical_volume *pvcreate_vol(struct cmd_context *cmd, const char *pv_nam
 {
 	struct physical_volume *pv = NULL;
 	struct device *dev;
+	int wiped = 0;
 	struct dm_list mdas;
 	struct pvcreate_params default_pp;
 	char buffer[64] __attribute__((aligned(8)));
+	dev_ext_t dev_ext_src;
 
 	pvcreate_params_set_defaults(&default_pp);
 	if (!pp)
@@ -1653,13 +1677,32 @@ struct physical_volume *pvcreate_vol(struct cmd_context *cmd, const char *pv_nam
 		}
 	}
 
-	if (!_pvcreate_check(cmd, pv_name, pp))
+	if (!_pvcreate_check(cmd, pv_name, pp, &wiped))
 		goto_bad;
 
 	if (sigint_caught())
 		goto_bad;
 
-	if (!(dev = dev_cache_get(pv_name, cmd->full_filter))) {
+	/*
+	 * wipe_known_signatures called in _pvcreate_check fires
+	 * WATCH event to update udev database. But at the moment,
+	 * we have no way to synchronize with such event - we may
+	 * end up still seeing the old info in udev db and pvcreate
+	 * can fail to proceed because of the device still being
+	 * filtered (because of the stale info in udev db).
+	 * Disable udev dev-ext source temporarily here for
+	 * this reason and rescan with DEV_EXT_NONE dev-ext
+	 * source (so filters use DEV_EXT_NONE source).
+	 */
+	dev_ext_src = external_device_info_source();
+	if (wiped && (dev_ext_src == DEV_EXT_UDEV))
+		init_external_device_info_source(DEV_EXT_NONE);
+
+	dev = dev_cache_get(pv_name, cmd->full_filter);
+
+	init_external_device_info_source(dev_ext_src);
+
+	if (!dev) {
 		log_error("%s: Couldn't find device.  Check your filters?",
 			  pv_name);
 		goto bad;
@@ -2461,6 +2504,12 @@ int vg_validate(struct volume_group *vg)
 		r = 0;
 	}
 
+	if (vg->status & LVM_WRITE_LOCKED) {
+		log_error(INTERNAL_ERROR "VG %s has external flag LVM_WRITE_LOCKED set internally.",
+			  vg->name);
+		r = 0;
+	}
+
 	/* FIXME Also check there's no data/metadata overlap */
 	if (!(vhash.pvid = dm_hash_create(vg->pv_count))) {
 		log_error("Failed to allocate pvid hash.");
@@ -2528,11 +2577,31 @@ int vg_validate(struct volume_group *vg)
 		r = 0;
 	}
 
+	dm_list_iterate_items(lvl, &vg->removed_lvs) {
+		if (!(lvl->lv->status & LV_REMOVED)) {
+			log_error(INTERNAL_ERROR "LV %s is not marked as removed while it's part "
+				  "of removed LV list for VG %s", lvl->lv->name, vg->name);
+			r = 0;
+		}
+	}
+
 	/*
 	 * Count all non-snapshot invisible LVs
 	 */
 	dm_list_iterate_items(lvl, &vg->lvs) {
 		lv_count++;
+
+		if (lvl->lv->status & LV_REMOVED) {
+			log_error(INTERNAL_ERROR "LV %s is marked as removed while it's "
+				  "still part of the VG %s", lvl->lv->name, vg->name);
+			r = 0;
+		}
+
+		if (lvl->lv->status & LVM_WRITE_LOCKED) {
+			log_error(INTERNAL_ERROR "LV %s has external flag LVM_WRITE_LOCKED set internally.",
+				  lvl->lv->name);
+			r = 0;
+		}
 
 		dev_name_len = strlen(lvl->lv->name) + vg_name_len + 3;
 		if (dev_name_len >= NAME_LEN) {
@@ -2816,6 +2885,7 @@ int vg_write(struct volume_group *vg)
 	}
 
 	if (revert || !wrote) {
+		log_error("Failed to write VG %s.", vg->name);
 		dm_list_uniterate(mdah, &vg->fid->metadata_areas_in_use, &mda->list) {
 			mda = dm_list_item(mdah, struct metadata_area);
 
@@ -3163,6 +3233,30 @@ static int _check_mda_in_use(struct metadata_area *mda, void *_in_use)
 	return 1;
 }
 
+static int _wipe_outdated_pvs(struct cmd_context *cmd, struct volume_group *vg, struct dm_list *to_check)
+{
+	struct pv_list *pvl, *pvl2;
+	char uuid[64] __attribute__((aligned(8)));
+	dm_list_iterate_items(pvl, to_check) {
+		dm_list_iterate_items(pvl2, &vg->pvs) {
+			if (pvl->pv->dev == pvl2->pv->dev)
+				goto next_pv;
+		}
+		if (!id_write_format(&pvl->pv->id, uuid, sizeof(uuid)))
+			return_0;
+		log_warn("WARNING: Removing PV %s (%s) that no longer belongs to VG %s",
+			 pv_dev_name(pvl->pv), uuid, vg->name);
+		if (!pv_write_orphan(cmd, pvl->pv))
+			return_0;
+
+		/* Refresh metadata after orphan write */
+		drop_cached_metadata(vg);
+next_pv:
+		;
+	}
+	return 1;
+}
+
 /* Caller sets consistent to 1 if it's safe for vg_read_internal to correct
  * inconsistent metadata on disk (i.e. the VG write lock is held).
  * This guarantees only consistent metadata is returned.
@@ -3196,11 +3290,12 @@ static struct volume_group *_vg_read(struct cmd_context *cmd,
 	int inconsistent_mda_count = 0;
 	unsigned use_precommitted = precommitted;
 	struct dm_list *pvids;
-	struct pv_list *pvl, *pvl2;
+	struct pv_list *pvl;
 	struct dm_list all_pvs;
-	char uuid[64] __attribute__((aligned(8)));
 	unsigned seqno = 0;
 	int reappeared = 0;
+	struct cached_vg_fmtdata *vg_fmtdata = NULL;	/* Additional format-specific data about the vg */
+	unsigned use_previous_vg;
 
 	if (is_orphan_vg(vgname)) {
 		if (use_precommitted) {
@@ -3221,6 +3316,9 @@ static struct volume_group *_vg_read(struct cmd_context *cmd,
 				*consistent = _repair_inconsistent_vg(correct_vg);
 			else
 				*consistent = !reappeared;
+			if (_wipe_outdated_pvs(cmd, correct_vg, &correct_vg->pvs_outdated))
+				/* clear the list */
+				dm_list_init(&correct_vg->pvs_outdated);
 		}
 		return correct_vg;
 	}
@@ -3287,12 +3385,20 @@ static struct volume_group *_vg_read(struct cmd_context *cmd,
 	/* Ensure contents of all metadata areas match - else do recovery */
 	inconsistent_mda_count=0;
 	dm_list_iterate_items(mda, &fid->metadata_areas_in_use) {
+		use_previous_vg = 0;
 
 		if ((use_precommitted &&
-		     !(vg = mda->ops->vg_read_precommit(fid, vgname, mda))) ||
+		     !(vg = mda->ops->vg_read_precommit(fid, vgname, mda, &vg_fmtdata, &use_previous_vg)) && !use_previous_vg) ||
 		    (!use_precommitted &&
-		     !(vg = mda->ops->vg_read(fid, vgname, mda, 0)))) {
+		     !(vg = mda->ops->vg_read(fid, vgname, mda, &vg_fmtdata, &use_previous_vg, 0)) && !use_previous_vg)) {
 			inconsistent = 1;
+			vg_fmtdata = NULL;
+			continue;
+		}
+
+		/* Use previous VG because checksum matches */
+		if (!vg) {
+			vg = correct_vg;
 			continue;
 		}
 
@@ -3319,8 +3425,10 @@ static struct volume_group *_vg_read(struct cmd_context *cmd,
 			}
 		}
 
-		if (vg != correct_vg)
+		if (vg != correct_vg) {
 			release_vg(vg);
+			vg_fmtdata = NULL;
+		}
 	}
 	fid->ref_count--;
 
@@ -3436,6 +3544,7 @@ static struct volume_group *_vg_read(struct cmd_context *cmd,
 		 * but we failed to do so (so there's a dangling fid now).
 		 */
 		_destroy_fid(&fid);
+		vg_fmtdata = NULL;
 
 		inconsistent = 0;
 
@@ -3466,14 +3575,23 @@ static struct volume_group *_vg_read(struct cmd_context *cmd,
 		/* Ensure contents of all metadata areas match - else recover */
 		inconsistent_mda_count=0;
 		dm_list_iterate_items(mda, &fid->metadata_areas_in_use) {
+			use_previous_vg = 0;
+
 			if ((use_precommitted &&
-			     !(vg = mda->ops->vg_read_precommit(fid, vgname,
-								mda))) ||
+			     !(vg = mda->ops->vg_read_precommit(fid, vgname, mda, &vg_fmtdata, &use_previous_vg)) && !use_previous_vg) ||
 			    (!use_precommitted &&
-			     !(vg = mda->ops->vg_read(fid, vgname, mda, 0)))) {
+			     !(vg = mda->ops->vg_read(fid, vgname, mda, &vg_fmtdata, &use_previous_vg, 0)) && !use_previous_vg)) {
 				inconsistent = 1;
+				vg_fmtdata = NULL;
 				continue;
 			}
+
+			/* Use previous VG because checksum matches */
+			if (!vg) {
+				vg = correct_vg;
+				continue;
+			}
+
 			if (!correct_vg) {
 				correct_vg = vg;
 				if (!_update_pv_list(cmd->mem, &all_pvs, correct_vg)) {
@@ -3516,8 +3634,10 @@ static struct volume_group *_vg_read(struct cmd_context *cmd,
 				}
 			}
 
-			if (vg != correct_vg)
+			if (vg != correct_vg) {
 				release_vg(vg);
+				vg_fmtdata = NULL;
+			}
 		}
 		fid->ref_count--;
 
@@ -3599,28 +3719,10 @@ static struct volume_group *_vg_read(struct cmd_context *cmd,
 			return NULL;
 		}
 
-		dm_list_iterate_items(pvl, &all_pvs) {
-			dm_list_iterate_items(pvl2, &correct_vg->pvs) {
-				if (pvl->pv->dev == pvl2->pv->dev)
-					goto next_pv;
-			}
-			if (!id_write_format(&pvl->pv->id, uuid, sizeof(uuid))) {
-				_free_pv_list(&all_pvs);
-				release_vg(correct_vg);
-				return_NULL;
-			}
-			log_warn("WARNING: Removing PV %s (%s) that no longer belongs to VG %s",
-				 pv_dev_name(pvl->pv), uuid, correct_vg->name);
-			if (!pv_write_orphan(cmd, pvl->pv)) {
-				_free_pv_list(&all_pvs);
-				release_vg(correct_vg);
-				return_NULL;
-			}
-
-			/* Refresh metadata after orphan write */
-			drop_cached_metadata(correct_vg);
-      next_pv:
-			;
+		if (!_wipe_outdated_pvs(cmd, correct_vg, &all_pvs)) {
+			_free_pv_list(&all_pvs);
+			release_vg(correct_vg);
+			return_NULL;
 		}
 	}
 
@@ -3932,6 +4034,54 @@ struct dm_list *get_vgids(struct cmd_context *cmd, int include_internal)
 	return lvmcache_get_vgids(cmd, include_internal);
 }
 
+int get_vgnameids(struct cmd_context *cmd, struct dm_list *vgnameids,
+		  const char *only_this_vgname, int include_internal)
+{
+	struct vgnameid_list *vgnl;
+	struct format_type *fmt;
+
+	if (only_this_vgname) {
+		if (!(vgnl = dm_pool_alloc(cmd->mem, sizeof(*vgnl)))) {
+			log_error("vgnameid_list allocation failed.");
+			return 0;
+		}
+
+		vgnl->vg_name = dm_pool_strdup(cmd->mem, only_this_vgname);
+		vgnl->vgid = NULL;
+		dm_list_add(vgnameids, &vgnl->list);
+		return 1;
+	}
+
+	if (lvmetad_active()) {
+		/*
+		 * This just gets the list of names/ids from lvmetad
+		 * and does not populate lvmcache.
+		 */
+		lvmetad_get_vgnameids(cmd, vgnameids);
+
+		if (include_internal) {
+			dm_list_iterate_items(fmt, &cmd->formats) {
+				if (!(vgnl = dm_pool_alloc(cmd->mem, sizeof(*vgnl)))) {
+					log_error("vgnameid_list allocation failed.");
+					return 0;
+				}
+
+				vgnl->vg_name = dm_pool_strdup(cmd->mem, fmt->orphan_vg_name);
+				vgnl->vgid = NULL;
+				dm_list_add(vgnameids, &vgnl->list);
+			}
+		}
+	} else {
+		/*
+		 * The non-lvmetad case. This function begins by calling
+		 * lvmcache_label_scan() to populate lvmcache.
+		 */
+		lvmcache_get_vgnameids(cmd, include_internal, vgnameids);
+	}
+
+	return 1;
+}
+
 static int _get_pvs(struct cmd_context *cmd, uint32_t warn_flags,
 		struct dm_list *pvslist, struct dm_list *vgslist)
 {
@@ -4212,6 +4362,37 @@ int vg_check_write_mode(struct volume_group *vg)
 }
 
 /*
+ * Return 1 if the VG metadata should be written
+ * *without* the LVM_WRITE flag in the status line, and
+ * *with* the LVM_WRITE_LOCKED flag in the flags line.
+ *
+ * If this is done for a VG, it forces previous versions
+ * of lvm (before the LVM_WRITE_LOCKED flag was added), to view
+ * the VG and its LVs as read-only (because the LVM_WRITE flag
+ * is missing).  Versions of lvm that understand the
+ * LVM_WRITE_LOCKED flag know to check the other methods of
+ * access control for the VG, specifically system_id and lock_type.
+ *
+ * So, if a VG has a system_id or lock_type, then the
+ * system_id and lock_type control access to the VG in
+ * addition to its basic writable status.  Because previous
+ * lvm versions do not know about system_id or lock_type,
+ * VGs depending on either of these should have LVM_WRITE_LOCKED
+ * instead of LVM_WRITE to prevent the previous lvm versions from
+ * assuming they can write the VG and its LVs.
+ */
+int vg_flag_write_locked(struct volume_group *vg)
+{
+	if (vg->system_id && vg->system_id[0])
+		return 1;
+
+	if (vg->lock_type && vg->lock_type[0] && strcmp(vg->lock_type, "none"))
+		return 1;
+
+	return 0;
+}
+
+/*
  * Performs a set of checks against a VG according to bits set in status
  * and returns FAILED_* bits for those that aren't acceptable.
  *
@@ -4293,6 +4474,166 @@ static struct volume_group *_recover_vg(struct cmd_context *cmd,
 	return (struct volume_group *)vg;
 }
 
+static int _allow_system_id(struct cmd_context *cmd, const char *system_id)
+{
+	const struct dm_config_node *cn;
+	const struct dm_config_value *cv;
+	const char *str;
+
+	if (!(cn = find_config_tree_node(cmd, local_extra_system_ids_CFG, NULL)))
+		return 0;
+
+	for (cv = cn->v; cv; cv = cv->next) {
+		if (cv->type == DM_CFG_EMPTY_ARRAY)
+			break;
+		/* Ignore invalid data: Warning message already issued by config.c */
+		if (cv->type != DM_CFG_STRING)
+			continue;
+		str = cv->v.str;
+		if (!*str)
+			continue;
+
+		if (!strcmp(str, system_id))
+			return 1;
+	}
+
+	return 0;
+}
+
+static int _access_vg_clustered(struct cmd_context *cmd, struct volume_group *vg)
+{
+	if (vg_is_clustered(vg) && !locking_is_clustered()) {
+		if (!cmd->ignore_clustered_vgs)
+			log_error("Skipping clustered volume group %s", vg->name);
+		else
+			log_verbose("Skipping clustered volume group %s", vg->name);
+		return 0;
+	}
+
+	return 1;
+}
+
+static int _access_vg_lock_type(struct cmd_context *cmd, struct volume_group *vg)
+{
+	if (!is_real_vg(vg->name))
+		return 1;
+
+	/*
+	 * Until lock_type support is added, reject any VG that has a lock_type.
+	 */
+	if (vg->lock_type && vg->lock_type[0] && strcmp(vg->lock_type, "none")) {
+		log_error("Cannot access VG %s with unsupported lock_type %s.",
+			  vg->name, vg->lock_type);
+		return 0;
+	}
+
+	return 1;
+}
+
+static int _access_vg_systemid(struct cmd_context *cmd, struct volume_group *vg)
+{
+	/*
+	 * LVM1 VGs must not be accessed if a new-style LVM2 system ID is set.
+	 */
+	if (cmd->system_id && systemid_on_pvs(vg)) {
+		log_error("Cannot access VG %s with LVM1 system ID %s when host system ID is set.",
+			  vg->name, vg->lvm1_system_id);
+		return 0;
+	}
+
+	/*
+	 * A VG without a system_id can be accessed by anyone.
+	 */
+	if (!vg->system_id || !vg->system_id[0])
+		return 1;
+
+	/*
+	 * A few commands allow read-only access to foreign VGs.
+	 */
+	if (cmd->include_foreign_vgs)
+		return 1;
+
+	/*
+	 * A host can access a VG with a matching system_id.
+	 */
+	if (cmd->system_id && !strcmp(vg->system_id, cmd->system_id))
+		return 1;
+
+	/*
+	 * A host can access a VG if the VG's system_id is in extra_system_ids list.
+	 */
+	if (cmd->system_id && _allow_system_id(cmd, vg->system_id))
+		return 1;
+
+	/*
+	 * Allow VG access if the local host has active LVs in it.
+	 */
+	if (lvs_in_vg_activated(vg)) {
+		log_warn("WARNING: Found LVs active in VG %s with foreign system ID %s.  Possible data corruption.",
+			  vg->name, vg->system_id);
+		if (cmd->include_active_foreign_vgs)
+			return 1;
+		return 0;
+	}
+
+	/*
+	 * A host without a system_id cannot access a VG with a system_id.
+	 */
+	if (!cmd->system_id || cmd->unknown_system_id) {
+		log_error("Cannot access VG %s with system ID %s with unknown local system ID.",
+			  vg->name, vg->system_id);
+		return 0;
+	}
+
+	/*
+	 * Some commands always produce an error when accessing foreign VG.
+	 */
+	if (cmd->error_foreign_vgs) {
+		log_error("Cannot access VG %s with system ID %s with local system ID %s.",
+			  vg->name, vg->system_id, cmd->system_id);
+		return 0;
+	}
+
+	/*
+	 * When include_foreign_vgs is 0 and error_foreign_vgs is 0,
+	 * the result is to silently ignore foreign vgs.
+	 */
+
+	return 0;
+}
+
+/*
+ * FIXME: move _vg_bad_status_bits() checks in here.
+ */
+static int _vg_access_permitted(struct cmd_context *cmd, struct volume_group *vg, uint32_t *failure)
+{
+	if (!is_real_vg(vg->name)) {
+		/* Disallow use of LVM1 orphans when a host system ID is set. */
+		if (cmd->system_id && *cmd->system_id && systemid_on_pvs(vg)) {
+			*failure |= FAILED_SYSTEMID;
+			return_0;
+		}
+		return 1;
+	}
+
+	if (!_access_vg_clustered(cmd, vg)) {
+		*failure |= FAILED_CLUSTERED;
+		return 0;
+	}
+
+	if (!_access_vg_lock_type(cmd, vg)) {
+		*failure |= FAILED_LOCK_TYPE;
+		return 0;
+	}
+
+	if (!_access_vg_systemid(cmd, vg)) {
+		*failure |= FAILED_SYSTEMID;
+		return 0;
+	}
+
+	return 1;
+}
+
 /*
  * Consolidated locking, reading, and status flag checking.
  *
@@ -4352,14 +4693,8 @@ static struct volume_group *_vg_lock_and_read(struct cmd_context *cmd, const cha
 		goto bad;
 	}
 
-	if (vg_is_clustered(vg) && !locking_is_clustered()) {
-		if (!cmd->ignore_clustered_vgs)
-			log_error("Skipping clustered volume group %s", vg->name);
-		else
-			log_verbose("Skipping clustered volume group %s", vg->name);
-		failure |= FAILED_CLUSTERED;
+	if (!_vg_access_permitted(cmd, vg, &failure))
 		goto bad;
-	}
 
 	/* consistent == 0 when VG is not found, but failed == FAILED_NOTFOUND */
 	if (!consistent && !failure) {

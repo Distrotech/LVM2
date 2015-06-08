@@ -1,5 +1,5 @@
 #!/bin/sh
-# Copyright (C) 2011 Red Hat, Inc. All rights reserved.
+# Copyright (C) 2011-2015 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
 # modify, copy, or redistribute it subject to the terms and conditions
@@ -13,7 +13,13 @@
 
 . lib/inittest
 
+test -e LOCAL_LVMPOLLD && skip
+
 aux prepare_devs 3
+
+pvcreate "$dev1"
+
+dd if="$dev1" of=backup_dev1 bs=256K count=1
 
 vgcreate --metadatasize 128k $vg1 "$dev1"
 
@@ -22,4 +28,12 @@ dd if="$dev1" of="$dev2" bs=256K count=1
 dd if="$dev1" of="$dev3" bs=256K count=1
 
 pvs "$dev3" -o pv_uuid
+
 vgs $vg1
+
+dd if=backup_dev1 of="$dev3" bs=256K count=1
+pvs
+#-vvvv
+# TODO: Surely needs more inspecition about correct
+#       behavior for such case
+# vgs $vg1

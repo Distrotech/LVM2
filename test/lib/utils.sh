@@ -100,6 +100,11 @@ mkdtemp() {
 	die "$err"
 }
 
+# Like grep, just always print 1st. line
+grep1_() {
+	awk -v pattern="${1}" 'NR==1 || $0~pattern' "${@:2}"
+}
+
 STACKTRACE() {
 	trap - ERR
 	local i=0
@@ -112,7 +117,7 @@ STACKTRACE() {
 
 	test "${LVM_TEST_PARALLEL:-0}" -eq 1 -o -n "$RUNNING_DMEVENTD" -o -f LOCAL_DMEVENTD || {
 		pgrep dmeventd &>/dev/null && \
-			die "** During test dmeventd has been started!"
+			die "ERROR: The test started dmeventd unexpectedly."
 	}
 
 	# Get backtraces from coredumps
@@ -127,11 +132,48 @@ STACKTRACE() {
 		done
 	fi
 
-	test -z "$LVM_TEST_NODEBUG" -a -f debug.log && {
-		sed -e "s,^,## DEBUG: ,;s,$top_srcdir/\?,," < debug.log
-	}
-
 	test -f SKIP_THIS_TEST && exit 200
+
+	test -z "$LVM_TEST_NODEBUG" -a -f TESTNAME && {
+		local name
+		local idx
+		for i in debug.log* ; do
+			name=${i##debug.log_}
+			name=${name%%_*}
+			test "$name" = "DEBUG" && { name="$name$idx" ; idx=$(($idx + 1)) ; }
+			echo "<======== Debug log $i ========>"
+			sed -e "s,^,## $name: ," $i
+		done
+		if test -e strace.log ; then
+			echo "<======== Strace debug log ========>"
+			sed -e "s,^,## STRACE: ," strace.log
+		fi
+		dmsetup info -c | grep1_ "$PREFIX" > out
+		if test $(wc -l < out) -gt 1 ; then
+			echo "<======== Info ========>"
+			sed -e "s,^,## DMINFO:   ," out
+			echo "<======== Active table ========>"
+			dmsetup table | grep "$PREFIX" | sed -e "s,^,## DMTABLE:  ,"
+			echo "<======== Inactive table ========>"
+			dmsetup table --inactive  | grep "$PREFIX" | sed -e "s,^,## DMITABLE: ,"
+			echo "<======== Status ========>"
+			dmsetup status | grep "$PREFIX" | sed -e "s,^,## DMSTATUS: ,"
+			echo "<======== Tree ========>"
+			dmsetup ls --tree | sed -e "s,^,## DMTREE:   ,"
+			echo "<======== Recursive list of $DM_DEV_DIR ========>"
+			ls -Rl --hide=shm --hide=bus --hide=snd --hide=input --hide=dri \
+			       --hide=net --hide=hugepages --hide=mqueue --hide=pts \
+			       "$DM_DEV_DIR" | sed -e "s,^,## LSLR:	,"
+			echo "<======== Udev DB content ========>"
+			for i in /sys/block/dm-* /sys/block/loop* ; do
+				udevadm info --query=all --path "$i" 2>/dev/null || true
+			done | sed -e "s,^,## UDEV:	,"
+		fi
+		echo "<======== Script file \"$(< TESTNAME)\" ========>"
+		local script=$0
+		test -f "$script" || script="$TESTOLDPWD/$0"
+		awk '{print "## Line:", NR, "\t", $0}' "$script"
+	}
 }
 
 init_udev_transaction() {
@@ -167,23 +209,9 @@ dm_table() {
 }
 
 skip() {
+	test "$#" -eq 0 || echo "TEST SKIPPED: $@"
 	touch SKIP_THIS_TEST
 	exit 200
-}
-
-kernel_at_least() {
-	local major=$(uname -r | cut -d. -f1)
-	local minor=$(uname -r | cut -d. -f2 | cut -d- -f1)
-
-	test "$major" -gt "$1" && return 0
-	test "$major" -eq "$1" || return 1
-	test "$minor" -gt "$2" && return 0
-	test "$minor" -eq "$2" || return 1
-	test -z "$3" && return 0
-
-	local minor2=$(uname -r | cut -d. -f3 | cut -d- -f1)
-	test -z "$minor2" -a "$3" -ne 0 && return 1
-	test "$minor2" -ge "$3" 2>/dev/null || return 1
 }
 
 get_devs() {
@@ -207,18 +235,21 @@ prepare_test_vars() {
 	done
 }
 
-# check if $abs_top_builddir was already set via 'lib/paths'
-test -n "${abs_top_builddir+varset}" || . lib/paths || die "you must run make first"
+if test -z "${abs_top_builddir+varset}" && test -z "${installed_testsuite+varset}"; then
+    . lib/paths || die "something went wrong -- lib/paths is missing?"
+fi
 
-case "$PATH" in
-*"$abs_top_builddir/test/lib"*) ;;
-*)
-	PATH="$abs_top_builddir/test/lib":"$abs_top_builddir/test/api":$PATH
-	for i in `find $abs_top_builddir -name \*.so`; do
-		p=`dirname $i`
-		LD_LIBRARY_PATH="$p":$LD_LIBRARY_PATH
-	done
-        export PATH LD_LIBRARY_PATH ;;
-esac
+if test -z "${installed_testsuite+varset}"; then
+    case "$PATH" in
+    *"$abs_top_builddir/test/lib"*) ;;
+    *)
+	    PATH="$abs_top_builddir/test/lib":"$abs_top_builddir/test/api":$PATH
+	    for i in `find $abs_top_builddir -name \*.so`; do
+		    p=`dirname $i`
+		    LD_LIBRARY_PATH="$p":$LD_LIBRARY_PATH
+	    done
+            export PATH LD_LIBRARY_PATH ;;
+    esac
+fi
 
 test -z "$PREFIX" || prepare_test_vars

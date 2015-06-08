@@ -319,10 +319,14 @@ static int _update_mda(struct metadata_area *mda, void *baton)
 	const struct format_type *fmt = p->label->labeller->fmt;
 	struct mda_context *mdac = (struct mda_context *) mda->metadata_locn;
 	struct mda_header *mdah;
-	const char *vgname = NULL;
-	struct id vgid;
-	uint64_t vgstatus;
-	char *creation_host;
+	struct lvmcache_vgsummary vgsummary = { 0 };
+
+	/*
+	 * Using the labeller struct to preserve info about
+	 * the last parsed vgname, vgid, creation host
+	 *
+	 * TODO: make lvmcache smarter and move this cache logic there
+	 */
 
 	if (!dev_open_readonly(mdac->area.dev)) {
 		mda_set_ignored(mda, 1);
@@ -346,17 +350,14 @@ static int _update_mda(struct metadata_area *mda, void *baton)
 		return 1;
 	}
 
-	if ((vgname = vgname_from_mda(fmt, mdah,
-				      &mdac->area,
-				      &vgid, &vgstatus, &creation_host,
-				      &mdac->free_sectors)) &&
-	    !lvmcache_update_vgname_and_id(p->info, vgname,
-					   (char *) &vgid, vgstatus,
-					   creation_host)) {
+	if (vgname_from_mda(fmt, mdah, &mdac->area, &vgsummary,
+			     &mdac->free_sectors) &&
+	    !lvmcache_update_vgname_and_id(p->info, &vgsummary)) {
 		if (!dev_close(mdac->area.dev))
 			stack;
 		return_0;
 	}
+
 close_dev:
 	if (!dev_close(mdac->area.dev))
 		stack;
@@ -417,8 +418,8 @@ static int _text_read(struct labeller *l, struct device *dev, void *buf,
 	if (!(ext_version = xlate32(pvhdr_ext->version)))
 		goto out;
 
-	log_debug("%s: PV header extension version %" PRIu32 " found",
-		  dev_name(dev), ext_version);
+	log_debug_metadata("%s: PV header extension version %" PRIu32 " found",
+			   dev_name(dev), ext_version);
 
 	/* Bootloader areas */
 	dlocn_xl = pvhdr_ext->bootloader_areas_xl;
@@ -465,7 +466,7 @@ struct labeller *text_labeller_create(const struct format_type *fmt)
 {
 	struct labeller *l;
 
-	if (!(l = dm_malloc(sizeof(*l)))) {
+	if (!(l = dm_zalloc(sizeof(*l)))) {
 		log_error("Couldn't allocate labeller object.");
 		return NULL;
 	}

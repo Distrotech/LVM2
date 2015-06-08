@@ -114,11 +114,6 @@ static int _activate_lvs_in_vg(struct cmd_context *cmd, struct volume_group *vg,
 		if (lv_is_replicator_dev(lv) && (lv != first_replicator_dev(lv)))
 			continue;
 
-		/* Can't deactivate a pvmove LV */
-		/* FIXME There needs to be a controlled way of doing this */
-		if (lv_is_pvmove(lv) && !is_change_activating(activate))
-			continue;
-
 		if (lv_activation_skip(lv, activate, arg_count(cmd, ignoreactivationskip_ARG)))
 			continue;
 
@@ -195,6 +190,19 @@ int vgchange_activate(struct cmd_context *cmd, struct volume_group *vg,
 	int lv_open, active, monitored = 0, r = 1;
 	const struct lv_list *lvl;
 	int do_activate = is_change_activating(activate);
+
+	/*
+	 * We can get here in the odd case where an LV is already active in
+	 * a foreign VG, which allows the VG to be accessed by vgchange -a
+	 * so the LV can be deactivated.
+	 */
+	if (vg->system_id && vg->system_id[0] &&
+	    cmd->system_id && cmd->system_id[0] &&
+	    strcmp(vg->system_id, cmd->system_id) &&
+	    is_change_activating(activate)) {
+		log_error("Cannot activate LVs in a foreign VG.");
+		return ECMD_FAILED;
+	}
 
 	/*
 	 * Safe, since we never write out new metadata here. Required for
@@ -300,37 +308,64 @@ static int _vgchange_clustered(struct cmd_context *cmd,
 			       struct volume_group *vg)
 {
 	int clustered = arg_int_value(cmd, clustered_ARG, 0);
+	struct lv_list *lvl;
+	struct lv_segment *mirror_seg;
 
-	if (clustered && (vg_is_clustered(vg))) {
-		log_error("Volume group \"%s\" is already clustered",
-			  vg->name);
-		return 0;
+	if (clustered && vg_is_clustered(vg)) {
+		if (vg->system_id && *vg->system_id)
+			log_warn("WARNING: Clearing invalid system ID %s from volume group %s.",
+				 vg->system_id, vg->name);
+		else {
+			log_error("Volume group \"%s\" is already clustered", vg->name);
+			return 0;
+		}
 	}
 
-	if (!clustered && !(vg_is_clustered(vg))) {
-		log_error("Volume group \"%s\" is already not clustered",
-			  vg->name);
-		return 0;
+	if (!clustered && !vg_is_clustered(vg)) {
+		if ((!vg->system_id || !*vg->system_id) && cmd->system_id && *cmd->system_id)
+			log_warn("Setting missing system ID on Volume Group %s to %s.",
+				 vg->name, cmd->system_id);
+		else {
+			log_error("Volume group \"%s\" is already not clustered",
+				  vg->name);
+			return 0;
+		}
 	}
 
 	if (clustered && !arg_count(cmd, yes_ARG)) {
 		if (!clvmd_is_running()) {
-			if (yes_no_prompt("LVM cluster daemon (clvmd) is not"
-					  " running.\n"
-					  "Make volume group \"%s\" clustered"
-					  " anyway? [y/n]: ", vg->name) == 'n') {
+			if (yes_no_prompt("LVM cluster daemon (clvmd) is not running. "
+					  "Make volume group \"%s\" clustered "
+					  "anyway? [y/n]: ", vg->name) == 'n') {
 				log_error("No volume groups changed.");
 				return 0;
 			}
 
 		} else if (!locking_is_clustered() &&
-			   (yes_no_prompt("LVM locking type is not clustered.\n"
-					  "Make volume group \"%s\" clustered"
-					  " anyway? [y/n]: ", vg->name) == 'n')) {
+			   (yes_no_prompt("LVM locking type is not clustered. "
+					  "Make volume group \"%s\" clustered "
+					  "anyway? [y/n]: ", vg->name) == 'n')) {
 			log_error("No volume groups changed.");
 			return 0;
 		}
+#ifdef CMIRROR_REGION_COUNT_LIMIT
+		dm_list_iterate_items(lvl, &vg->lvs) {
+			if (!lv_is_mirror(lvl->lv))
+				continue;
+			mirror_seg = first_seg(lvl->lv);
+			if ((lvl->lv->size / mirror_seg->region_size) >
+			    CMIRROR_REGION_COUNT_LIMIT) {
+				log_error("Unable to convert %s to clustered mode:"
+					  " Mirror region size of %s is too small.",
+					  vg->name, lvl->lv->name);
+				return 0;
+			}
+		}
+#endif
 	}
+
+	if (!vg_set_system_id(vg, clustered ? NULL : cmd->system_id))
+		return_0;
 
 	if (!vg_set_clustered(vg, clustered))
 		return_0;
@@ -471,9 +506,83 @@ static int _vgchange_profile(struct cmd_context *cmd,
 	return 1;
 }
 
+/*
+ * This function will not be called unless the local host is allowed to use the
+ * VG.  Either the VG has no system_id, or the VG and host have matching
+ * system_ids, or the host has the VG's current system_id in its
+ * extra_system_ids list.  This function is not allowed to change the system_id
+ * of a foreign VG (VG owned by another host).
+ */
+static int _vgchange_system_id(struct cmd_context *cmd, struct volume_group *vg)
+{
+	const char *system_id;
+	const char *system_id_arg_str = arg_str_value(cmd, systemid_ARG, NULL);
+
+	/* FIXME Merge with vg_set_system_id() */
+	if (systemid_on_pvs(vg)) {
+		log_error("Metadata format %s does not support this type of system ID.",
+			  vg->fid->fmt->name);
+		return 0;
+	}
+
+	if (!(system_id = system_id_from_string(cmd, system_id_arg_str))) {
+		log_error("Unable to set system ID.");
+		return 0;
+	}
+
+	if (!strcmp(vg->system_id, system_id)) {
+		log_error("Volume Group system ID is already \"%s\".", vg->system_id);
+		return 0;
+	}
+
+	if (!*system_id && cmd->system_id && strcmp(system_id, cmd->system_id)) {
+		log_warn("WARNING: Removing the system ID allows unsafe access from other hosts.");
+
+		if (!arg_count(cmd, yes_ARG) &&
+		    yes_no_prompt("Remove system ID %s from volume group %s? [y/n]: ",
+				  vg->system_id, vg->name) == 'n') {
+			log_error("System ID of volume group %s not changed.", vg->name);
+			return 0;
+		}
+	}
+
+	if (*system_id && (!cmd->system_id || strcmp(system_id, cmd->system_id))) {
+		if (lvs_in_vg_activated(vg)) {
+			log_error("Logical Volumes in VG %s must be deactivated before system ID can be changed.",
+				  vg->name);
+			return 0;
+		}
+
+		if (cmd->system_id)
+			log_warn("WARNING: Requested system ID %s does not match local system ID %s.",
+				 system_id, cmd->system_id ? : "");
+		else
+			log_warn("WARNING: No local system ID is set.");
+		log_warn("WARNING: Volume group %s might become inaccessible from this machine.",
+			 vg->name);
+
+		if (!arg_count(cmd, yes_ARG) &&
+		    yes_no_prompt("Set foreign system ID %s on volume group %s? [y/n]: ",
+				  system_id, vg->name) == 'n') {
+			log_error("Volume group %s system ID not changed.", vg->name);
+			return 0;
+		}
+	}
+
+	log_verbose("Changing system ID for VG %s from \"%s\" to \"%s\".",
+		    vg->name, vg->system_id, system_id);
+
+	vg->system_id = system_id;
+	
+	if (vg->lvm1_system_id)
+		*vg->lvm1_system_id = '\0';
+
+	return 1;
+}
+
 static int vgchange_single(struct cmd_context *cmd, const char *vg_name,
 			   struct volume_group *vg,
-			   void *handle __attribute__((unused)))
+			   struct processing_handle *handle __attribute__((unused)))
 {
 	int ret = ECMD_PROCESSED;
 	unsigned i;
@@ -494,8 +603,9 @@ static int vgchange_single(struct cmd_context *cmd, const char *vg_name,
 		{ clustered_ARG, &_vgchange_clustered },
 		{ vgmetadatacopies_ARG, &_vgchange_metadata_copies },
 		{ metadataprofile_ARG, &_vgchange_profile },
-		{ profile_ARG, &_vgchange_profile},
-		{ detachprofile_ARG, &_vgchange_profile},
+		{ profile_ARG, &_vgchange_profile },
+		{ detachprofile_ARG, &_vgchange_profile },
+		{ systemid_ARG, &_vgchange_system_id },
 	};
 
 	if (vg_is_exported(vg)) {
@@ -589,13 +699,19 @@ static int vgchange_single(struct cmd_context *cmd, const char *vg_name,
 
 int vgchange(struct cmd_context *cmd, int argc, char **argv)
 {
-	/* Update commands that can be combined */
+	int noupdate =
+		arg_count(cmd, activate_ARG) ||
+		arg_count(cmd, monitor_ARG) ||
+		arg_count(cmd, poll_ARG) ||
+		arg_count(cmd, refresh_ARG);
+
 	int update_partial_safe =
 		arg_count(cmd, deltag_ARG) ||
 		arg_count(cmd, addtag_ARG) ||
 		arg_count(cmd, metadataprofile_ARG) ||
 		arg_count(cmd, profile_ARG) ||
 		arg_count(cmd, detachprofile_ARG);
+
 	int update_partial_unsafe =
 		arg_count(cmd, logicalvolume_ARG) ||
 		arg_count(cmd, maxphysicalvolumes_ARG) ||
@@ -604,18 +720,13 @@ int vgchange(struct cmd_context *cmd, int argc, char **argv)
 		arg_count(cmd, physicalextentsize_ARG) ||
 		arg_count(cmd, clustered_ARG) ||
 		arg_count(cmd, alloc_ARG) ||
-		arg_count(cmd, vgmetadatacopies_ARG);
+		arg_count(cmd, vgmetadatacopies_ARG) ||
+		arg_count(cmd, systemid_ARG);
+
 	int update = update_partial_safe || update_partial_unsafe;
 
-	if (!update &&
-	    !arg_count(cmd, activate_ARG) &&
-	    !arg_count(cmd, monitor_ARG) &&
-	    !arg_count(cmd, poll_ARG) &&
-	    !arg_count(cmd, refresh_ARG)) {
-		log_error("Need 1 or more of -a, -c, -l, -p, -s, -x, "
-			  "--refresh, --uuid, --alloc, --addtag, --deltag, "
-			  "--monitor, --poll, --vgmetadatacopies or "
-			  "--metadatacopies");
+	if (!update && !noupdate) {
+		log_error("Need one or more command options.");
 		return EINVALID_CMD_LINE;
 	}
 
@@ -704,6 +815,9 @@ int vgchange(struct cmd_context *cmd, int argc, char **argv)
 
 	if (!update || !update_partial_unsafe)
 		cmd->handles_missing_pvs = 1;
+
+	if (arg_is_set(cmd, activate_ARG))
+		cmd->include_active_foreign_vgs = 1;
 
 	return process_each_vg(cmd, argc, argv, update ? READ_FOR_UPDATE : 0,
 			       NULL, &vgchange_single);

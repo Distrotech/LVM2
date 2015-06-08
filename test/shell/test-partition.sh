@@ -19,6 +19,8 @@ LVM_TEST_CONFIG_DEVICES="types = [\"device-mapper\", 142]"
 
 . lib/inittest
 
+test -e LOCAL_LVMPOLLD && skip
+
 which sfdisk || skip
 
 aux prepare_pvs 1 30
@@ -26,6 +28,7 @@ aux prepare_pvs 1 30
 pvs "$dev1"
 
 # create small partition table
-echo "1 2" | sfdisk "$dev1"
+echo "1 2" | sfdisk --force "$dev1"
 
-pvs "$dev1"
+aux notify_lvmetad "$dev1"
+not pvs "$dev1"

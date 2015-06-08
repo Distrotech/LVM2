@@ -1,4 +1,4 @@
-# Copyright (C) 2007-2013 Red Hat, Inc. All rights reserved.
+# Copyright (C) 2007-2015 Red Hat, Inc. All rights reserved.
 #
 # This file is part of LVM2.
 #
@@ -23,44 +23,44 @@ abs_srcdir = @abs_srcdir@
 abs_builddir = @abs_builddir@
 abs_top_builddir = @abs_top_builddir@
 abs_top_srcdir = @abs_top_srcdir@
+datarootdir = @datarootdir@
 
 LVM_TEST_RESULTS ?= results
-export LVM_TEST_THIN_CHECK_CMD?=@THIN_CHECK_CMD@
-export LVM_TEST_THIN_DUMP_CMD?=@THIN_DUMP_CMD@
-export LVM_TEST_THIN_REPAIR_CMD?=@THIN_REPAIR_CMD@
-export LVM_TEST_THIN_RESTORE_CMD?=@THIN_RESTORE_CMD@
-
-export LVM_TEST_CACHE_CHECK_CMD?=@CACHE_CHECK_CMD@
-export LVM_TEST_CACHE_DUMP_CMD?=@CACHE_DUMP_CMD@
-export LVM_TEST_CACHE_REPAIR_CMD?=@CACHE_REPAIR_CMD@
-export LVM_TEST_CACHE_RESTORE_CMD?=@CACHE_RESTORE_CMD@
 
 SUBDIRS = api unit
 SOURCES = lib/not.c lib/harness.c
+CXXSOURCES = lib/runner.cpp
 
 include $(top_builddir)/make.tmpl
 
 T ?= .
 S ?= @ # never match anything by default
 VERBOSE ?= 0
-ALL = $(shell find $(srcdir) \( -path \*/shell/\*.sh -or -path \*/api/\*.sh \) | sort)
+ALL := $(shell find $(srcdir) \( -path \*/shell/\*.sh -or -path \*/api/\*.sh \) | sort)
 comma = ,
-RUN = $(shell find $(srcdir) -regextype posix-egrep \( -path \*/shell/\*.sh -or -path \*/api/\*.sh \) -and -regex "$(srcdir)/.*($(subst $(comma),|,$(T))).*" -and -not -regex "$(srcdir)/.*($(subst $(comma),|,$(S))).*" | sort)
+RUN := $(shell find $(srcdir) -regextype posix-egrep \( -path \*/shell/\*.sh -or -path \*/api/\*.sh \) -and -regex "$(srcdir)/.*($(subst $(comma),|,$(T))).*" -and -not -regex "$(srcdir)/.*($(subst $(comma),|,$(S))).*" | sort)
 RUN_BASE = $(subst $(srcdir)/,,$(RUN))
 
 ifeq ("@BUILD_LVMETAD@", "yes")
 LVMETAD_RUN_BASE = $(RUN_BASE)
+LVMETAD_NDEV_FLAVOUR = ,ndev-lvmetad
+LVMETAD_UDEV_FLAVOUR = ,udev-lvmetad
 endif
 
+ifeq ("@BUILD_LVMPOLLD@", "yes")
+LVMPOLLD_RUN_BASE = $(RUN_BASE)
+LVMPOLLD_NDEV_FLAVOUR = ,ndev-lvmpolld,ndev-cluster-lvmpolld,ndev-lvmetad-lvmpolld
+LVMPOLLD_UDEV_FLAVOUR = ,udev-lvmpolld,udev-cluster-lvmpolld,udev-lvmetad-lvmpolld
+endif
 
 # Shell quote;
-SHELL_PATH_SQ = $(subst ','\'',$(SHELL_PATH))
+SHELL_PATH_SQ := $(subst ','\'',$(SHELL_PATH))
 
 ifeq ("@UDEV_SYNC@", "yes")
 dm_udev_synchronisation = 1
 endif
 
-all: check
+all: .tests-stamp
 
 help:
 	@echo -e "\nAvailable targets:"
@@ -69,14 +69,18 @@ help:
 	@echo "  check_local		Run tests without clvmd and lvmetad."
 	@echo "  check_cluster		Run tests with cluster daemon."
 	@echo "  check_lvmetad		Run tests with lvmetad daemon."
+	@echo "  check_lvmpolld         Run tests with lvmpolld daemon."
 	@echo "  clean			Clean dir."
 	@echo "  help			Display callable targets."
 	@echo -e "\nSupported variables:"
+	@echo "  LVM_TEST_BACKING_DEVICE Set device used for testing (see also LVM_TEST_DIR)."
 	@echo "  LVM_TEST_CAN_CLOBBER_DMESG Allow to clobber dmesg buffer without /dev/kmsg. (1)"
 	@echo "  LVM_TEST_DEVDIR	Set to '/dev' to run on real /dev."
 	@echo "  LVM_TEST_DIR		Where to create test files  [$(LVM_TEST_DIR)]."
 	@echo "  LVM_TEST_LOCKING	Normal (1), Cluster (3)."
 	@echo "  LVM_TEST_LVMETAD	Start lvmetad (1)."
+	@echo "  LVM_TEST_LVMETAD_DEBUG_OPTS  Allows to override debug opts [-l all]."
+	@echo "  LVM_TEST_LVMPOLLD	Start lvmpolld"
 	@echo "  LVM_TEST_NODEBUG	Do not debug lvm commands."
 	@echo "  LVM_TEST_PARALLEL	May skip agresive wipe of LVMTEST resources."
 	@echo "  LVM_TEST_RESULTS	Where to create result files [results]."
@@ -89,57 +93,102 @@ help:
 	@echo "  LVM_TEST_CACHE_REPAIR_CMD  Command for cache_repair  [$(LVM_TEST_CACHE_REPAIR_CMD)]."
 	@echo "  LVM_TEST_CACHE_RESTORE_CMD Command for cache_restore [$(LVM_TEST_CACHE_RESTORE_CMD)]."
 	@echo "  LVM_TEST_UNLIMITED	Set to get unlimited test log (>32MB)"
-	@echo "  LVM_VALGRIND		Enable valgrind testing (1,2,3) execs $$"VALGRIND
+	@echo "  LVM_VALGRIND		Enable valgrind testing, execs $$"VALGRIND.
 	@echo "  LVM_VALGRIND_CLVMD	Enable valgrind testing of clvmd (1)."
 	@echo "  LVM_VALGRIND_DMEVENTD	Enable valgrind testing of dmeventd (1)."
 	@echo "  LVM_VALGRIND_LVMETAD	Enable valgrind testing of lvmetad (1)."
+	@echo "  LVM_STRACE		Enable strace logging."
+	@echo "  LVM_DEBUG_LEVEL	Sets debuging level for valgrind/strace (use > 0)."
 	@echo "  LVM_VERIFY_UDEV	Default verify state for lvm.conf."
 	@echo "  S			Skip given test (regex)."
 	@echo "  T			Run given test (regex)."
 	@echo "  VERBOSE		Verbose output (1), timing (2)."
 
 check: .tests-stamp
-	VERBOSE=$(VERBOSE) \
-	cluster_LVM_TEST_LOCKING=3 \
-	lvmetad_LVM_TEST_LVMETAD=1 \
-	./lib/harness $(patsubst %,normal:%,$(RUN_BASE)) \
-		      $(patsubst %,cluster:%,$(RUN_BASE)) \
-		      $(patsubst %,lvmetad:%,$(LVMETAD_RUN_BASE))
+	VERBOSE=$(VERBOSE) ./lib/runner \
+		--testdir . --outdir $(LVM_TEST_RESULTS) \
+		--flavours ndev-vanilla,ndev-cluster$(LVMETAD_NDEV_FLAVOUR)$(LVMPOLLD_NDEV_FLAVOUR) --only $(T) --skip $(S)
 
 check_system: .tests-stamp
-	VERBOSE=$(VERBOSE) \
-	scluster_LVM_TEST_LOCKING=3 \
-	slvmetad_LVM_TEST_LVMETAD=1 \
-	snormal_LVM_TEST_DEVDIR=/dev \
-	scluster_LVM_TEST_DEVDIR=/dev \
-	slvmetad_LVM_TEST_DEVDIR=/dev \
-	./lib/harness $(patsubst %,snormal:%,$(RUN_BASE)) \
-		      $(patsubst %,scluster:%,$(RUN_BASE)) \
-		      $(patsubst %,slvmetad:%,$(LVMETAD_RUN_BASE))
+	VERBOSE=$(VERBOSE) ./lib/runner \
+		--testdir . --outdir $(LVM_TEST_RESULTS) \
+		--flavours udev-vanilla,udev-cluster$(LVMETAD_UDEV_FLAVOUR)$(LVMPOLLD_UDEV_FLAVOUR) --only $(T) --skip $(S)
 
 check_cluster: .tests-stamp
-	@echo Testing with locking_type 3
-	VERBOSE=$(VERBOSE) LVM_TEST_LOCKING=3 ./lib/harness $(RUN_BASE)
+	VERBOSE=$(VERBOSE) ./lib/runner \
+		--testdir . --outdir $(LVM_TEST_RESULTS) \
+		--flavours ndev-cluster --only $(T) --skip $(S)
 
 check_local: .tests-stamp
-	@echo Testing with locking_type 1
-	VERBOSE=$(VERBOSE) LVM_TEST_LOCKING=1 ./lib/harness $(RUN_BASE)
+	VERBOSE=$(VERBOSE) ./lib/runner \
+		--testdir . --outdir $(LVM_TEST_RESULTS) \
+		--flavours ndev-vanilla --only $(T) --skip $(S)
 
 ifeq ("@BUILD_LVMETAD@", "yes")
 check_lvmetad: .tests-stamp
-	@echo Testing with lvmetad on
-	VERBOSE=$(VERBOSE) LVM_TEST_LVMETAD=1 ./lib/harness $(RUN_BASE)
+	VERBOSE=$(VERBOSE) ./lib/runner \
+		--testdir . --outdir $(LVM_TEST_RESULTS) \
+		--flavours ndev-lvmetad --only $(T) --skip $(S)
 endif
 
+ifeq ("@BUILD_LVMPOLLD@", "yes")
+check_lvmpolld: .tests-stamp
+	VERBOSE=$(VERBOSE) ./lib/runner \
+		--testdir . --outdir results \
+		--flavours ndev-lvmpolld,ndev-cluster-lvmpolld,ndev-lvmetad-lvmpolld --only $(T) --skip $(S)
+endif
+
+DATADIR = $(datadir)/lvm2-testsuite
+EXECDIR = $(libexecdir)/lvm2-testsuite
+
+LIB_FLAVOURS = \
+ lib/flavour-ndev-cluster-lvmpolld\
+ lib/flavour-ndev-cluster\
+ lib/flavour-ndev-lvmetad-lvmpolld\
+ lib/flavour-ndev-lvmetad\
+ lib/flavour-ndev-lvmpolld\
+ lib/flavour-ndev-vanilla\
+ lib/flavour-udev-cluster-lvmpolld\
+ lib/flavour-udev-cluster\
+ lib/flavour-udev-lvmetad-lvmpolld\
+ lib/flavour-udev-lvmetad\
+ lib/flavour-udev-lvmpolld\
+ lib/flavour-udev-vanilla
+
+LIB_LOCAL = lib/paths lib/runner
+LIB_EXEC  = lib/not lib/invalid lib/fail lib/should
+LIB_SHARED = lib/check lib/aux lib/inittest lib/utils lib/get lib/lvm-wrapper
+
+install: .tests-stamp lib/paths-installed
+	@echo $(srcdir)
+	@echo $(LIB_FLAVOURS)
+	$(INSTALL_DIR) $(DATADIR)/{shell,api,lib}
+	$(INSTALL_DATA) shell/*.sh $(DATADIR)/shell/
+	$(INSTALL_DATA) api/*.sh $(DATADIR)/api/
+	$(INSTALL_PROGRAM) api/*.{t,py} $(DATADIR)/api/
+	$(INSTALL_DATA) lib/paths-installed $(DATADIR)/lib/paths
+	$(INSTALL_DATA) $(LIB_FLAVOURS) $(DATADIR)/lib/
+	$(INSTALL_DATA) $(abs_top_srcdir)/conf/thin-performance.profile $(DATADIR)/lib/thin-performance.profile
+	$(INSTALL_SCRIPT) $(LIB_SHARED) $(DATADIR)/lib/
+	for i in $(CMDS); do (cd $(DATADIR)/lib && $(LN_S) -f lvm-wrapper $$i); done
+
+	$(INSTALL_DIR) $(EXECDIR)
+	$(INSTALL_PROGRAM) $(LIB_EXEC) $(EXECDIR)
+	$(INSTALL_PROGRAM) -D lib/runner $(bindir)/lvm2-testsuite
+
 lib/should: lib/not
-	ln -sf not lib/should
+	$(LN_S) -f not lib/should
 
 lib/invalid: lib/not
-	ln -sf not lib/invalid
+	$(LN_S) -f not lib/invalid
 
 lib/fail: lib/not
-	ln -sf not lib/fail
+	$(LN_S) -f not lib/fail
 
+lib/runner: lib/runner.o .lib-dir-stamp
+	$(CXX) $(LDFLAGS) -o $@ $<
+
+lib/runner.o: $(wildcard $(srcdir)/lib/*.h)
 
 lib/%: lib/%.o .lib-dir-stamp
 	$(CC) $(LDFLAGS) -o $@ $<
@@ -148,42 +197,54 @@ lib/%: $(srcdir)/lib/%.sh .lib-dir-stamp
 	cp $< $@
 	chmod +x $@
 
-lib/paths: $(srcdir)/Makefile.in .lib-dir-stamp Makefile
-	$(RM) $@-t
-	echo 'top_srcdir="$(top_srcdir)"' >> $@-t
-	echo 'abs_top_builddir="$(abs_top_builddir)"' >> $@-t
-	echo 'abs_top_srcdir="$(abs_top_srcdir)"' >> $@-t
-	echo 'abs_srcdir="$(abs_srcdir)"' >> $@-t
-	echo 'abs_builddir="$(abs_builddir)"' >> $@-t
+lib/flavour-%: $(srcdir)/lib/flavour-%.sh .lib-dir-stamp
+	cp $< $@
+
+lib/paths-common: $(srcdir)/Makefile.in .lib-dir-stamp Makefile
 	echo 'export DM_UDEV_SYNCHRONISATION=$(dm_udev_synchronisation)' >> $@-t
 	echo 'export THIN=@THIN@' >> $@-t
 	echo 'export RAID=@RAID@' >> $@-t
 	echo 'export CACHE=@CACHE@' >> $@-t
 	echo 'export LVMETAD_PIDFILE="@LVMETAD_PIDFILE@"' >> $@-t
+	echo 'export LVMPOLLD_PIDFILE="@LVMPOLLD_PIDFILE@"' >> $@-t
 	echo 'export DMEVENTD_PIDFILE="@DMEVENTD_PIDFILE@"' >> $@-t
 	echo 'export CLVMD_PIDFILE="@CLVMD_PIDFILE@"' >> $@-t
-	echo 'export LVM_TEST_THIN_CHECK_CMD=$${LVM_TEST_THIN_CHECK_CMD:-@THIN_CHECK_CMD@}' >> $@-t
-	echo 'export LVM_TEST_THIN_DUMP_CMD=$${LVM_TEST_THIN_DUMP_CMD:-@THIN_DUMP_CMD@}' >> $@-t
-	echo 'export LVM_TEST_THIN_REPAIR_CMD=$${LVM_TEST_THIN_REPAIR_CMD:-@THIN_REPAIR_CMD@}' >> $@-t
-	echo 'export LVM_TEST_THIN_RESTORE_CMD=$${LVM_TEST_THIN_RESTORE_CMD:-@THIN_RESTORE_CMD@}' >> $@-t
-	echo 'export LVM_TEST_CACHE_CHECK_CMD=$${LVM_TEST_CACHE_CHECK_CMD:-@CACHE_CHECK_CMD@}' >> $@-t
-	echo 'export LVM_TEST_CACHE_DUMP_CMD=$${LVM_TEST_CACHE_DUMP_CMD:-@CACHE_DUMP_CMD@}' >> $@-t
-	echo 'export LVM_TEST_CACHE_REPAIR_CMD=$${LVM_TEST_CACHE_REPAIR_CMD:-@CACHE_REPAIR_CMD@}' >> $@-t
-	echo 'export LVM_TEST_CACHE_RESTORE_CMD=$${LVM_TEST_CACHE_RESTORE_CMD:-@CACHE_RESTORE_CMD@}' >> $@-t
+	echo 'export LVM_TEST_THIN_CHECK_CMD=$${LVM_TEST_THIN_CHECK_CMD-@THIN_CHECK_CMD@}' >> $@-t
+	echo 'export LVM_TEST_THIN_DUMP_CMD=$${LVM_TEST_THIN_DUMP_CMD-@THIN_DUMP_CMD@}' >> $@-t
+	echo 'export LVM_TEST_THIN_REPAIR_CMD=$${LVM_TEST_THIN_REPAIR_CMD-@THIN_REPAIR_CMD@}' >> $@-t
+	echo 'export LVM_TEST_THIN_RESTORE_CMD=$${LVM_TEST_THIN_RESTORE_CMD-@THIN_RESTORE_CMD@}' >> $@-t
+	echo 'export LVM_TEST_CACHE_CHECK_CMD=$${LVM_TEST_CACHE_CHECK_CMD-@CACHE_CHECK_CMD@}' >> $@-t
+	echo 'export LVM_TEST_CACHE_DUMP_CMD=$${LVM_TEST_CACHE_DUMP_CMD-@CACHE_DUMP_CMD@}' >> $@-t
+	echo 'export LVM_TEST_CACHE_REPAIR_CMD=$${LVM_TEST_CACHE_REPAIR_CMD-@CACHE_REPAIR_CMD@}' >> $@-t
+	echo 'export LVM_TEST_CACHE_RESTORE_CMD=$${LVM_TEST_CACHE_RESTORE_CMD-@CACHE_RESTORE_CMD@}' >> $@-t
 	mv $@-t $@
 
-LIB = lib/not lib/invalid lib/fail lib/should lib/harness \
-      lib/check lib/aux lib/inittest lib/utils lib/get lib/lvm-wrapper \
-      lib/paths
+lib/paths-installed: lib/paths-common
+	$(RM) $@-t
+	cat lib/paths-common > $@-t
+	echo 'installed_testsuite=1' >> $@-t
+	echo 'export PATH=@libexecdir@/lvm2-testsuite:@datadir@/lvm2-testsuite/lib:$$PATH' >> $@-t
+	mv $@-t $@
+
+lib/paths: lib/paths-common
+	$(RM) $@-t
+	cat lib/paths-common > $@-t
+	echo 'top_srcdir="$(top_srcdir)"' >> $@-t
+	echo 'abs_top_builddir="$(abs_top_builddir)"' >> $@-t
+	echo 'abs_top_srcdir="$(abs_top_srcdir)"' >> $@-t
+	echo 'abs_srcdir="$(abs_srcdir)"' >> $@-t
+	echo 'abs_builddir="$(abs_builddir)"' >> $@-t
+	mv $@-t $@
 
 CMDS = lvm $(shell cat $(top_builddir)/tools/.commands)
+LIB = $(LIB_SHARED) $(LIB_LOCAL) $(LIB_EXEC) $(LIB_FLAVOURS)
 
 .tests-stamp: $(ALL) $(LIB) $(SUBDIRS)
 	@if test "$(srcdir)" != . ; then \
 		echo "Linking tests to builddir."; \
 		$(MKDIR_P) shell; \
 		for f in $(subst $(srcdir)/,,$(ALL)); do \
-			ln -sf $(abs_top_srcdir)/test/$$f $$f; \
+			$(LN_S) -f $(abs_top_srcdir)/test/$$f $$f; \
 		done; \
 	fi
 	@$(MKDIR_P) -m a=rwx $(LVM_TEST_RESULTS)
@@ -191,23 +252,28 @@ CMDS = lvm $(shell cat $(top_builddir)/tools/.commands)
 
 .lib-dir-stamp:
 	$(MKDIR_P) lib
-	for i in $(CMDS); do ln -fs lvm-wrapper lib/$$i; done
-	ln -fs $(abs_top_builddir)/tools/dmsetup lib/dmsetup
-	ln -fs $(abs_top_builddir)/daemons/clvmd/clvmd lib/clvmd
-	ln -fs $(abs_top_builddir)/daemons/dmeventd/dmeventd lib/dmeventd
-	ln -fs $(abs_top_builddir)/daemons/lvmetad/lvmetad lib/lvmetad
-	ln -fs $(abs_top_srcdir)/scripts/vgimportclone.sh lib/vgimportclone
-	ln -fs $(abs_top_srcdir)/scripts/fsadm.sh lib/fsadm
-	ln -fs $(abs_top_srcdir)/conf/thin-performance.profile lib/thin-performance.profile
+	for i in $(CMDS); do $(LN_S) -f lvm-wrapper lib/$$i; done
+	$(LN_S) -f $(abs_top_builddir)/tools/dmsetup lib/dmsetup
+	$(LN_S) -f $(abs_top_builddir)/daemons/clvmd/clvmd lib/clvmd
+	$(LN_S) -f $(abs_top_builddir)/daemons/dmeventd/dmeventd lib/dmeventd
+	$(LN_S) -f $(abs_top_builddir)/daemons/lvmetad/lvmetad lib/lvmetad
+	$(LN_S) -f $(abs_top_builddir)/daemons/lvmpolld/lvmpolld lib/lvmpolld
+	$(LN_S) -f $(abs_top_srcdir)/scripts/vgimportclone.sh lib/vgimportclone
+	$(LN_S) -f $(abs_top_srcdir)/scripts/fsadm.sh lib/fsadm
+	$(LN_S) -f $(abs_top_srcdir)/conf/thin-performance.profile lib/thin-performance.profile
 	touch $@
 
-clean:
-	test "$(srcdir)" = . || $(RM) $(RUN_BASE)
-	$(RM) -r $(LVM_TEST_RESULTS)
+CLEAN_DIRS += $(LVM_TEST_RESULTS)
+ifneq (.,$(firstword $(srcdir)))
+CLEAN_TARGETS += $(RUN_BASE)
+endif
 
 CLEAN_TARGETS += .lib-dir-stamp .tests-stamp $(LIB) $(addprefix lib/,$(CMDS)) \
 	lib/clvmd lib/dmeventd lib/dmsetup lib/lvmetad lib/fsadm lib/vgimportclone \
-	lib/thin-performance.profile
+	lib/thin-performance.profile lib/harness \
+	lib/paths-installed lib/paths-installed-t \
+	lib/paths-common lib/paths-common-t \
+	lib/lvmpolld
 
 Makefile: $(srcdir)/Makefile.in $(top_builddir)/config.status
 	cd $(top_builddir) && $(SHELL) ./config.status $(subdir)/$@

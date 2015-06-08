@@ -56,6 +56,7 @@ SOURCES =\
 	datastruct/btree.c \
 	datastruct/str_list.c \
 	device/dev-cache.c \
+	device/dev-ext.c \
 	device/dev-io.c \
 	device/dev-md.c \
 	device/dev-swap.c \
@@ -69,6 +70,7 @@ SOURCES =\
 	filters/filter-regex.c \
 	filters/filter-sysfs.c \
 	filters/filter-md.c \
+	filters/filter-fwraid.c \
 	filters/filter-mpath.c \
 	filters/filter-partitioned.c \
 	filters/filter-type.c \
@@ -194,6 +196,11 @@ ifeq ("@BUILD_LVMETAD@", "yes")
 	cache/lvmetad.c
 endif
 
+ifeq ("@BUILD_LVMPOLLD@", "yes")
+  SOURCES +=\
+	lvmpolld/lvmpolld-client.c
+endif
+
 ifeq ("@DMEVENTD@", "yes")
   CLDFLAGS += -L$(top_builddir)/daemons/dmeventd
   LIBS += -ldevmapper-event
@@ -220,7 +227,7 @@ CFLOW_LIST_TARGET = $(LIB_NAME).cflow
 
 include $(top_builddir)/make.tmpl
 
-CFLAGS += $(BLKID_CFLAGS) $(UDEV_CFLAGS)
+CFLAGS += $(BLKID_CFLAGS) $(UDEV_CFLAGS) $(VALGRIND_CFLAGS)
 
 $(SUBDIRS): $(LIB_STATIC)
 

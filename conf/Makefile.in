@@ -17,11 +17,18 @@ top_builddir = @top_builddir@
 
 CONFSRC=example.conf
 CONFDEST=lvm.conf
+CONFLOCAL=lvmlocal.conf
 
 PROFILE_TEMPLATES=command_profile_template.profile metadata_profile_template.profile
 PROFILES=$(PROFILE_TEMPLATES) $(srcdir)/thin-generic.profile $(srcdir)/thin-performance.profile
 
 include $(top_builddir)/make.tmpl
+
+.PHONY: install_conf install_localconf install_profiles
+
+generate:
+	(cat $(top_srcdir)/conf/example.conf.base && LD_LIBRARY_PATH=$(top_builddir)/libdm:$(LD_LIBRARY_PATH) $(top_builddir)/tools/lvm dumpconfig --type default --unconfigured --withcomments --ignorelocal) > example.conf.in
+	(cat $(top_srcdir)/conf/lvmlocal.conf.base && LD_LIBRARY_PATH=$(top_builddir)/libdm:$(LD_LIBRARY_PATH) $(top_builddir)/tools/lvm dumpconfig --type default --unconfigured --withcomments local) > lvmlocal.conf.in
 
 install_conf: $(CONFSRC)
 	@if [ ! -e $(confdir)/$(CONFDEST) ]; then \
@@ -29,12 +36,18 @@ install_conf: $(CONFSRC)
 		$(INSTALL_WDATA) -D $< $(confdir)/$(CONFDEST); \
 	fi
 
+install_localconf: $(CONFLOCAL)
+	@if [ ! -e $(confdir)/$(CONFLOCAL) ]; then \
+		echo "$(INSTALL_WDATA) -D $< $(confdir)/$(CONFLOCAL)"; \
+		$(INSTALL_WDATA) -D $< $(confdir)/$(CONFLOCAL); \
+	fi
+
 install_profiles: $(PROFILES)
 	$(INSTALL_DIR) $(DESTDIR)$(DEFAULT_PROFILE_DIR)
 	$(INSTALL_DATA) $(PROFILES) $(DESTDIR)$(DEFAULT_PROFILE_DIR)/
 
-install_lvm2: install_conf install_profiles
+install_lvm2: install_conf install_localconf install_profiles
 
 install: install_lvm2
 
-DISTCLEAN_TARGETS += $(CONFSRC) $(PROFILE_TEMPLATES)
+DISTCLEAN_TARGETS += $(CONFSRC) $(CONFLOCAL) $(PROFILE_TEMPLATES)

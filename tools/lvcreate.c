@@ -484,6 +484,14 @@ static int _read_raid_params(struct cmd_context *cmd,
 		return 0;
 	}
 
+	if (arg_count(cmd, mirrors_ARG) && segtype_is_raid(lp->segtype) &&
+	    strcmp(lp->segtype->name, SEG_TYPE_NAME_RAID1) &&
+	    strcmp(lp->segtype->name, SEG_TYPE_NAME_RAID10)) {
+		log_error("Mirror argument cannot be used with segment type, %s",
+			  lp->segtype->name);
+		return 0;
+	}
+
 	/* Rates are recorded in kiB/sec/disk, not sectors/sec/disk */
 	lp->min_recovery_rate = arg_uint_value(cmd, minrecoveryrate_ARG, 0) / 2;
 	lp->max_recovery_rate = arg_uint_value(cmd, maxrecoveryrate_ARG, 0) / 2;
@@ -631,6 +639,14 @@ static int _read_activation_params(struct cmd_context *cmd,
 
 	lp->activate = (activation_change_t)
 		arg_uint_value(cmd, activate_ARG, CHANGE_AY);
+
+	/* Error when full */
+	if (arg_is_set(cmd, errorwhenfull_ARG)) {
+		lp->error_when_full = arg_uint_value(cmd, errorwhenfull_ARG, 0);
+	} else
+		lp->error_when_full =
+			seg_can_error_when_full(lp) &&
+			find_config_tree_bool(cmd, activation_error_when_full_CFG, NULL);
 
 	/* Read ahead */
 	lp->read_ahead = arg_uint_value(cmd, readahead_ARG,
@@ -906,6 +922,7 @@ static int _lvcreate_params(struct cmd_context *cmd,
 					    SIZE_ARGS,
 					    THIN_POOL_ARGS,
 					    chunksize_ARG,
+					    errorwhenfull_ARG,
 					    snapshot_ARG,
 					    thin_ARG,
 					    virtualsize_ARG,
@@ -925,6 +942,7 @@ static int _lvcreate_params(struct cmd_context *cmd,
 						SIZE_ARGS,
 						chunksize_ARG,
 						discards_ARG,
+						errorwhenfull_ARG,
 						zero_ARG,
 						-1))
 			return_0;
@@ -990,6 +1008,12 @@ static int _lvcreate_params(struct cmd_context *cmd,
 				 virtualsize_ARG,
 				 -1))
 		return_0;
+
+	if (!seg_can_error_when_full(lp) && !lp->create_pool &&
+	    arg_is_set(cmd, errorwhenfull_ARG)) {
+		log_error("Segment type %s does not support --errorwhenfull.", lp->segtype->name);
+		return 0;
+	}
 
 	/* Basic segment type validation finished here */
 

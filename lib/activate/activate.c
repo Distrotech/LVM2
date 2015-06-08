@@ -238,6 +238,22 @@ int lv_info_by_lvid(struct cmd_context *cmd, const char *lvid_s, int use_layer,
 {
 	return 0;
 }
+int lv_info_with_seg_status(struct cmd_context *cmd, const struct logical_volume *lv,
+			    const struct lv_segment *lv_seg, int use_layer,
+			    struct lv_with_info_and_seg_status *status,
+			    int with_open_count, int with_read_ahead)
+{
+	return 0;
+}
+int lv_status(struct cmd_context *cmd, const struct lv_segment *lv_seg,
+	      int use_layer, struct lv_seg_status *lv_seg_status)
+{
+	return 0;
+}
+int lv_cache_status(const struct logical_volume *cache_lv,
+		    struct lv_status_cache **status)
+{
+}
 int lv_check_not_in_use(const struct logical_volume *lv)
 {
         return 0;
@@ -625,7 +641,8 @@ int target_present(struct cmd_context *cmd, const char *target_name,
 
 static int _lv_info(struct cmd_context *cmd, const struct logical_volume *lv,
 		    int use_layer, struct lvinfo *info,
-		    struct lv_segment *seg, struct lv_seg_status *seg_status,
+		    const struct lv_segment *seg,
+		    struct lv_seg_status *seg_status,
 		    int with_open_count, int with_read_ahead)
 {
 	struct dm_info dminfo;
@@ -644,8 +661,13 @@ static int _lv_info(struct cmd_context *cmd, const struct logical_volume *lv,
 	}
 
 	/* New thin-pool has no layer, but -tpool suffix needs to be queried */
-	if (!use_layer && lv_is_new_thin_pool(lv))
-		use_layer = 1;
+	if (!use_layer && lv_is_new_thin_pool(lv)) {
+		/* Check if there isn't existing old thin pool mapping in the table */
+		if (!dev_manager_info(cmd->mem, lv, NULL, 0, 0, &dminfo, NULL, NULL))
+			return_0;
+		if (!dminfo.exists)
+			use_layer = 1;
+	}
 
 	if (seg_status)
 		seg_status->seg = seg;
@@ -704,13 +726,13 @@ int lv_info_by_lvid(struct cmd_context *cmd, const char *lvid_s, int use_layer,
  * Returns 1 if lv_seg_status structure populated,
  * else 0 on failure or if device not active locally.
  */
-int lv_status(struct cmd_context *cmd, struct lv_segment *lv_seg,
-	      struct lv_seg_status *lv_seg_status)
+int lv_status(struct cmd_context *cmd, const struct lv_segment *lv_seg,
+	      int use_layer, struct lv_seg_status *lv_seg_status)
 {
 	if (!activation())
 		return 0;
 
-	return _lv_info(cmd, lv_seg->lv, 0, NULL, lv_seg, lv_seg_status, 0, 0);
+	return _lv_info(cmd, lv_seg->lv, use_layer, NULL, lv_seg, lv_seg_status, 0, 0);
 }
 
 /*
@@ -718,18 +740,18 @@ int lv_status(struct cmd_context *cmd, struct lv_segment *lv_seg,
  * else 0 on failure or if device not active locally.
  *
  * This is the same as calling lv_info and lv_status,
- * but* it's done in one go with one ioctl if possible!
+ * but* it's done in one go with one ioctl if possible!                                                             ]
  */
 int lv_info_with_seg_status(struct cmd_context *cmd, const struct logical_volume *lv,
-			   struct lv_segment *lv_seg, int use_layer,
-			   struct lvinfo *lvinfo, struct lv_seg_status *lv_seg_status,
-			   int with_open_count, int with_read_ahead)
+			    const struct lv_segment *lv_seg, int use_layer,
+			    struct lv_with_info_and_seg_status *status,
+			    int with_open_count, int with_read_ahead)
 {
 	if (!activation())
 		return 0;
 
 	if (lv == lv_seg->lv)
-		return _lv_info(cmd, lv, use_layer, lvinfo, lv_seg, lv_seg_status,
+		return _lv_info(cmd, lv, use_layer, &status->info, lv_seg, &status->seg_status,
 				with_open_count, with_read_ahead);
 
 	/*
@@ -737,8 +759,8 @@ int lv_info_with_seg_status(struct cmd_context *cmd, const struct logical_volume
 	 * status for segment that belong to another LV,
 	 * we need to acquire info and status separately!
 	 */
-	return _lv_info(cmd, lv, use_layer, lvinfo, NULL, NULL, with_open_count, with_read_ahead) &&
-	       _lv_info(cmd, lv_seg->lv, use_layer, NULL, lv_seg, lv_seg_status, 0, 0);
+	return _lv_info(cmd, lv, use_layer, &status->info, NULL, NULL, with_open_count, with_read_ahead) &&
+	       _lv_info(cmd, lv_seg->lv, use_layer, NULL, lv_seg, &status->seg_status, 0, 0);
 }
 
 #define OPEN_COUNT_CHECK_RETRIES 25
@@ -1804,6 +1826,19 @@ static int _preload_detached_lv(struct logical_volume *lv, void *data)
 	struct detached_lv_data *detached = data;
 	struct lv_list *lvl_pre;
 
+	/* Check and preload removed raid image leg or metadata */
+	if (lv_is_raid_image(lv)) {
+		if ((lvl_pre = find_lv_in_vg_by_lvid(detached->lv_pre->vg, &lv->lvid)) &&
+		    !lv_is_raid_image(lvl_pre->lv) && lv_is_active(lv) &&
+		    !_lv_preload(lvl_pre->lv, detached->laopts, detached->flush_required))
+			return_0;
+	} else if (lv_is_raid_metadata(lv)) {
+		if ((lvl_pre = find_lv_in_vg_by_lvid(detached->lv_pre->vg, &lv->lvid)) &&
+		    !lv_is_raid_metadata(lvl_pre->lv) && lv_is_active(lv) &&
+		    !_lv_preload(lvl_pre->lv, detached->laopts, detached->flush_required))
+			return_0;
+	}
+
 	if ((lvl_pre = find_lv_in_vg(detached->lv_pre->vg, lv->name))) {
 		if (lv_is_visible(lvl_pre->lv) && lv_is_active(lv) &&
 		    (!lv_is_cow(lv) || !lv_is_cow(lvl_pre->lv)) &&
@@ -2261,6 +2296,16 @@ static int _lv_activate(struct cmd_context *cmd, const char *lvid_s,
 	if (lv_has_unknown_segments(lv)) {
 		log_error("Refusing activation of LV %s containing "
 			  "an unrecognised segment.", lv->name);
+		goto out;
+	}
+
+	/*
+	 * Check if cmirrord is running for clustered mirrors.
+	 */
+	if (!laopts->exclusive && vg_is_clustered(lv->vg) &&
+	    lv_is_mirror(lv) && !lv_is_raid(lv) &&
+	    !cluster_mirror_is_available(lv->vg->cmd)) {
+		log_error("Shared cluster mirrors are not available.");
 		goto out;
 	}
 

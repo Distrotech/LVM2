@@ -11,6 +11,8 @@
 
 . lib/inittest
 
+test -e LOCAL_LVMPOLLD && skip
+
 aux have_cache 1 3 0 || skip
 aux prepare_vg 3
 
@@ -18,10 +20,19 @@ lvcreate --type cache-pool -an -v -L 2 -n cpool $vg
 lvcreate -H -L 4 -n corigin --cachepool $vg/cpool
 lvcreate -n noncache -l 1 $vg
 
+# cannot change major minor for pools
+not lvchange --yes -M y --minor 235 --major 253 $vg/cpool
+not lvchange -M n $vg/cpool
+
 not lvchange --cachepolicy mq $vg/noncache
 not lvchange --cachesettings foo=bar $vg/noncache
 
+lvchange --cachepolicy cleaner $vg/corigin
+dmsetup status | grep $vg-corigin | grep 'cleaner'
+
 lvchange --cachepolicy mq --cachesettings migration_threshold=333 $vg/corigin
+dmsetup status | grep $vg-corigin | not grep 'cleaner'
+dmsetup status | grep $vg-corigin | grep 'mq'
 dmsetup status | grep $vg-corigin | grep 'migration_threshold 333'
 lvchange --refresh $vg/corigin
 dmsetup status | grep $vg-corigin | grep 'migration_threshold 333'

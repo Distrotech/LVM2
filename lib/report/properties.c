@@ -281,6 +281,8 @@ GET_LV_STR_PROPERTY_FN(lv_attr, lv_attr_dup(lv->vg->vgmem, lv))
 GET_LV_NUM_PROPERTY_FN(lv_major, lv->major)
 #define _lv_major_set prop_not_implemented_set
 GET_LV_NUM_PROPERTY_FN(lv_minor, lv->minor)
+#define _lv_when_full_get prop_not_implemented_get
+#define _lv_when_full_set prop_not_implemented_set
 #define _lv_minor_set prop_not_implemented_set
 GET_LV_NUM_PROPERTY_FN(lv_read_ahead, lv->read_ahead * SECTOR_SIZE)
 #define _lv_read_ahead_set prop_not_implemented_set
@@ -298,6 +300,10 @@ GET_LV_STR_PROPERTY_FN(origin, lv_origin_dup(lv->vg->vgmem, lv))
 #define _origin_set prop_not_implemented_set
 GET_LV_NUM_PROPERTY_FN(origin_size, (SECTOR_SIZE * lv_origin_size(lv)))
 #define _origin_size_set prop_not_implemented_set
+#define _lv_ancestors_set prop_not_implemented_set
+#define _lv_ancestors_get prop_not_implemented_get
+#define _lv_descendants_set prop_not_implemented_set
+#define _lv_descendants_get prop_not_implemented_get
 GET_LV_NUM_PROPERTY_FN(snap_percent, _snap_percent(lv))
 #define _snap_percent_set prop_not_implemented_set
 GET_LV_NUM_PROPERTY_FN(copy_percent, _copy_percent(lv))
@@ -360,6 +366,8 @@ GET_VG_NUM_PROPERTY_FN(vg_free, (SECTOR_SIZE * vg_free(vg)))
 #define _vg_free_set prop_not_implemented_set
 GET_VG_STR_PROPERTY_FN(vg_sysid, vg_system_id_dup(vg))
 #define _vg_sysid_set prop_not_implemented_set
+GET_VG_STR_PROPERTY_FN(vg_systemid, vg_system_id_dup(vg))
+#define _vg_systemid_set prop_not_implemented_set
 GET_VG_NUM_PROPERTY_FN(vg_extent_size, (SECTOR_SIZE * vg->extent_size))
 #define _vg_extent_size_set prop_not_implemented_set
 GET_VG_NUM_PROPERTY_FN(vg_extent_count, vg->extent_count)
@@ -454,7 +462,7 @@ GET_PVSEG_NUM_PROPERTY_FN(pvseg_size, (SECTOR_SIZE * pvseg->len))
 
 struct lvm_property_type _properties[] = {
 #include "columns.h"
-	{ 0, "", 0, 0, 0, { .integer = 0 }, prop_not_implemented_get, prop_not_implemented_set },
+	{ 0, "", 0, 0, 0, 0, { .integer = 0 }, prop_not_implemented_get, prop_not_implemented_set },
 };
 
 #undef STR
@@ -463,6 +471,7 @@ struct lvm_property_type _properties[] = {
 #undef SIZ
 #undef PCT
 #undef STR_LIST
+#undef SNUM
 #undef FIELD
 
 int lvseg_get_property(const struct lv_segment *lvseg,
@@ -474,7 +483,7 @@ int lvseg_get_property(const struct lv_segment *lvseg,
 int lv_get_property(const struct logical_volume *lv,
 		    struct lvm_property_type *prop)
 {
-	return prop_get_property(_properties, lv, prop, LVS);
+	return prop_get_property(_properties, lv, prop, LVS | LVSINFO | LVSSTATUS | LVSINFOSTATUS);
 }
 
 int vg_get_property(const struct volume_group *vg,
@@ -498,7 +507,7 @@ int pv_get_property(const struct physical_volume *pv,
 int lv_set_property(struct logical_volume *lv,
 		    struct lvm_property_type *prop)
 {
-	return prop_set_property(_properties, lv, prop, LVS);
+	return prop_set_property(_properties, lv, prop, LVS | LVSINFO | LVSSTATUS | LVSINFOSTATUS);
 }
 
 int vg_set_property(struct volume_group *vg,

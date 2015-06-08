@@ -11,11 +11,13 @@
 
 . lib/inittest
 
+test -e LOCAL_LVMPOLLD && skip
+
 aux have_raid 1 3 0 || skip
 aux raid456_replace_works || skip
 
-aux lvmconf 'allocation/maximise_cling = 0'
-aux lvmconf 'allocation/mirror_logs_require_separate_pvs = 1'
+aux lvmconf 'allocation/maximise_cling = 0' \
+	    'allocation/mirror_logs_require_separate_pvs = 1'
 
 aux prepare_vg 8
 

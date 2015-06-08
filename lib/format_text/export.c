@@ -21,6 +21,7 @@
 #include "segtype.h"
 #include "text_export.h"
 #include "lvm-version.h"
+#include "toolcontext.h"
 
 #include <stdarg.h>
 #include <time.h>
@@ -327,7 +328,7 @@ int out_config_node(struct formatter *f, const struct dm_config_node *cn)
 	return dm_config_write_node(cn, _out_line, f);
 }
 
-static int _print_header(struct formatter *f,
+static int _print_header(struct cmd_context *cmd, struct formatter *f,
 			 const char *desc)
 {
 	char *buf;
@@ -350,6 +351,8 @@ static int _print_header(struct formatter *f,
 	outf(f, "creation_host = \"%s\"\t# %s %s %s %s %s", _utsname.nodename,
 	     _utsname.sysname, _utsname.nodename, _utsname.release,
 	     _utsname.version, _utsname.machine);
+	if (cmd->system_id && *cmd->system_id)
+		outf(f, "creation_host_system_id = \"%s\"", cmd->system_id);
 	outf(f, "creation_time = %lu\t# %s", t, ctime(&t));
 
 	return 1;
@@ -390,6 +393,8 @@ static int _out_tags(struct formatter *f, struct dm_list *tagsl)
 static int _print_vg(struct formatter *f, struct volume_group *vg)
 {
 	char buffer[4096];
+	const struct format_type *fmt = NULL;
+	uint64_t status = vg->status;
 
 	if (!id_write_format(&vg->id, buffer, sizeof(buffer)))
 		return_0;
@@ -398,17 +403,35 @@ static int _print_vg(struct formatter *f, struct volume_group *vg)
 
 	outf(f, "seqno = %u", vg->seqno);
 
-	if (vg->fid && vg->fid->fmt)
-		outfc(f, "# informational", "format = \"%s\"", vg->fid->fmt->name);
+	if (vg->original_fmt)
+		fmt = vg->original_fmt;
+	else if (vg->fid)
+		fmt = vg->fid->fmt;
+	if (fmt)
+		outfc(f, "# informational", "format = \"%s\"", fmt->name);
 
-	if (!_print_flag_config(f, vg->status, VG_FLAGS))
+	/*
+	 * Removing WRITE and adding LVM_WRITE_LOCKED makes it read-only
+	 * to old versions of lvm that only look for LVM_WRITE.
+	 */
+	if ((status & LVM_WRITE) && vg_flag_write_locked(vg)) {
+		status &= ~LVM_WRITE;
+		status |= LVM_WRITE_LOCKED;
+	}
+
+	if (!_print_flag_config(f, status, VG_FLAGS))
 		return_0;
 
 	if (!_out_tags(f, &vg->tags))
 		return_0;
-
+ 
 	if (vg->system_id && *vg->system_id)
 		outf(f, "system_id = \"%s\"", vg->system_id);
+	else if (vg->lvm1_system_id && *vg->lvm1_system_id)
+		outf(f, "system_id = \"%s\"", vg->lvm1_system_id);
+
+	if (vg->lock_type)
+		outf(f, "lock_type = \"%s\"", vg->lock_type);
 
 	outsize(f, (uint64_t) vg->extent_size, "extent_size = %u",
 		vg->extent_size);
@@ -597,6 +620,7 @@ static int _print_lv(struct formatter *f, struct logical_volume *lv)
 	int seg_count;
 	struct tm *local_tm;
 	time_t ts;
+	uint64_t status = lv->status;
 
 #if 0
 	/* HM FIXME: workaround for empty metadata lvs with raid0 */
@@ -613,7 +637,16 @@ static int _print_lv(struct formatter *f, struct logical_volume *lv)
 
 	outf(f, "id = \"%s\"", buffer);
 
-	if (!_print_flag_config(f, lv->status, LV_FLAGS))
+	/*
+	 * Removing WRITE and adding LVM_WRITE_LOCKED makes it read-only
+	 * to old versions of lvm that only look for LVM_WRITE.
+	 */
+	if ((status & LVM_WRITE) && vg_flag_write_locked(lv->vg)) {
+		status &= ~LVM_WRITE;
+		status |= LVM_WRITE_LOCKED;
+	}
+
+	if (!_print_flag_config(f, status, LV_FLAGS))
 		return_0;
 
 	if (!_out_tags(f, &lv->tags))
@@ -752,7 +785,7 @@ static int _text_vg_export(struct formatter *f,
 	if (!_build_pv_names(f, vg))
 		goto_out;
 
-	if (f->header && !_print_header(f, desc))
+	if (f->header && !_print_header(vg->cmd, f, desc))
 		goto_out;
 
 	if (!out_text(f, "%s {", vg->name))
@@ -775,7 +808,7 @@ static int _text_vg_export(struct formatter *f,
 	if (!out_text(f, "}"))
 		goto_out;
 
-	if (!f->header && !_print_header(f, desc))
+	if (!f->header && !_print_header(vg->cmd, f, desc))
 		goto_out;
 
 	r = 1;

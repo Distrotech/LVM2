@@ -28,6 +28,7 @@ lvconvert -m+1 -b $vg/$lv1 "$dev3"
 #lvconvert $vg/$lv1
 
 lvs -a $vg
+
 #
 # It fails so use 'should' and -vvvv for now
 #

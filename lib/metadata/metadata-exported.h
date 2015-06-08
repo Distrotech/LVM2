@@ -58,6 +58,7 @@
 
 #define LVM_READ		UINT64_C(0x0000000000000100)	/* LV, VG */
 #define LVM_WRITE		UINT64_C(0x0000000000000200)	/* LV, VG */
+#define LVM_WRITE_LOCKED	UINT64_C(0x0020000000000000)    /* LV, VG */
 
 #define CLUSTERED		UINT64_C(0x0000000000000400)	/* VG */
 //#define SHARED		UINT64_C(0x0000000000000800)	/* VG */
@@ -118,6 +119,7 @@
 #define CACHE			UINT64_C(0x0001000000000000)    /* LV - Internal use only */
 
 #define LV_PENDING_DELETE	UINT64_C(0x0004000000000000)    /* LV - Internal use only */
+<<<<<<< HEAD
 
 #define LV_RESHAPE_DELTA_DISKS_PLUS		UINT64_C(0x0008000000000000)    /* LV reshape flag delta disks plus image(s) */
 #define LV_RESHAPE_DELTA_DISKS_MINUS		UINT64_C(0x0010000000000000)    /* LV reshape flag delta disks minus image(s) */
@@ -127,6 +129,22 @@
 									on a PV already holing an image of the RAID set */
 
 /* Next unused flag:		UINT64_C(0x0040000000000000)    */
+=======
+#define LV_REMOVED		UINT64_C(0x0040000000000000)	/* LV - Internal use only
+								   This flag is used to mark an LV once it has
+								   been removed from the VG. It might still
+								   be referenced on internal lists of LVs.
+								   Any remaining references should check for
+								   this flag and ignore the LV is set.
+								   FIXME: Remove this flag once we have indexed
+									  vg->removed_lvs for quick lookup.
+								*/
+#define LV_ERROR_WHEN_FULL	UINT64_C(0x0008000000000000)    /* LV - error when full */
+#define PV_ALLOCATION_PROHIBITED	UINT64_C(0x0010000000000000)	/* PV - internal use only - allocation prohibited
+									e.g. to prohibit allocation of a RAID image
+									on a PV already holing an image of the RAID set */
+/* Next unused flag:		UINT64_C(0x0080000000000000)    */
+>>>>>>> master
 
 /* Format features flags */
 #define FMT_SEGMENTS		0x00000001U	/* Arbitrary segment params? */
@@ -143,6 +161,9 @@
 #define FMT_CONFIG_PROFILE	0x000000800U	/* Supports configuration profiles? */
 #define FMT_OBSOLETE		0x000001000U	/* Obsolete format? */
 #define FMT_NON_POWER2_EXTENTS	0x000002000U	/* Non-power-of-2 extent sizes? */
+#define FMT_SYSTEMID_ON_PVS	0x000004000U	/* System ID is stored on PVs not VG */
+
+#define systemid_on_pvs(vg)	((vg)->fid->fmt->features & FMT_SYSTEMID_ON_PVS)
 
 /* Mirror conversion type flags */
 #define MIRROR_BY_SEG		0x00000001U	/* segment-by-segment mirror */
@@ -170,6 +191,8 @@
 #define FAILED_ALLOCATION	0x00000080U
 #define FAILED_EXIST		0x00000100U
 #define FAILED_RECOVERY		0x00000200U
+#define FAILED_SYSTEMID		0x00000400U
+#define FAILED_LOCK_TYPE	0x00000800U
 #define SUCCESS			0x00000000U
 
 #define VGMETADATACOPIES_ALL UINT32_MAX
@@ -199,6 +222,7 @@
 #define lv_is_mirror_type(lv)	(((lv)->status & (MIRROR | MIRROR_LOG | MIRROR_IMAGE)) ? 1 : 0)
 
 #define lv_is_pending_delete(lv) (((lv)->status & LV_PENDING_DELETE) ? 1 : 0)
+#define lv_is_error_when_full(lv) (((lv)->status & LV_ERROR_WHEN_FULL) ? 1 : 0)
 #define lv_is_pvmove(lv)	(((lv)->status & PVMOVE) ? 1 : 0)
 
 #define lv_is_raid(lv)		(((lv)->status & RAID) ? 1 : 0)
@@ -218,6 +242,8 @@
 #define lv_is_pool_metadata_spare(lv)	(((lv)->status & POOL_METADATA_SPARE) ? 1 : 0)
 
 #define lv_is_rlog(lv)		(((lv)->status & REPLICATOR_LOG) ? 1 : 0)
+
+#define lv_is_removed(lv)	(((lv)->status & LV_REMOVED) ? 1 : 0)
 
 int lv_layout_and_role(struct dm_pool *mem, const struct logical_volume *lv,
 		       struct dm_list **layout, struct dm_list **role);
@@ -483,6 +509,12 @@ struct vg_list {
 	struct volume_group *vg;
 };
 
+struct vgnameid_list {
+	struct dm_list list;
+	const char *vg_name;
+	const char *vgid;
+};
+
 #define PV_PE_START_CALC ((uint64_t) -1) /* Calculate pe_start value */
 
 struct pvcreate_restorable_params {
@@ -595,6 +627,8 @@ void lv_set_hidden(struct logical_volume *lv);
 
 struct dm_list *get_vgnames(struct cmd_context *cmd, int include_internal);
 struct dm_list *get_vgids(struct cmd_context *cmd, int include_internal);
+int get_vgnameids(struct cmd_context *cmd, struct dm_list *vgnameids,
+		  const char *only_this_vgname, int include_internal);
 int scan_vgs_for_pvs(struct cmd_context *cmd, uint32_t warn_flags);
 
 int pv_write(struct cmd_context *cmd, struct physical_volume *pv, int allow_non_orphan);
@@ -645,7 +679,9 @@ struct physical_volume *pv_create(const struct cmd_context *cmd,
 
 int pvremove_single(struct cmd_context *cmd, const char *pv_name,
 		    void *handle __attribute__((unused)), unsigned force_count,
-		    unsigned prompt);
+		    unsigned prompt, struct dm_list *pvslist);
+int pvremove_many(struct cmd_context *cmd, struct dm_list *pv_names,
+		  unsigned force_count, unsigned prompt);
 
 int pv_resize_single(struct cmd_context *cmd,
 			     struct volume_group *vg,
@@ -879,6 +915,7 @@ struct lvcreate_params {
 	struct dm_list *pvh; /* all */
 
 	uint64_t permission; /* all */
+	unsigned error_when_full; /* when segment supports it */
 	uint32_t read_ahead; /* all */
 	int approx_alloc;     /* all */
 	alloc_policy_t alloc; /* all */
@@ -1027,11 +1064,16 @@ int lv_remove_mirrors(struct cmd_context *cmd, struct logical_volume *lv,
 const char *get_mirror_log_name(int log_count);
 int set_mirror_log_count(int *log_count, const char *mirrorlog);
 
+int cluster_mirror_is_available(struct cmd_context *cmd);
 int is_temporary_mirror_layer(const struct logical_volume *lv);
 struct logical_volume * find_temporary_mirror(const struct logical_volume *lv);
 uint32_t lv_mirror_count(const struct logical_volume *lv);
+
+/* Remove CMIRROR_REGION_COUNT_LIMIT when http://bugzilla.redhat.com/682771 is fixed */
+#define CMIRROR_REGION_COUNT_LIMIT (256*1024 * 8)
 uint32_t adjusted_mirror_region_size(uint32_t extent_size, uint32_t extents,
-				     uint32_t region_size, int internal);
+				     uint32_t region_size, int internal, int clustered);
+
 int remove_mirrors_from_segments(struct logical_volume *lv,
 				 uint32_t new_mirrors, uint64_t status_mask);
 int add_mirrors_to_segments(struct cmd_context *cmd, struct logical_volume *lv,
@@ -1167,6 +1209,7 @@ char *generate_lv_name(struct volume_group *vg, const char *format,
 int pv_change_metadataignore(struct physical_volume *pv, uint32_t mda_ignore);
 
 
+int vg_flag_write_locked(struct volume_group *vg);
 int vg_check_write_mode(struct volume_group *vg);
 #define vg_is_clustered(vg) (vg_status((vg)) & CLUSTERED)
 #define vg_is_exported(vg) (vg_status((vg)) & EXPORTED_VG)
@@ -1185,6 +1228,7 @@ struct vgcreate_params {
 	alloc_policy_t alloc;
 	int clustered; /* FIXME: put this into a 'status' variable instead? */
 	uint32_t vgmetadatacopies;
+	const char *system_id;
 };
 
 int validate_major_minor(const struct cmd_context *cmd,

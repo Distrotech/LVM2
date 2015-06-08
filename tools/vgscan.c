@@ -17,7 +17,7 @@
 
 static int vgscan_single(struct cmd_context *cmd, const char *vg_name,
 			 struct volume_group *vg,
-			 void *handle __attribute__((unused)))
+			 struct processing_handle *handle __attribute__((unused)))
 {
 	log_print_unless_silent("Found %svolume group \"%s\" using metadata type %s",
 				vg_is_exported(vg) ? "exported " : "", vg_name,
@@ -47,6 +47,8 @@ int vgscan(struct cmd_context *cmd, int argc, char **argv)
 	lvmcache_destroy(cmd, 1, 0);
 
 	if (arg_count(cmd, cache_long_ARG)) {
+		cmd->include_foreign_vgs = 1;
+
 		if (lvmetad_active()) {
 			if (!lvmetad_pvscan_all_devs(cmd, NULL))
 				return ECMD_FAILED;

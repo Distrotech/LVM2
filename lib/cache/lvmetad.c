@@ -48,7 +48,6 @@ void lvmetad_disconnect(void)
 	if (_lvmetad_connected)
 		daemon_close(_lvmetad);
 	_lvmetad_connected = 0;
-	_lvmetad_cmd = NULL;
 }
 
 void lvmetad_init(struct cmd_context *cmd)
@@ -145,6 +144,9 @@ void lvmetad_set_socket(const char *sock)
 	_lvmetad_socket = sock;
 }
 
+static int _lvmetad_pvscan_all_devs(struct cmd_context *cmd, activation_handler handler,
+				    int ignore_obsolete);
+
 static daemon_reply _lvmetad_send(const char *id, ...)
 {
 	va_list ap;
@@ -192,7 +194,7 @@ retry:
 				max_remaining_sleep_times--;	/* Sleep once before rescanning the first time, then 5 times each time after that. */
 		} else {
 			/* If the re-scan fails here, we try again later. */
-			(void) lvmetad_pvscan_all_devs(_lvmetad_cmd, NULL);
+			(void) _lvmetad_pvscan_all_devs(_lvmetad_cmd, NULL, 0);
 			num_rescans++;
 			max_remaining_sleep_times = 5;
 		}
@@ -271,19 +273,21 @@ static int _read_mda(struct lvmcache_info *info,
 	return 0;
 }
 
-static struct lvmcache_info *_pv_populate_lvmcache(struct cmd_context *cmd,
-						   struct dm_config_node *cn,
-						   dev_t fallback)
+static int _pv_populate_lvmcache(struct cmd_context *cmd,
+				 struct dm_config_node *cn,
+				 struct format_type *fmt, dev_t fallback)
 {
-	struct device *dev;
+	struct device *dev, *dev_alternate, *dev_alternate_cache = NULL;
+	struct label *label;
 	struct id pvid, vgid;
 	char mda_id[32];
 	char da_id[32];
 	int i = 0;
-	struct dm_config_node *mda = NULL;
-	struct dm_config_node *da = NULL;
+	struct dm_config_node *mda, *da;
+	struct dm_config_node *alt_devices = dm_config_find_node(cn->child, "devices_alternate");
+	struct dm_config_value *alt_device = NULL;
 	uint64_t offset, size;
-	struct lvmcache_info *info;
+	struct lvmcache_info *info, *info_alternate;
 	const char *pvid_txt = dm_config_find_str(cn->child, "id", NULL),
 		   *vgid_txt = dm_config_find_str(cn->child, "vgid", NULL),
 		   *vgname = dm_config_find_str(cn->child, "vgname", NULL),
@@ -292,11 +296,12 @@ static struct lvmcache_info *_pv_populate_lvmcache(struct cmd_context *cmd,
 	uint64_t devsize = dm_config_find_int64(cn->child, "dev_size", 0),
 		 label_sector = dm_config_find_int64(cn->child, "label_sector", 0);
 
-	struct format_type *fmt = fmt_name ? get_format_by_name(cmd, fmt_name) : NULL;
+	if (!fmt && fmt_name)
+		fmt = get_format_by_name(cmd, fmt_name);
 
 	if (!fmt) {
 		log_error("PV %s not recognised. Is the device missing?", pvid_txt);
-		return NULL;
+		return 0;
 	}
 
 	dev = dev_cache_get_by_devt(devt, cmd->filter);
@@ -305,17 +310,17 @@ static struct lvmcache_info *_pv_populate_lvmcache(struct cmd_context *cmd,
 
 	if (!dev) {
 		log_warn("WARNING: Device for PV %s not found or rejected by a filter.", pvid_txt);
-		return NULL;
+		return 0;
 	}
 
 	if (!pvid_txt || !id_read_format(&pvid, pvid_txt)) {
 		log_error("Missing or ill-formatted PVID for PV: %s.", pvid_txt);
-		return NULL;
+		return 0;
 	}
 
 	if (vgid_txt) {
 		if (!id_read_format(&vgid, vgid_txt))
-			return_NULL;
+			return_0;
 	} else
 		strcpy((char*)&vgid, fmt->orphan_vg_name);
 
@@ -324,7 +329,7 @@ static struct lvmcache_info *_pv_populate_lvmcache(struct cmd_context *cmd,
 
 	if (!(info = lvmcache_add(fmt->labeller, (const char *)&pvid, dev,
 				  vgname, (const char *)&vgid, 0)))
-		return_NULL;
+		return_0;
 
 	lvmcache_get_label(info)->sector = label_sector;
 	lvmcache_get_label(info)->dev = dev;
@@ -365,7 +370,53 @@ static struct lvmcache_info *_pv_populate_lvmcache(struct cmd_context *cmd,
 		++i;
 	} while (da);
 
-	return info;
+	if (alt_devices)
+		alt_device = alt_devices->v;
+
+	while (alt_device) {
+		dev_alternate = dev_cache_get_by_devt(alt_device->v.i, cmd->filter);
+		if (dev_alternate) {
+			if ((info_alternate = lvmcache_add(fmt->labeller, (const char *)&pvid, dev_alternate,
+							   vgname, (const char *)&vgid, 0))) {
+				dev_alternate_cache = dev_alternate;
+				info = info_alternate;
+				lvmcache_get_label(info)->dev = dev_alternate;
+			}
+		} else {
+			log_warn("Duplicate of PV %s dev %s exists on unknown device %"PRId64 ":%" PRId64,
+				 pvid_txt, dev_name(dev), MAJOR(alt_device->v.i), MINOR(alt_device->v.i));
+		}
+		alt_device = alt_device->next;
+	}
+
+	/*
+	 * Update lvmcache with the info about the alternate device by
+	 * reading its label, which should update lvmcache.
+	 */
+	if (dev_alternate_cache) {
+		if (!label_read(dev_alternate_cache, &label, 0)) {
+			log_warn("No PV label found on duplicate device %s.", dev_name(dev_alternate_cache));
+		}
+	}
+
+	lvmcache_set_preferred_duplicates((const char *)&vgid);
+	return 1;
+}
+
+static int _pv_update_struct_pv(struct physical_volume *pv, struct format_instance *fid)
+{
+	struct lvmcache_info *info;
+	if ((info = lvmcache_info_from_pvid((const char *)&pv->id, 0))) {
+		pv->label_sector = lvmcache_get_label(info)->sector;
+		pv->dev = lvmcache_device(info);
+		if (!pv->dev)
+			pv->status |= MISSING_PV;
+		if (!lvmcache_fid_add_mdas_pv(info, fid))
+			return_0;
+                pv->fid = fid;
+	} else
+		pv->status |= MISSING_PV; /* probably missing */
+	return 1;
 }
 
 struct volume_group *lvmetad_vg_lookup(struct cmd_context *cmd, const char *vgname, const char *vgid)
@@ -382,7 +433,6 @@ struct volume_group *lvmetad_vg_lookup(struct cmd_context *cmd, const char *vgna
 	struct format_type *fmt;
 	struct dm_config_node *pvcn;
 	struct pv_list *pvl;
-	struct lvmcache_info *info;
 
 	if (!lvmetad_active())
 		return NULL;
@@ -431,24 +481,28 @@ struct volume_group *lvmetad_vg_lookup(struct cmd_context *cmd, const char *vgna
 
 		if ((pvcn = dm_config_find_node(top, "metadata/physical_volumes")))
 			for (pvcn = pvcn->child; pvcn; pvcn = pvcn->sib)
-				_pv_populate_lvmcache(cmd, pvcn, 0);
+				_pv_populate_lvmcache(cmd, pvcn, fmt, 0);
+
+		if ((pvcn = dm_config_find_node(top, "metadata/outdated_pvs")))
+			for (pvcn = pvcn->child; pvcn; pvcn = pvcn->sib)
+				_pv_populate_lvmcache(cmd, pvcn, fmt, 0);
 
 		top->key = name;
 		if (!(vg = import_vg_from_config_tree(reply.cft, fid)))
 			goto_out;
 
 		dm_list_iterate_items(pvl, &vg->pvs) {
-			if ((info = lvmcache_info_from_pvid((const char *)&pvl->pv->id, 0))) {
-				pvl->pv->label_sector = lvmcache_get_label(info)->sector;
-				pvl->pv->dev = lvmcache_device(info);
-				if (!pvl->pv->dev)
-					pvl->pv->status |= MISSING_PV;
-				if (!lvmcache_fid_add_mdas_pv(info, fid)) {
-					vg = NULL;
-					goto_out;	/* FIXME error path */
-				}
-			} else
-				pvl->pv->status |= MISSING_PV; /* probably missing */
+			if (!_pv_update_struct_pv(pvl->pv, fid)) {
+				vg = NULL;
+				goto_out;	/* FIXME error path */
+			}
+		}
+
+		dm_list_iterate_items(pvl, &vg->pvs_outdated) {
+			if (!_pv_update_struct_pv(pvl->pv, fid)) {
+				vg = NULL;
+				goto_out;	/* FIXME error path */
+			}
 		}
 
 		lvmcache_update_vg(vg, 0);
@@ -582,7 +636,7 @@ int lvmetad_pv_lookup(struct cmd_context *cmd, struct id pvid, int *found)
 
 	if (!(cn = dm_config_find_node(reply.cft->root, "physical_volume")))
 		goto_out;
-        else if (!_pv_populate_lvmcache(cmd, cn, 0))
+        else if (!_pv_populate_lvmcache(cmd, cn, NULL, 0))
 		goto_out;
 
 out_success:
@@ -612,7 +666,7 @@ int lvmetad_pv_lookup_by_dev(struct cmd_context *cmd, struct device *dev, int *f
 		goto out_success;
 
 	cn = dm_config_find_node(reply.cft->root, "physical_volume");
-	if (!cn || !_pv_populate_lvmcache(cmd, cn, dev->dev))
+	if (!cn || !_pv_populate_lvmcache(cmd, cn, NULL, dev->dev))
 		goto_out;
 
 out_success:
@@ -640,10 +694,60 @@ int lvmetad_pv_list_to_lvmcache(struct cmd_context *cmd)
 
 	if ((cn = dm_config_find_node(reply.cft->root, "physical_volumes")))
 		for (cn = cn->child; cn; cn = cn->sib)
-			_pv_populate_lvmcache(cmd, cn, 0);
+			_pv_populate_lvmcache(cmd, cn, NULL, 0);
 
 	daemon_reply_destroy(reply);
 
+	return 1;
+}
+
+int lvmetad_get_vgnameids(struct cmd_context *cmd, struct dm_list *vgnameids)
+{
+	struct vgnameid_list *vgnl;
+	struct id vgid;
+	const char *vgid_txt;
+	const char *vg_name;
+	daemon_reply reply;
+	struct dm_config_node *cn;
+
+	log_debug_lvmetad("Asking lvmetad for complete list of known VG ids/names");
+	reply = _lvmetad_send("vg_list", NULL);
+	if (!_lvmetad_handle_reply(reply, "list VGs", "", NULL)) {
+		daemon_reply_destroy(reply);
+		return_0;
+	}
+
+	if ((cn = dm_config_find_node(reply.cft->root, "volume_groups"))) {
+		for (cn = cn->child; cn; cn = cn->sib) {
+			vgid_txt = cn->key;
+			if (!id_read_format(&vgid, vgid_txt)) {
+				stack;
+				continue;
+			}
+
+			if (!(vgnl = dm_pool_alloc(cmd->mem, sizeof(*vgnl)))) {
+				log_error("vgnameid_list allocation failed.");
+				return 0;
+			}
+
+			if (!(vg_name = dm_config_find_str(cn->child, "name", NULL))) {
+				log_error("vg_list no name found.");
+				return 0;
+			}
+
+			vgnl->vgid = dm_pool_strdup(cmd->mem, (char *)&vgid);
+			vgnl->vg_name = dm_pool_strdup(cmd->mem, vg_name);
+
+			if (!vgnl->vgid || !vgnl->vg_name) {
+				log_error("vgnameid_list member allocation failed.");
+				return 0;
+			}
+
+			dm_list_add(vgnameids, &vgnl->list);
+		}
+	}
+
+	daemon_reply_destroy(reply);
 	return 1;
 }
 
@@ -900,7 +1004,9 @@ struct _lvmetad_pvscan_baton {
 static int _lvmetad_pvscan_single(struct metadata_area *mda, void *baton)
 {
 	struct _lvmetad_pvscan_baton *b = baton;
-	struct volume_group *this = mda->ops->vg_read(b->fid, "", mda, 1);
+	struct volume_group *this;
+
+	this = mda_is_ignored(mda) ? NULL : mda->ops->vg_read(b->fid, "", mda, NULL, NULL, 1);
 
 	/* FIXME Also ensure contents match etc. */
 	if (!b->vg || this->seqno > b->vg->seqno)
@@ -912,7 +1018,7 @@ static int _lvmetad_pvscan_single(struct metadata_area *mda, void *baton)
 }
 
 int lvmetad_pvscan_single(struct cmd_context *cmd, struct device *dev,
-			  activation_handler handler)
+			  activation_handler handler, int ignore_obsolete)
 {
 	struct label *label;
 	struct lvmcache_info *info;
@@ -941,9 +1047,16 @@ int lvmetad_pvscan_single(struct cmd_context *cmd, struct device *dev,
 		goto_bad;
 
 	if (baton.fid->fmt->features & FMT_OBSOLETE) {
-		log_error("WARNING: Ignoring obsolete format of metadata (%s) on device %s when using lvmetad",
-			  baton.fid->fmt->name, dev_name(dev));
+		if (ignore_obsolete)
+			log_warn("WARNING: Ignoring obsolete format of metadata (%s) on device %s when using lvmetad",
+				  baton.fid->fmt->name, dev_name(dev));
+		else
+			log_error("WARNING: Ignoring obsolete format of metadata (%s) on device %s when using lvmetad",
+				  baton.fid->fmt->name, dev_name(dev));
 		lvmcache_fmt(info)->ops->destroy_instance(baton.fid);
+
+		if (ignore_obsolete)
+			return 1;
 		return 0;
 	}
 
@@ -956,7 +1069,7 @@ int lvmetad_pvscan_single(struct cmd_context *cmd, struct device *dev,
 	 * can scan further devices.
 	 */
 	if (!baton.vg && !(baton.fid->fmt->features & FMT_MDAS))
-		baton.vg = ((struct metadata_area *) dm_list_first(&baton.fid->metadata_areas_in_use))->ops->vg_read(baton.fid, lvmcache_vgname_from_info(info), NULL, 1);
+		baton.vg = ((struct metadata_area *) dm_list_first(&baton.fid->metadata_areas_in_use))->ops->vg_read(baton.fid, lvmcache_vgname_from_info(info), NULL, NULL, NULL, 1);
 
 	if (!baton.vg)
 		lvmcache_fmt(info)->ops->destroy_instance(baton.fid);
@@ -982,7 +1095,8 @@ bad:
 	return 0;
 }
 
-int lvmetad_pvscan_all_devs(struct cmd_context *cmd, activation_handler handler)
+static int _lvmetad_pvscan_all_devs(struct cmd_context *cmd, activation_handler handler,
+				    int ignore_obsolete)
 {
 	struct dev_iter *iter;
 	struct device *dev;
@@ -1024,7 +1138,7 @@ int lvmetad_pvscan_all_devs(struct cmd_context *cmd, activation_handler handler)
 			stack;
 			break;
 		}
-		if (!lvmetad_pvscan_single(cmd, dev, handler))
+		if (!lvmetad_pvscan_single(cmd, dev, handler, ignore_obsolete))
 			r = 0;
 	}
 
@@ -1039,3 +1153,16 @@ int lvmetad_pvscan_all_devs(struct cmd_context *cmd, activation_handler handler)
 	return r;
 }
 
+int lvmetad_pvscan_all_devs(struct cmd_context *cmd, activation_handler handler)
+{
+	return _lvmetad_pvscan_all_devs(cmd, handler, 0);
+}
+
+/* 
+ * FIXME Implement this function, skipping PVs known to belong to local or clustered,
+ * non-exported VGs.
+ */
+int lvmetad_pvscan_foreign_vgs(struct cmd_context *cmd, activation_handler handler)
+{
+	return _lvmetad_pvscan_all_devs(cmd, handler, 1);
+}

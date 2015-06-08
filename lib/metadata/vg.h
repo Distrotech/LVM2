@@ -44,6 +44,7 @@ struct volume_group {
 	struct cmd_context *cmd;
 	struct dm_pool *vgmem;
 	struct format_instance *fid;
+	const struct format_type *original_fmt;	/* Set when processing backup files */
 	struct lvmcache_vginfo *vginfo;
 	struct dm_list *cmd_vgs;/* List of wanted/locked and opened VGs */
 	uint32_t cmd_missing_vgs;/* Flag marks missing VG */
@@ -67,7 +68,9 @@ struct volume_group {
 	struct id id;
 	const char *name;
 	const char *old_name;		/* Set during vgrename and vgcfgrestore */
-	char *system_id;
+	const char *system_id;
+	char *lvm1_system_id;
+	const char *lock_type;
 
 	uint32_t extent_size;
 	uint32_t extent_count;
@@ -86,6 +89,13 @@ struct volume_group {
 	 */
 
 	struct dm_list pvs_to_create;
+
+	/*
+	 * List of physical volumes that carry outdated metadata that belongs
+	 * to this VG. Currently only populated when lvmetad is in use.
+	 */
+
+	struct dm_list pvs_outdated;
 
 	/*
 	 * logical volumes
@@ -108,6 +118,11 @@ struct volume_group {
 	/*
 	 * FIXME: Move the next fields into a different struct?
 	 */
+
+	/*
+	 * List of removed logical volumes by _lv_reduce.
+	 */
+	struct dm_list removed_lvs;
 
 	/*
 	 * List of removed physical volumes by pvreduce.
@@ -144,6 +159,7 @@ uint32_t vg_seqno(const struct volume_group *vg);
 uint64_t vg_status(const struct volume_group *vg);
 int vg_set_alloc_policy(struct volume_group *vg, alloc_policy_t alloc);
 int vg_set_clustered(struct volume_group *vg, int clustered);
+int vg_set_system_id(struct volume_group *vg, const char *system_id);
 uint64_t vg_size(const struct volume_group *vg);
 uint64_t vg_free(const struct volume_group *vg);
 uint64_t vg_extent_size(const struct volume_group *vg);

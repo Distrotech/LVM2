@@ -21,6 +21,7 @@ SOURCES =\
 	formats.c \
 	lvchange.c \
 	lvconvert.c \
+	lvconvert_poll.c \
 	lvcreate.c \
 	lvdisplay.c \
 	lvextend.c \
@@ -38,6 +39,7 @@ SOURCES =\
 	pvcreate.c \
 	pvdisplay.c \
 	pvmove.c \
+	pvmove_poll.c \
 	pvremove.c \
 	pvresize.c \
 	pvscan.c \
@@ -57,6 +59,7 @@ SOURCES =\
 	vgimport.c \
 	vgmerge.c \
 	vgmknodes.c \
+	lvpoll.c \
 	vgreduce.c \
 	vgremove.c \
 	vgrename.c \
@@ -94,7 +97,8 @@ LIB_VERSION = $(LIB_VERSION_LVM)
 
 CLEAN_TARGETS = liblvm2cmd.$(LIB_SUFFIX) $(TARGETS_DM) \
 	liblvm2cmd.$(LIB_SUFFIX).$(LIB_VERSION) lvm-static.o \
-	liblvm2cmd-static.a dmsetup.static lvm.static
+	liblvm2cmd-static.a dmsetup.static lvm.static \
+	$(LDDEPS) .exported_symbols_generated
 
 ifeq ("@CMDLIB@", "yes")
 	TARGETS += liblvm2cmd.$(LIB_SUFFIX).$(LIB_VERSION)
@@ -109,8 +113,6 @@ LVMLIBS += -ldevmapper
 
 EXPORTED_HEADER = $(srcdir)/lvm2cmd.h
 EXPORTED_FN_PREFIX = lvm2
-
-DEFS += -DLVM_SHARED_PATH=\"$(exec_prefix)/sbin/lvm\"
 
 CFLOW_LIST = lvmcmdlib.c lvm2cmd.c
 CFLOW_LIST_TARGET = liblvm2cmd.cflow
@@ -133,6 +135,7 @@ dmsetup.static: dmsetup.o $(interfacebuilddir)/libdevmapper.a
 all: device-mapper
 
 CFLAGS_lvm.o += $(EXTRA_EXEC_CFLAGS)
+CFLAGS_lvmcmdline.o += $(VALGRIND_CFLAGS)
 
 lvm: $(OBJECTS) lvm.o $(top_builddir)/lib/liblvm-internal.a
 	$(CC) $(CFLAGS) $(LDFLAGS) $(EXTRA_EXEC_LDFLAGS) $(ELDFLAGS) -o $@ $(OBJECTS) lvm.o \
@@ -165,7 +168,7 @@ liblvm2cmd.$(LIB_SUFFIX).$(LIB_VERSION): liblvm2cmd.$(LIB_SUFFIX)
 
 .commands: $(srcdir)/commands.h $(srcdir)/cmdnames.h Makefile
 	$(CC) -E -P $(srcdir)/cmdnames.h 2> /dev/null | \
-		egrep -v '^ *(|#.*|devtypes|dumpconfig|formats|help|pvdata|segtypes|tags|version) *$$' > .commands
+		egrep -v '^ *(|#.*|config|devtypes|dumpconfig|formats|help|lvpoll|pvdata|segtypes|systemid|tags|version) *$$' > .commands
 
 ifneq ("$(CFLOW_CMD)", "")
 CFLOW_SOURCES = $(addprefix $(srcdir)/, $(SOURCES))
