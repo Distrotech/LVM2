@@ -845,8 +845,6 @@ int lockd_start_vg(struct cmd_context *cmd, struct volume_group *vg)
 
 	if (!_use_lvmlockd)
 		return 1;
-	if (!_lvmlockd_connected)
-		return 0;
 
 	/* Skip starting the vg lockspace when the vg lock is skipped. */
 
@@ -855,6 +853,11 @@ int lockd_start_vg(struct cmd_context *cmd, struct volume_group *vg)
 
 	if (!is_lockd_type(vg->lock_type))
 		return 1;
+
+	if (!_lvmlockd_connected) {
+		log_error("VG %s start failed: lvmlockd not running", vg->name);
+		return 0;
+	}
 
 	log_debug("lockd_start_vg %s lock_type %s", vg->name,
 		  vg->lock_type ? vg->lock_type : "empty");
