@@ -43,8 +43,7 @@ lvmetad: $(OBJECTS) $(top_builddir)/libdaemon/client/libdaemonclient.a \
 
 lvmetactl: lvmetactl.o $(top_builddir)/libdaemon/client/libdaemonclient.a \
 	$(top_builddir)/libdaemon/server/libdaemonserver.a
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ lvmetactl.o \
-	$(DL_LIBS) $(LVMLIBS) -rdynamic
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ lvmetactl.o $(LVMLIBS)
 
 # TODO: No idea. No idea how to test either.
 #ifneq ("$(CFLOW_CMD)", "")
