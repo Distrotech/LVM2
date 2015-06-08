@@ -45,6 +45,9 @@ lvmlockctl: lvmlockctl.o $(top_builddir)/libdaemon/client/libdaemonclient.a \
 install_lvmlockd: lvmlockd
 	$(INSTALL_PROGRAM) -D $< $(sbindir)/$(<F)
 
-install_lvm2: install_lvmlockd
+install_lvmlockctl: lvmlockctl
+	$(INSTALL_PROGRAM) -D $< $(sbindir)/$(<F)
+
+install_lvm2: install_lvmlockd install_lvmlockctl
 
 install: install_lvm2
