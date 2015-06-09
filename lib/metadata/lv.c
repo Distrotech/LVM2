@@ -1020,12 +1020,6 @@ char *lv_profile_dup(struct dm_pool *mem, const struct logical_volume *lv)
 	return dm_pool_strdup(mem, profile_name);
 }
 
-char *lv_lock_type_dup(struct dm_pool *mem, const struct logical_volume *lv)
-{
-	const char *lock_type = lv->lock_type ? lv->lock_type : "";
-	return dm_pool_strdup(mem, lock_type);
-}
-
 char *lv_lock_args_dup(struct dm_pool *mem, const struct logical_volume *lv)
 {
 	const char *lock_args = lv->lock_args ? lv->lock_args : "";

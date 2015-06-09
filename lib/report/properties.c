@@ -350,8 +350,6 @@ GET_LV_STR_PROPERTY_FN(lv_active, lv_active_dup(lv->vg->vgmem, lv))
 #define _lv_active_set prop_not_implemented_set
 GET_LV_STR_PROPERTY_FN(lv_profile, lv_profile_dup(lv->vg->vgmem, lv))
 #define _lv_profile_set prop_not_implemented_set
-GET_LV_STR_PROPERTY_FN(lv_locktype, lv_lock_type_dup(lv->vg->vgmem, lv))
-#define _lv_locktype_set prop_not_implemented_set
 GET_LV_STR_PROPERTY_FN(lv_lockargs, lv_lock_args_dup(lv->vg->vgmem, lv))
 #define _lv_lockargs_set prop_not_implemented_set
 

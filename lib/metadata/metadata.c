@@ -2822,8 +2822,7 @@ int vg_write(struct volume_group *vg)
 
 	dm_list_iterate_items(lvl, &vg->lvs) {
 		if (lvl->lv->lock_args && !strcmp(lvl->lv->lock_args, "pending")) {
-			if (!lockd_init_lv_args(vg->cmd, vg, lvl->lv->name, &lvl->lv->lvid.id[1],
-					        lvl->lv->lock_type, &lvl->lv->lock_args)) {
+			if (!lockd_init_lv_args(vg->cmd, vg, lvl->lv, vg->lock_type, &lvl->lv->lock_args)) {
 				log_error("Cannot allocate lock for new LV.");
 				return 0;
 			}

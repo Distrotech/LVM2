@@ -137,17 +137,18 @@ int lockd_lv(struct cmd_context *cmd, struct logical_volume *lv,
 
 /* lvcreate/lvremove use init/free */
 
-int lockd_init_lv(struct cmd_context *cmd, struct volume_group *vg,
-		  const char *lv_name, struct id *lv_id, struct lvcreate_params *lp);
+int lockd_init_lv(struct cmd_context *cmd, struct volume_group *vg, struct logical_volume *lv,
+		  struct lvcreate_params *lp);
+int lockd_init_lv_args(struct cmd_context *cmd, struct volume_group *vg,
+		       struct logical_volume *lv, const char *lock_type, const char **lock_args);
 int lockd_free_lv(struct cmd_context *cmd, struct volume_group *vg,
 		  const char *lv_name, struct id *lv_id, const char *lock_args);
-
-int lockd_init_lv_args(struct cmd_context *cmd, struct volume_group *vg,
-		       const char *lv_name, struct id *lv_id, const char *lock_type, const char **lock_args);
 
 const char *lockd_running_lock_type(struct cmd_context *cmd);
 
 int handle_sanlock_lv(struct cmd_context *cmd, struct volume_group *vg);
+
+int lockd_lv_uses_lock(struct logical_volume *lv);
 
 #else /* LVMLOCKD_SUPPORT */
 
@@ -251,7 +252,13 @@ static inline int lockd_lv(struct cmd_context *cmd, struct logical_volume *lv,
 }
 
 static inline int lockd_init_lv(struct cmd_context *cmd, struct volume_group *vg,
-		  const char *lv_name, struct id *lv_id, struct lvcreate_params *lp)
+		  	struct logical_volume *lv, struct lvcreate_params *lp)
+{
+	return 0;
+}
+
+static inline int lockd_init_lv_args(struct cmd_context *cmd, struct volume_group *vg,
+		       struct logical_volume *lv, const char *lock_type, const char **lock_args)
 {
 	return 0;
 }
@@ -262,18 +269,17 @@ static inline int lockd_free_lv(struct cmd_context *cmd, struct volume_group *vg
 	return 0;
 }
 
-static inline int lockd_init_lv_args(struct cmd_context *cmd, struct volume_group *vg,
-		       const char *lv_name, struct id *lv_id, const char *lock_type, const char **lock_args)
-{
-	return 0;
-}
-
 static inline const char *lockd_running_lock_type(struct cmd_context *cmd)
 {
 	return NULL;
 }
 
 static inline int handle_sanlock_lv(struct cmd_context *cmd, struct volume_group *vg)
+{
+	return 0;
+}
+
+static inline int lockd_lv_uses_lock(struct logical_volume *lv)
 {
 	return 0;
 }

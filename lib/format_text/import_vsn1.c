@@ -579,11 +579,6 @@ static int _read_lvnames(struct format_instance *fid __attribute__((unused)),
 		return 0;
 	}
 
-	if (dm_config_get_str(lvn, "lock_type", &str)) {
-		if (!(lv->lock_type = dm_pool_strdup(mem, str)))
-			return_0;
-	}
-
 	if (dm_config_get_str(lvn, "lock_args", &str)) {
 		if (!(lv->lock_args = dm_pool_strdup(mem, str)))
 			return_0;
