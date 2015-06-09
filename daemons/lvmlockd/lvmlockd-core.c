@@ -1349,6 +1349,11 @@ static int res_update(struct lockspace *ls, struct resource *r,
 	return 0;
 }
 
+/*
+ * There is nothing to deallocate when freeing a dlm LV, the LV
+ * will simply be unlocked by rem_resource.
+ */
+
 static int free_lv(struct lockspace *ls, struct resource *r)
 {
 	if (ls->lm_type == LD_LM_SANLOCK)

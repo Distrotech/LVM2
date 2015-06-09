@@ -5841,8 +5841,7 @@ int lv_remove_single(struct cmd_context *cmd, struct logical_volume *lv,
 	backup(vg);
 
 	lockd_lv(cmd, lock_lv, "un", LDLV_PERSISTENT | LDLV_MODE_NOARG);
-	if (lv->lock_type)
-		lockd_free_lv(cmd, vg, lv->name, &lv->lvid.id[1], lv->lock_args);
+	lockd_free_lv(cmd, vg, lv->name, &lv->lvid.id[1], lv->lock_args);
 
 	if (!suppress_remove_message && visible)
 		log_print_unless_silent("Logical volume \"%s\" successfully removed", lv->name);
@@ -7227,23 +7226,12 @@ static struct logical_volume *_lv_create_an_lv(struct volume_group *vg,
 	}
 
 	/*
-	 * lockd_init_lv clears lp lock_type if this LV does not use its own lock.
-	 * TODO: use lockd_free_lv if lv_extend fails below.
+	 * The specific LV may not use a lock.  lockd_init_lv() sets
+	 * lv->lock_args to NULL if this LV does not use its own lock.
 	 */
-	if (lp->lock_type && !lockd_init_lv(vg->cmd, vg, lv->name, &lv->lvid.id[1], lp))
+
+	if (!lockd_init_lv(vg->cmd, vg, lv, lp))
 		return_NULL;
-
-	if (lp->lock_type && !(lv->lock_type = dm_pool_strdup(cmd->mem, lp->lock_type))) {
-		log_error("Failed to allocate lock_type");
-		lockd_free_lv(vg->cmd, vg, lp->lv_name, &lv->lvid.id[1], lp->lock_args);
-		return NULL;
-	}
-
-	if (lp->lock_args && !(lv->lock_args = dm_pool_strdup(cmd->mem, lp->lock_args))) {
-		log_error("Failed to allocate lock_args");
-		lockd_free_lv(vg->cmd, vg, lp->lv_name, &lv->lvid.id[1], lp->lock_args);
-		return NULL;
-	}
 
 	dm_list_splice(&lv->tags, &lp->tags);
 
@@ -7552,8 +7540,7 @@ deactivate_and_revert_new_lv:
 	}
 
 revert_new_lv:
-	if (lp->lock_type)
-		lockd_free_lv(vg->cmd, vg, lp->lv_name, &lv->lvid.id[1], lp->lock_args);
+	lockd_free_lv(vg->cmd, vg, lp->lv_name, &lv->lvid.id[1], lp->lock_args);
 
 	/* FIXME Better to revert to backup of metadata? */
 	if (!lv_remove(lv) || !vg_write(vg) || !vg_commit(vg))

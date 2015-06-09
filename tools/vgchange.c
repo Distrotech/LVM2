@@ -549,10 +549,8 @@ static int _vgchange_locktype(struct cmd_context *cmd,
 		vg->lock_type = "none";
 		vg->lock_args = NULL;
 
-		dm_list_iterate_items(lvl, &vg->lvs) {
-			lvl->lv->lock_type = "none";
+		dm_list_iterate_items(lvl, &vg->lvs)
 			lvl->lv->lock_args = NULL;
-		}
 
 		return 1;
 	}
@@ -676,23 +674,15 @@ static int _vgchange_locktype(struct cmd_context *cmd,
 			lv = lvl->lv;
 
 			/* Some LV types have no lock. */
-			if (!lv_is_visible(lv) ||
-			    lv_is_thin_volume(lv) ||
-			    lv_is_thin_pool_data(lv) ||
-			    lv_is_thin_pool_metadata(lv) ||
-			    lv_is_pool_metadata_spare(lv) ||
-			    lv_is_cache_pool(lv) ||
-			    lv_is_cache_pool_data(lv) ||
-			    lv_is_cache_pool_metadata(lv))
+			if (!lockd_lv_uses_lock(lv))
 				continue;
 
-			if (!lockd_init_lv_args(cmd, vg, lv->name, &lv->lvid.id[1], lock_type, &lock_args)) {
+			if (!lockd_init_lv_args(cmd, vg, lv, lock_type, &lock_args)) {
 				log_error("Failed to init %s lock args LV %s/%s",
 					  lock_type, vg->name, lv->name);
 				return 0;
 			}
 
-			lv->lock_type = dm_pool_strdup(cmd->mem, lock_type);
 			lv->lock_args = lock_args;
 		}
 
