@@ -1890,7 +1890,7 @@ static int _lockd_lv_thin(struct cmd_context *cmd, struct logical_volume *lv,
 
 /*
  * If the VG has no lock_type, then this function can return immediately.
- * The LV itself may have no lock (NULL lv->lock_type), but the lock request
+ * The LV itself may have no lock (NULL lv->lock_args), but the lock request
  * may be directed to another lock, e.g. the pool LV lock in _lockd_lv_thin.
  * If the lock request is not directed to another LV, and the LV has no
  * lock_type set, it means that the LV has no lock, and no locking is done
@@ -1920,7 +1920,10 @@ int lockd_lv(struct cmd_context *cmd, struct logical_volume *lv,
 	if (lv_is_thin_type(lv))
 		return _lockd_lv_thin(cmd, lv, def_mode, flags);
 
-	if (!is_lockd_type(lv->lock_type))
+	/*
+	 * An LV with NULL lock_args does not have a lock of its own.
+	 */
+	if (!lv->lock_args)
 		return 1;
 
 	/*
@@ -2008,8 +2011,8 @@ out:
 	return ret;
 }
 
-static int _free_lv_sanlock(struct cmd_context *cmd, struct volume_group *vg,
-			    const char *lv_name, struct id *lv_id, const char *lock_args)
+static int _free_lv(struct cmd_context *cmd, struct volume_group *vg,
+		    const char *lv_name, struct id *lv_id, const char *lock_args)
 {
 	char lv_uuid[64] __attribute__((aligned(8)));
 	daemon_reply reply;
@@ -2028,7 +2031,7 @@ static int _free_lv_sanlock(struct cmd_context *cmd, struct volume_group *vg,
 				"vg_name = %s", vg->name,
 				"lv_name = %s", lv_name,
 				"lv_uuid = %s", lv_uuid,
-				"vg_lock_type = %s", "sanlock",
+				"vg_lock_type = %s", vg->lock_type,
 				"vg_lock_args = %s", vg->lock_args,
 				"lv_lock_args = %s", lock_args ?: "none",
 				NULL);
@@ -2040,7 +2043,7 @@ static int _free_lv_sanlock(struct cmd_context *cmd, struct volume_group *vg,
 	}
 
 	if (!ret)
-		log_error("_free_lv_sanlock lvmlockd result %d", result);
+		log_error("_free_lv lvmlockd result %d", result);
 
 	daemon_reply_destroy(reply);
 
@@ -2048,38 +2051,35 @@ static int _free_lv_sanlock(struct cmd_context *cmd, struct volume_group *vg,
 }
 
 int lockd_init_lv_args(struct cmd_context *cmd, struct volume_group *vg,
-		       const char *lv_name, struct id *lv_id,
+		       struct logical_volume *lv,
 		       const char *lock_type, const char **lock_args)
 {
 	/* sanlock is the only lock type that sets per-LV lock_args. */
 	if (!strcmp(lock_type, "sanlock"))
-		return _init_lv_sanlock(cmd, vg, lv_name, lv_id, lock_args);
+		return _init_lv_sanlock(cmd, vg, lv->name, &lv->lvid.id[1], lock_args);
 	return 1;
 }
 
 /*
  * lvcreate
  *
- * lvcreate sets lp lock_type to the vg lock_type, so any lv
- * created in a lockd vg will inherit the lock_type of the vg.
- * In some cases, e.g. thin lvs, this function may decide
- * that the lv should not be given a lock, in which case it
- * sets lp lock_type to NULL, which will cause the lv to not
- * have a lock_type set in its metadata.  A lockd_lv() request
- * on an lv with no lock_type will do nothing (unless the lv
- * type causes the lock request to be directed to another lv
- * with a lock, e.g. to the thin pool LV for thin LVs.)
+ * An LV created in a lockd VG inherits the lock_type of the VG.  In some
+ * cases, e.g. thin LVs, this function may decide that the LV should not be
+ * given a lock, in which case it sets lp lock_args to NULL, which will cause
+ * the LV to not have lock_args set in its metadata.  A lockd_lv() request on
+ * an LV with no lock_args will do nothing (unless the LV type causes the lock
+ * request to be directed to another LV with a lock, e.g. to the thin pool LV
+ * for thin LVs.)
  *
  * Current limitations:
  * - cache-type LV's in a lockd VG must be created with lvconvert.
  * - creating a thin pool and thin lv in one command is not allowed.
  */
 
-int lockd_init_lv(struct cmd_context *cmd, struct volume_group *vg,
-		  const char *lv_name, struct id *lv_id,
+int lockd_init_lv(struct cmd_context *cmd, struct volume_group *vg, struct logical_volume *lv,
 		  struct lvcreate_params *lp)
 {
-	int lock_type_num = lock_type_to_num(lp->lock_type);
+	int lock_type_num = lock_type_to_num(vg->lock_type);
 
 	if (cmd->lock_lv_mode && !strcmp(cmd->lock_lv_mode, "na"))
 		return 1;
@@ -2096,8 +2096,12 @@ int lockd_init_lv(struct cmd_context *cmd, struct volume_group *vg,
 		return 0;
 	}
 
-	if (seg_is_cache(lp) || seg_is_cache_pool(lp)) {
-		log_error("Use lvconvert for cache with lock type %s", lp->lock_type);
+	if (!lp->needs_lockd_init) {
+		/* needs_lock_init is set for LVs that need a lockd lock. */
+		return 1;
+
+	} else if (seg_is_cache(lp) || seg_is_cache_pool(lp)) {
+		log_error("Use lvconvert for cache with lock type %s", vg->lock_type);
 		return 0;
 
 	} else if (!seg_is_thin_volume(lp) && lp->snapshot) {
@@ -2117,7 +2121,7 @@ int lockd_init_lv(struct cmd_context *cmd, struct volume_group *vg,
 			log_error("Failed to lock origin LV %s/%s", vg->name, lp->origin_name);
 			return 0;
 		}
-		lp->lock_type = NULL;
+		lv->lock_args = NULL;
 		return 1;
 
 	} else if (seg_is_thin(lp)) {
@@ -2128,7 +2132,7 @@ int lockd_init_lv(struct cmd_context *cmd, struct volume_group *vg,
 			/*
 			 * Creating a new thin lv or snapshot.  These lvs do not get
 			 * their own lock but use the pool lock.  If an lv does not
-			 * use its own lock, its lock_type is set to NULL.
+			 * use its own lock, its lock_args is set to NULL.
 			 */
 
 			if (!(lvl = find_lv_in_vg(vg, lp->pool_name))) {
@@ -2139,20 +2143,16 @@ int lockd_init_lv(struct cmd_context *cmd, struct volume_group *vg,
 				log_error("Failed to lock thin pool %s/%s", vg->name, lp->pool_name);
 				return 0;
 			}
-			lp->lock_type = NULL;
+			lv->lock_args = NULL;
 			return 1;
 
 		} else if (seg_is_thin_volume(lp) && lp->create_pool) {
 			/*
 			 * Creating a thin pool and a thin lv in it.  We could
-			 * probably make this work by setting lp->lock_type and
-			 * lp->lock_args to NULL in lv_create_single after
-			 * creating the pool lv.  Then we would just set
-			 * lv_name = lp->pool_name here.  Stop it at least for now
-			 * to try to slow down some of the unnecessary complexity.
+			 * probably make this work.
 			 */
-			log_error("Create thin pool and thin lv separately with lock type %s",
-				  lp->lock_type);
+			log_error("Create thin pool and thin LV separately with lock type %s",
+				  vg->lock_type);
 			return 0;
 
 		} else if (!seg_is_thin_volume(lp) && lp->create_pool) {
@@ -2170,6 +2170,8 @@ int lockd_init_lv(struct cmd_context *cmd, struct volume_group *vg,
 	}
 
 	/*
+	 * The LV gets its own lock, so set lock_args to non-NULL.
+	 *
 	 * lockd_init_lv_args() will be called during vg_write()
 	 * to complete the sanlock LV lock initialization, where
 	 * actual space on disk is allocated.  Waiting to do this
@@ -2182,14 +2184,15 @@ int lockd_init_lv(struct cmd_context *cmd, struct volume_group *vg,
 	 * lvcreate:
 	 *
 	 * return lockd_init_lv_args(cmd, vg, lv_name_lock, lv_id,
-	 * 			     lp->lock_type, &lp->lock_args);
+	 * 			     vg->lock_type, &lv->lock_args);
 	 */
 
-	if (!strcmp(lp->lock_type, "sanlock"))
-		lp->lock_args = "pending";
+	if (!strcmp(vg->lock_type, "sanlock"))
+		lv->lock_args = "pending";
+	else if (!strcmp(vg->lock_type, "dlm"))
+		lv->lock_args = "dlm";
 
 	return 1;
-
 }
 
 /* lvremove */
@@ -2203,10 +2206,12 @@ int lockd_free_lv(struct cmd_context *cmd, struct volume_group *vg,
 	switch (lock_type_to_num(vg->lock_type)) {
 	case LOCK_TYPE_NONE:
 	case LOCK_TYPE_CLVM:
-	case LOCK_TYPE_DLM:
 		return 1;
+	case LOCK_TYPE_DLM:
 	case LOCK_TYPE_SANLOCK:
-		return _free_lv_sanlock(cmd, vg, lv_name, lv_id, lock_args);
+		if (!lock_args)
+			return 1;
+		return _free_lv(cmd, vg, lv_name, lv_id, lock_args);
 	default:
 		log_error("lockd_free_lv: unknown lock_type.");
 		return 0;
@@ -2380,5 +2385,22 @@ out:
 	daemon_reply_destroy(reply);
 
 	return lock_type;
+}
+
+/* Some LV types have no lock. */
+
+int lockd_lv_uses_lock(struct logical_volume *lv)
+{
+	if (!lv_is_visible(lv) ||
+	    lv_is_thin_volume(lv) ||
+	    lv_is_thin_pool_data(lv) ||
+	    lv_is_thin_pool_metadata(lv) ||
+	    lv_is_pool_metadata_spare(lv) ||
+	    lv_is_cache_pool(lv) ||
+	    lv_is_cache_pool_data(lv) ||
+	    lv_is_cache_pool_metadata(lv) ||
+	    lv_is_lockd_sanlock_lv(lv))
+		return 0;
+	return 1;
 }
 

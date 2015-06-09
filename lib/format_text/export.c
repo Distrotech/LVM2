@@ -660,11 +660,8 @@ static int _print_lv(struct formatter *f, struct logical_volume *lv)
 		      lv->timestamp);
 	}
 
-	if (lv->lock_type) {
-		outf(f, "lock_type = \"%s\"", lv->lock_type);
-		if (lv->lock_args)
-			outf(f, "lock_args = \"%s\"", lv->lock_args);
-	}
+	if (lv->lock_args)
+		outf(f, "lock_args = \"%s\"", lv->lock_args);
 
 	if (lv->alloc != ALLOC_INHERIT)
 		outf(f, "allocation_policy = \"%s\"",

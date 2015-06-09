@@ -369,16 +369,6 @@ static int _lvprofile_disp(struct dm_report *rh, struct dm_pool *mem,
 	return _field_set_value(field, "", NULL);
 }
 
-static int _lvlocktype_disp(struct dm_report *rh, struct dm_pool *mem,
-			    struct dm_report_field *field,
-			    const void *data, void *private)
-{
-	const struct logical_volume *lv = (const struct logical_volume *) data;
-	const char *repstr = lv->lock_type ? lv->lock_type : "";
-
-	return _string_disp(rh, mem, field, &repstr, private);
-}
-
 static int _lvlockargs_disp(struct dm_report *rh, struct dm_pool *mem,
 			    struct dm_report_field *field,
 			    const void *data, void *private)

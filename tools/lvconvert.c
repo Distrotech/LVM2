@@ -2648,15 +2648,14 @@ static int _lvconvert_pool(struct cmd_context *cmd,
 	struct logical_volume *data_lv;
 	struct logical_volume *metadata_lv = NULL;
 	struct logical_volume *pool_metadata_lv;
-	char *free_data_name = NULL;
-	char *free_meta_name = NULL;
-	struct id free_data_id;
-	struct id free_meta_id;
+	char *lockd_data_args = NULL;
+	char *lockd_meta_args = NULL;
+	char *lockd_data_name = NULL;
+	char *lockd_meta_name = NULL;
+	struct id lockd_data_id;
+	struct id lockd_meta_id;
 	char metadata_name[NAME_LEN], data_name[NAME_LEN];
 	int activate_pool;
-
-	memset(&free_data_id, 0, sizeof(free_data_id));
-	memset(&free_meta_id, 0, sizeof(free_meta_id));
 
 	if (lp->pool_data_name) {
 		if ((lp->thin || lp->cache) &&
@@ -2672,9 +2671,10 @@ static int _lvconvert_pool(struct cmd_context *cmd,
 	}
 
 	/* An existing LV needs to have its lock freed once it becomes a data LV. */
-	if (!lv_is_pool(pool_lv)) {
-		free_data_name = dm_pool_strdup(cmd->mem, pool_lv->name);
-		memcpy(&free_data_id, &pool_lv->lvid.id[1], sizeof(struct id));
+	if (is_lockd_type(vg->lock_type) && !lv_is_pool(pool_lv) && pool_lv->lock_args) {
+		lockd_data_args = dm_pool_strdup(cmd->mem, pool_lv->lock_args);
+		lockd_data_name = dm_pool_strdup(cmd->mem, pool_lv->name);
+		memcpy(&lockd_data_id, &pool_lv->lvid.id[1], sizeof(struct id));
 	}
 
 	if (!lv_is_visible(pool_lv)) {
@@ -2733,8 +2733,11 @@ static int _lvconvert_pool(struct cmd_context *cmd,
 		metadata_lv = lp->pool_metadata_lv;
 
 		/* An existing LV needs to have its lock freed once it becomes a meta LV. */
-		free_meta_name = dm_pool_strdup(cmd->mem, metadata_lv->name);
-		memcpy(&free_meta_id, &metadata_lv->lvid.id[1], sizeof(struct id));
+		if (is_lockd_type(vg->lock_type) && metadata_lv->lock_args) {
+			lockd_meta_args = dm_pool_strdup(cmd->mem, metadata_lv->lock_args);
+			lockd_meta_name = dm_pool_strdup(cmd->mem, metadata_lv->name);
+			memcpy(&lockd_meta_id, &metadata_lv->lvid.id[1], sizeof(struct id));
+		}
 
 		if (metadata_lv == pool_lv) {
 			log_error("Can't use same LV for pool data and metadata LV %s.",
@@ -3005,19 +3008,16 @@ static int _lvconvert_pool(struct cmd_context *cmd,
 	 */
 	if (is_lockd_type(vg->lock_type)) {
 		if (segtype_is_cache_pool(lp->segtype)) {
-			data_lv->lock_type = NULL;
 			data_lv->lock_args = NULL;
-			metadata_lv->lock_type = NULL;
 			metadata_lv->lock_args = NULL;
 		} else {
-			data_lv->lock_type = NULL;
 			data_lv->lock_args = NULL;
-			metadata_lv->lock_type = NULL;
 			metadata_lv->lock_args = NULL;
 
-			pool_lv->lock_type = dm_pool_strdup(cmd->mem, vg->lock_type);
-			if (!strcmp(pool_lv->lock_type, "sanlock"))
+			if (!strcmp(vg->lock_type, "sanlock"))
 				pool_lv->lock_args = "pending";
+			else if (!strcmp(vg->lock_type, "dlm"))
+				pool_lv->lock_args = "dlm";
 			/* The lock_args will be set in vg_write(). */
 		}
 	}
@@ -3088,16 +3088,16 @@ out:
 	 * Unlock and free the locks from existing LVs that became pool data
 	 * and meta LVs.
 	 */
-	if (free_data_name) {
-		if (!lockd_lv_name(cmd, vg, free_data_name, &free_data_id, NULL, "un", LDLV_PERSISTENT))
-			log_error("Failed to unlock pool data LV %s/%s", vg->name, free_data_name);
-		lockd_free_lv(cmd, vg, free_data_name, &free_data_id, NULL);
+	if (lockd_data_name) {
+		if (!lockd_lv_name(cmd, vg, lockd_data_name, &lockd_data_id, lockd_data_args, "un", LDLV_PERSISTENT))
+			log_error("Failed to unlock pool data LV %s/%s", vg->name, lockd_data_name);
+		lockd_free_lv(cmd, vg, lockd_data_name, &lockd_data_id, lockd_data_args);
 	}
 
-	if (free_meta_name) {
-		if (!lockd_lv_name(cmd, vg, free_meta_name, &free_meta_id, NULL, "un", LDLV_PERSISTENT))
-			log_error("Failed to unlock pool metadata LV %s/%s", vg->name, free_meta_name);
-		lockd_free_lv(cmd, vg, free_meta_name, &free_meta_id, NULL);
+	if (lockd_meta_name) {
+		if (!lockd_lv_name(cmd, vg, lockd_meta_name, &lockd_meta_id, lockd_meta_args, "un", LDLV_PERSISTENT))
+			log_error("Failed to unlock pool metadata LV %s/%s", vg->name, lockd_meta_name);
+		lockd_free_lv(cmd, vg, lockd_meta_name, &lockd_meta_id, lockd_meta_args);
 	}
 
 	return r;

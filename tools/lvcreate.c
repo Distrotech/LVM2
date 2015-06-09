@@ -1528,8 +1528,8 @@ int lvcreate(struct cmd_context *cmd, int argc, char **argv)
 			    lp.snapshot ? " as snapshot of " : "",
 			    lp.snapshot ? lp.origin_name : "", lp.segtype->name);
 
-	if (vg->lock_type && !(lp.lock_type = dm_pool_strdup(cmd->mem, vg->lock_type)))
-		goto_out;
+	if (is_lockd_type(vg->lock_type))
+		lp.needs_lockd_init = 1;
 
 	if (!lv_create_single(vg, &lp))
 		goto_out;
