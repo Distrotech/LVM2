@@ -352,8 +352,6 @@ static int _create_sanlock_lv(struct cmd_context *cmd, struct volume_group *vg,
 		return 0;
 	}
 
-	lv_set_hidden(lv);
-	lv->status |= LOCKD_SANLOCK_LV;
 	vg->sanlock_lv = lv;
 
 	return 1;
@@ -511,16 +509,15 @@ static int _init_vg_dlm(struct cmd_context *cmd, struct volume_group *vg)
 
 	switch (result) {
 	case 0:
-		log_print_unless_silent("VG %s initialized %s lockspace", vg->name, vg->lock_type);
 		break;
 	case -ELOCKD:
 		log_error("VG %s init failed: lvmlockd not available", vg->name);
 		break;
 	case -EARGS:
-		log_error("VG %s init failed: invalid parameters for %s", vg->name, vg->lock_type);
+		log_error("VG %s init failed: invalid parameters for dlm", vg->name);
 		break;
 	case -EMANAGER:
-		log_error("VG %s init failed: lock manager %s is not running", vg->name, vg->lock_type);
+		log_error("VG %s init failed: lock manager dlm is not running", vg->name);
 		break;
 	default:
 		log_error("VG %s init failed: %d", vg->name, result);
@@ -541,6 +538,7 @@ static int _init_vg_dlm(struct cmd_context *cmd, struct volume_group *vg)
 		goto out;
 	}
 
+	vg->lock_type = "dlm";
 	vg->lock_args = vg_lock_args;
 
 	if (!vg_write(vg) || !vg_commit(vg)) {
@@ -579,6 +577,12 @@ static int _init_vg_sanlock(struct cmd_context *cmd, struct volume_group *vg)
 	if (!(extend_mb = find_config_tree_int(cmd, global_sanlock_lv_extend_CFG, NULL)))
 		extend_mb = DEFAULT_SANLOCK_LV_EXTEND_MB;
 
+	/*
+	 * Creating the sanlock LV writes the VG containing the new lvmlock
+	 * LV, then activates the lvmlock LV.  The lvmlock LV must be active
+	 * before we ask lvmlockd to initialize the VG because sanlock needs
+	 * to initialize leases on the lvmlock LV.
+	 */
 	if (!_create_sanlock_lv(cmd, vg, LOCKD_SANLOCK_LV_NAME, extend_mb)) {
 		log_error("Failed to create internal lv.");
 		return 0;
@@ -607,16 +611,15 @@ static int _init_vg_sanlock(struct cmd_context *cmd, struct volume_group *vg)
 
 	switch (result) {
 	case 0:
-		log_print_unless_silent("VG %s initialized %s lockspace", vg->name, vg->lock_type);
 		break;
 	case -ELOCKD:
 		log_error("VG %s init failed: lvmlockd not available", vg->name);
 		break;
 	case -EARGS:
-		log_error("VG %s init failed: invalid parameters for %s", vg->name, vg->lock_type);
+		log_error("VG %s init failed: invalid parameters for sanlock", vg->name);
 		break;
 	case -EMANAGER:
-		log_error("VG %s init failed: lock manager %s is not running", vg->name, vg->lock_type);
+		log_error("VG %s init failed: lock manager sanlock is not running", vg->name);
 		break;
 	case -EMSGSIZE:
 		log_error("VG %s init failed: no disk space for leases", vg->name);
@@ -640,6 +643,10 @@ static int _init_vg_sanlock(struct cmd_context *cmd, struct volume_group *vg)
 		goto out;
 	}
 
+	lv_set_hidden(vg->sanlock_lv);
+	vg->sanlock_lv->status |= LOCKD_SANLOCK_LV;
+
+	vg->lock_type = "sanlock";
 	vg->lock_args = vg_lock_args;
 
 	if (!vg_write(vg) || !vg_commit(vg)) {
@@ -759,9 +766,10 @@ static int _free_vg_sanlock(struct cmd_context *cmd, struct volume_group *vg)
 
 /* vgcreate */
 
-int lockd_init_vg(struct cmd_context *cmd, struct volume_group *vg)
-{       
-	switch (lock_type_to_num(vg->lock_type)) {
+int lockd_init_vg(struct cmd_context *cmd, struct volume_group *vg,
+		  const char *lock_type)
+{
+	switch (lock_type_to_num(lock_type)) {
 	case LOCK_TYPE_NONE:
 	case LOCK_TYPE_CLVM:
 		return 1;
