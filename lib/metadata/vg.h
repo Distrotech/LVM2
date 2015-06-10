@@ -49,6 +49,7 @@ struct volume_group {
 	struct dm_list *cmd_vgs;/* List of wanted/locked and opened VGs */
 	uint32_t cmd_missing_vgs;/* Flag marks missing VG */
 	uint32_t seqno;		/* Metadata sequence number */
+	unsigned skip_validate_lock_args : 1;
 
 	/*
 	 * The parsed on-disk copy of this VG; is NULL if this is the on-disk

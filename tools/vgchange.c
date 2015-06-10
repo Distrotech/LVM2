@@ -519,7 +519,6 @@ static int _vgchange_locktype(struct cmd_context *cmd,
 			      struct volume_group *vg)
 {
 	const char *lock_type = arg_str_value(cmd, locktype_ARG, NULL);
-	const char *lock_args = NULL;
 	struct lv_list *lvl;
 	struct logical_volume *lv;
 
@@ -553,6 +552,13 @@ static int _vgchange_locktype(struct cmd_context *cmd,
 			lvl->lv->lock_args = NULL;
 
 		return 1;
+	}
+
+	if (!vg->lock_type) {
+		if (vg_is_clustered(vg))
+			vg->lock_type = "clvm";
+		else
+			vg->lock_type = "none";
 	}
 
 	if (!strcmp(vg->lock_type, lock_type)) {
@@ -654,40 +660,63 @@ static int _vgchange_locktype(struct cmd_context *cmd,
 		return 1;
 	}
 
-	/*
-	 * ... to lockd type.  These are the same steps vgcreate uses.
-	 */
+	/* ... to lockd type */
 	if (is_lockd_type(lock_type)) {
-		if (!vg_set_lock_type(vg, lock_type))
-			return 0;
+		/*
+		 * For lock_type dlm, lockd_init_vg() will do a single
+		 * vg_write() that sets lock_type, sets lock_args, clears
+		 * system_id, and sets all LV lock_args to dlm.
+		 */
+		if (!strcmp(lock_type, "dlm")) {
+			dm_list_iterate_items(lvl, &vg->lvs) {
+				lv = lvl->lv;
+				if (lockd_lv_uses_lock(lv))
+					lv->lock_args = "dlm";
+			}
+		}
 
-		if (!lockd_init_vg(cmd, vg)) {
+		/*
+		 * See below.  We cannot set valid LV lock_args until stage 1
+		 * of the change is done, so we need to skip the validation of
+		 * the lock_args during stage 1.
+		 */
+		if (!strcmp(lock_type, "sanlock"))
+			vg->skip_validate_lock_args = 1;
+
+		vg->system_id = NULL;
+
+		if (!lockd_init_vg(cmd, vg, lock_type)) {
 			log_error("Failed to initialize lock args for lock type %s", lock_type);
 			return 0;
 		}
 
-		vg->system_id = NULL;
-
-		/* These are the same steps lvcreate uses within a lockd type VG. */
-
-		dm_list_iterate_items(lvl, &vg->lvs) {
-			lv = lvl->lv;
-
-			/* Some LV types have no lock. */
-			if (!lockd_lv_uses_lock(lv))
-				continue;
-
-			if (!lockd_init_lv_args(cmd, vg, lv, lock_type, &lock_args)) {
-				log_error("Failed to init %s lock args LV %s/%s",
-					  lock_type, vg->name, lv->name);
-				return 0;
+		/*
+		 * For lock_type sanlock, there must be multiple steps
+		 * because the VG needs an active lvmlock LV before
+		 * LV lock areas can be allocated, which must be done
+		 * before LV lock_args are written.  So, the LV lock_args
+		 * remain unset during the first stage of the conversion.
+		 *
+		 * Stage 1:
+		 * lockd_init_vg() creates and activates the lvmlock LV,
+		 * then sets lock_type, sets lock_args, and clears system_id.
+		 *
+		 * Stage 2:
+		 * We get here, and can now set LV lock_args.  This uses
+		 * the standard code path for allocating LV locks in
+		 * vg_write() by setting LV lock_args to "pending",
+		 * which tells vg_write() to call lockd_init_lv()
+		 * and sets the lv->lock_args value before writing the VG.
+		 */
+		if (!strcmp(lock_type, "sanlock")) {
+			dm_list_iterate_items(lvl, &vg->lvs) {
+				lv = lvl->lv;
+				if (lockd_lv_uses_lock(lv))
+					lv->lock_args = "pending";
 			}
 
-			lv->lock_args = lock_args;
+			vg->skip_validate_lock_args = 0;
 		}
-
-		if (!lockd_start_vg(cmd, vg))
-			log_error("Failed to start locking for VG %s", vg->name);
 
 		return 1;
 	}
