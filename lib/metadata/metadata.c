@@ -2439,6 +2439,7 @@ struct validate_hash {
 	struct dm_hash_table *lvname;
 	struct dm_hash_table *lvid;
 	struct dm_hash_table *pvid;
+	struct dm_hash_table *lv_lock_args;
 };
 
 /*
@@ -2797,6 +2798,87 @@ int vg_validate(struct volume_group *vg)
 
 	if (vg_max_lv_reached(vg))
 		stack;
+
+	if (!(vhash.lv_lock_args = dm_hash_create(lv_count))) {
+		log_error("Failed to allocate lv_lock_args hash");
+		r = 0;
+		goto out;
+	}
+
+	if (is_lockd_type(vg->lock_type)) {
+		if (!vg->lock_args) {
+			log_error(INTERNAL_ERROR "VG %s with lock_type %s without lock_args",
+				  vg->name, vg->lock_type);
+			r = 0;
+		}
+
+		if (vg_is_clustered(vg)) {
+			log_error(INTERNAL_ERROR "VG %s with lock_type %s is clustered",
+				  vg->name, vg->lock_type);
+			r = 0;
+		}
+
+		if (vg->system_id && vg->system_id[0]) {
+			log_error(INTERNAL_ERROR "VG %s with lock_type %s has system_id %s",
+				  vg->name, vg->lock_type, vg->system_id);
+			r = 0;
+		}
+
+		if (strcmp(vg->lock_type, "sanlock") && strcmp(vg->lock_type, "dlm")) {
+			log_error(INTERNAL_ERROR "VG %s has unknown lock_type %s",
+				  vg->name, vg->lock_type);
+			r = 0;
+		}
+	} else {
+		if (vg->lock_args) {
+			log_error(INTERNAL_ERROR "VG %s has lock_args %s without lock_type",
+				  vg->name, vg->lock_args);
+			r = 0;
+		}
+	}
+
+	dm_list_iterate_items(lvl, &vg->lvs) {
+		if (is_lockd_type(vg->lock_type)) {
+			if (lockd_lv_uses_lock(lvl->lv)) {
+				if (vg->skip_validate_lock_args) {
+					continue;
+				} else if (!lvl->lv->lock_args) {
+					log_error(INTERNAL_ERROR "LV %s/%s missing lock_args",
+						  vg->name, lvl->lv->name);
+					r = 0;
+				} else if (!strcmp(vg->lock_type, "sanlock")) {
+					if (dm_hash_lookup(vhash.lv_lock_args, lvl->lv->lock_args)) {
+						log_error(INTERNAL_ERROR "LV %s/%s has duplicate lock_args %s.",
+							  vg->name, lvl->lv->name, lvl->lv->lock_args);
+						r = 0;
+					}
+
+					if (!dm_hash_insert(vhash.lv_lock_args, lvl->lv->lock_args, lvl)) {
+						log_error("Failed to hash lvname.");
+						r = 0;
+					}
+
+				} else if (!strcmp(vg->lock_type, "dlm") && strcmp(lvl->lv->lock_args, "dlm")) {
+					log_error(INTERNAL_ERROR "LV %s/%s bad dlm lock_args %s",
+						  vg->name, lvl->lv->name, lvl->lv->lock_args);
+					r = 0;
+				}
+			} else {
+				if (lvl->lv->lock_args) {
+					log_error(INTERNAL_ERROR "LV %s/%s shouldn't have lock_args",
+						  vg->name, lvl->lv->name);
+					r = 0;
+				}
+			}
+		} else {
+			if (lvl->lv->lock_args) {
+				log_error(INTERNAL_ERROR "LV %s/%s with no lock_type has lock_args %s",
+					  vg->name, lvl->lv->name, lvl->lv->lock_args);
+				r = 0;
+			}
+		}
+	}
+
 out:
 	if (vhash.lvid)
 		dm_hash_destroy(vhash.lvid);
@@ -2804,6 +2886,8 @@ out:
 		dm_hash_destroy(vhash.lvname);
 	if (vhash.pvid)
 		dm_hash_destroy(vhash.pvid);
+	if (vhash.lv_lock_args)
+		dm_hash_destroy(vhash.lv_lock_args);
 
 	return r;
 }
