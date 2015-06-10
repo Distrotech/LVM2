@@ -88,6 +88,7 @@ fi
 %endif
 %if %{have_service lvmlockd}
  %{_sbindir}/lvmlockd
+ %{_sbindir}/lvmlockctl
 %endif
 %if %{have_with cache}
   %{_mandir}/man7/lvmcache.7.gz
