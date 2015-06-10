@@ -2134,6 +2134,7 @@ static int _add_lv_to_dtree(struct dev_manager *dm, struct dm_tree *dtree,
 			    !_add_lv_to_dtree(dm, dtree, seg_lv(seg, s), 0))
 				return_0;
 			if (seg_is_raid(seg) &&
+			    seg->meta_areas && seg_metalv(seg, s) &&
 			    !_add_lv_to_dtree(dm, dtree, seg_metalv(seg, s), 0))
 				return_0;
 		}
@@ -2303,9 +2304,15 @@ int add_areas_line(struct dev_manager *dm, struct lv_segment *seg,
 					return_0;
 				continue;
 			}
-			if (!(dlid = build_dm_uuid(dm->mem, seg_metalv(seg, s), NULL)))
-				return_0;
-			if (!dm_tree_node_add_target_area(node, NULL, dlid, extent_size * seg_metale(seg, s)))
+
+			if (seg->meta_areas && seg_metalv(seg, s)) {
+				if (!(dlid = build_dm_uuid(dm->mem, seg_metalv(seg, s), NULL)))
+					return_0;
+				if (!dm_tree_node_add_target_area(node, NULL, dlid, extent_size * seg_metale(seg, s)))
+					return_0;
+
+			/* One for metadata area */
+			} else if (!dm_tree_node_add_null_area(node, 0))
 				return_0;
 
 			if (!(dlid = build_dm_uuid(dm->mem, seg_lv(seg, s), NULL)))
@@ -2632,6 +2639,7 @@ static int _add_segment_to_dtree(struct dev_manager *dm,
 					  laopts, NULL))
 			return_0;
 		if (seg_is_raid(seg) &&
+		    seg->meta_areas && seg_metalv(seg, s) &&
 		    !_add_new_lv_to_dtree(dm, dtree, seg_metalv(seg, s),
 					  laopts, NULL))
 			return_0;

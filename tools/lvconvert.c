@@ -239,6 +239,7 @@ static int _check_conversion_type(struct cmd_context *cmd, const char *type_str)
 
 	/* FIXME: Check thin-pool and thin more thoroughly! */
 	if (!strcmp(type_str, "snapshot") ||
+	    !strcmp(type_str, "striped") ||
 	    !strncmp(type_str, "raid", 4) ||
 	    !strcmp(type_str, "cache-pool") || !strcmp(type_str, "cache") ||
 	    !strcmp(type_str, "thin-pool") || !strcmp(type_str, "thin"))
@@ -376,6 +377,12 @@ static int _read_params(struct cmd_context *cmd, int argc, char **argv,
 	const char *type_str = arg_str_value(cmd, type_ARG, "");
 
 	if (!_check_conversion_type(cmd, type_str))
+		return_0;
+
+	if (arg_count(cmd, type_ARG) &&
+	    !(lp->segtype = get_segtype_from_string(cmd, arg_str_value(cmd, type_ARG, NULL))))
+		return_0;
+	if (!get_stripe_params(cmd, &lp->stripes, &lp->stripe_size))
 		return_0;
 
 	if (arg_count(cmd, repair_ARG) &&
@@ -1160,7 +1167,8 @@ static int _lvconvert_mirrors_parse_params(struct cmd_context *cmd,
 	*new_mimage_count = lp->mirrors;
 
 	/* Too many mimages? */
-	if (lp->mirrors > DEFAULT_MIRROR_MAX_IMAGES) {
+	if ((!arg_count(cmd, type_ARG) || strcmp(arg_str_value(cmd, type_ARG, NULL), SEG_TYPE_NAME_RAID1)) &&
+	    lp->mirrors > DEFAULT_MIRROR_MAX_IMAGES) {
 		log_error("Only up to %d images in mirror supported currently.",
 			  DEFAULT_MIRROR_MAX_IMAGES);
 		return 0;
@@ -1254,7 +1262,7 @@ static int _lvconvert_mirrors_aux(struct cmd_context *cmd,
 	if ((lp->mirrors == 1) && !lv_is_mirrored(lv)) {
 		log_warn("Logical volume %s is already not mirrored.",
 			 lv->name);
-		return 1;
+		return 2; /* Indicate fact it's already converted to caller */
 	}
 
 	region_size = adjusted_mirror_region_size(lv->vg->extent_size,
@@ -1577,7 +1585,7 @@ static int _lvconvert_mirrors(struct cmd_context *cmd,
 			      struct logical_volume *lv,
 			      struct lvconvert_params *lp)
 {
-	int repair = arg_count(cmd, repair_ARG);
+	int r, repair = arg_count(cmd, repair_ARG);
 	uint32_t old_mimage_count;
 	uint32_t old_log_count;
 	uint32_t new_mimage_count;
@@ -1629,26 +1637,14 @@ static int _lvconvert_mirrors(struct cmd_context *cmd,
 	if (repair)
 		return _lvconvert_mirrors_repair(cmd, lv, lp);
 
-	if (!_lvconvert_mirrors_aux(cmd, lv, lp, NULL,
-				    new_mimage_count, new_log_count))
+	if (!(r = _lvconvert_mirrors_aux(cmd, lv, lp, NULL,
+					 new_mimage_count, new_log_count)))
 		return 0;
 
-	if (!lp->need_polling)
+	if (r != 2 && !lp->need_polling)
 		log_print_unless_silent("Logical volume %s converted.", lv->name);
 
 	backup(lv->vg);
-	return 1;
-}
-
-static int _is_valid_raid_conversion(const struct segment_type *from_segtype,
-				    const struct segment_type *to_segtype)
-{
-	if (from_segtype == to_segtype)
-		return 1;
-
-	if (!segtype_is_raid(from_segtype) && !segtype_is_raid(to_segtype))
-		return_0;  /* Not converting to or from RAID? */
-
 	return 1;
 }
 
@@ -1701,13 +1697,6 @@ static int _lvconvert_raid(struct logical_volume *lv, struct lvconvert_params *l
 	if (!_lvconvert_validate_thin(lv, lp))
 		return_0;
 
-	if (!_is_valid_raid_conversion(seg->segtype, lp->segtype)) {
-		log_error("Unable to convert %s/%s from %s to %s",
-			  lv->vg->name, lv->name,
-			  lvseg_name(seg), lp->segtype->name);
-		return 0;
-	}
-
 	/* Change number of RAID1 images */
 	if (arg_count(cmd, mirrors_ARG) || arg_count(cmd, splitmirrors_ARG)) {
 		image_count = lv_raid_image_count(lv);
@@ -1739,8 +1728,21 @@ static int _lvconvert_raid(struct logical_volume *lv, struct lvconvert_params *l
 	if (arg_count(cmd, mirrors_ARG))
 		return lv_raid_change_image_count(lv, image_count, lp->pvh);
 
-	if (arg_count(cmd, type_ARG))
-		return lv_raid_reshape(lv, lp->segtype);
+	if ((seg_is_linear(seg) || seg_is_striped(seg) || seg_is_mirrored(seg) || lv_is_raid(lv)) &&
+	    (arg_count(cmd, type_ARG) ||
+	     image_count ||
+	     arg_count(cmd, stripes_long_ARG) ||
+	     arg_count(cmd, stripesize_ARG))) {
+		unsigned stripe_size = arg_count(cmd, stripesize_ARG) ? lp->stripe_size  : 0;
+
+		if (segtype_is_any_raid0(lp->segtype) &&
+		    !(lp->target_attr & RAID_FEATURE_RAID0)) {
+			log_error("RAID module does not support RAID0.");
+			return 0;
+		}
+
+		return lv_raid_convert(lv, lp->segtype, lp->yes, lp->force, image_count, lp->stripes, stripe_size, lp->pvh);
+	}
 
 	if (arg_count(cmd, replace_ARG))
 		return lv_raid_replace(lv, lp->replace_pvh, lp->pvh);
@@ -1754,7 +1756,9 @@ static int _lvconvert_raid(struct logical_volume *lv, struct lvconvert_params *l
 			return 0;
 		}
 
-		if (!lv_raid_percent(lv, &sync_percent)) {
+		if (!seg_is_striped(seg) &&
+		    !seg_is_any_raid0(seg) &&
+		    !lv_raid_percent(lv, &sync_percent)) {
 			log_error("Unable to determine sync status of %s/%s.",
 				  lv->vg->name, lv->name);
 			return 0;
