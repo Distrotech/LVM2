@@ -78,7 +78,6 @@ int vgcreate(struct cmd_context *cmd, int argc, char **argv)
 	    !vg_set_max_pv(vg, vp_new.max_pv) ||
 	    !vg_set_alloc_policy(vg, vp_new.alloc) ||
 	    !vg_set_clustered(vg, vp_new.clustered) ||
-	    !vg_set_lock_type(vg, vp_new.lock_type) ||
 	    !vg_set_system_id(vg, vp_new.system_id) ||
 	    !vg_set_mda_copies(vg, vp_new.vgmetadatacopies))
 		goto bad_orphan;
@@ -127,7 +126,12 @@ int vgcreate(struct cmd_context *cmd, int argc, char **argv)
 	if (!vg_write(vg) || !vg_commit(vg))
 		goto_bad;
 
-	if (!lockd_init_vg(cmd, vg)) {
+	/*
+	 * The VG is initially written without lock_type set, i.e. it starts as
+	 * a local VG.  lockd_init_vg() then writes the VG a second time with
+	 * both lock_type and lock_args set.
+	 */
+	if (!lockd_init_vg(cmd, vg, vp_new.lock_type)) {
 		log_error("Failed to initialize lock args for lock type %s",
 			  vp_new.lock_type);
 		vg_remove_pvs(vg);
