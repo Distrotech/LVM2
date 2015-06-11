@@ -153,7 +153,7 @@ static const char *_lv_type_names[] = {
 	[LV_TYPE_PRIVATE] =				"private",
 	[LV_TYPE_LINEAR] =				"linear",
 	[LV_TYPE_STRIPED] =				"striped",
-	[LV_TYPE_MIRROR] =				"mirror", // SEG_TYPE_NAME_MIRROR,
+	[LV_TYPE_MIRROR] =				SEG_TYPE_NAME_MIRROR,
 	[LV_TYPE_RAID] =				"raid",
 	[LV_TYPE_THIN] =				"thin",
 	[LV_TYPE_CACHE] =				"cache",
@@ -525,8 +525,7 @@ int lv_layout_and_role(struct dm_pool *mem, const struct logical_volume *lv,
 				 * detection for such role!
 				 */
 				log_warn(INTERNAL_ERROR "WARNING: Failed to properly detect "
-					 "layout and role for LV %s/%s.",
-					 lv->vg->name, lv->name);
+					 "layout and role for LV %s.", dsplay_lvname(lv));
 			}
 		}
 

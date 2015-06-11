@@ -2395,7 +2395,6 @@ static int _convert_mirror_to_raid(struct logical_volume *lv,
 				   int update_and_reload,
 				   struct dm_list *removal_lvs)
 {
-	uint32_t s;
 	struct lv_segment *seg = first_seg(lv);
 
 	if (!seg_is_mirrored(seg)) {
@@ -2457,7 +2456,6 @@ static int _convert_raid1_to_mirror(struct logical_volume *lv,
 				    int update_and_reload,
 				    struct dm_list *removal_lvs)
 {
-	uint32_t s;
 	struct lv_segment *seg = first_seg(lv);
 
 	if (!seg_is_raid1(seg)) {
