@@ -27,6 +27,16 @@
 
 #include "defaults.h" /* FIXME: should this be defaults.h? */
 
+/* HM FIXME: REMOVEME: devel output */
+#ifdef USE_PFL
+#define PFL() printf("%s %u\n", __func__, __LINE__);
+#define PFLA(format, arg...) printf("%s %u " format "\n", __func__, __LINE__, arg);
+#else
+#define PFL()
+#define PFLA(format, arg...)
+#endif
+
+
 /* These are necessary for _write_log_header() */
 #include "xlate.h"
 #define MIRROR_MAGIC 0x4D695272
@@ -1748,8 +1758,7 @@ static int _add_mirrors_that_preserve_segments(struct logical_volume *lv,
 							   region_size, 1,
 							   vg_is_clustered(lv->vg));
 
-	if (!(ah = allocate_extents(lv->vg, NULL, segtype,
-				    1, mirrors, 0, 0,
+	if (!(ah = allocate_extents(lv->vg, NULL, segtype, 1, mirrors, 0, 0,
 				    lv->le_count, allocatable_pvs, alloc, 0,
 				    parallel_areas))) {
 		log_error("Unable to allocate mirror extents for %s.", lv->name);
@@ -2038,7 +2047,7 @@ int add_mirror_log(struct cmd_context *cmd, struct logical_volume *lv,
 
 	/* allocate destination extents */
 	ah = allocate_extents(lv->vg, NULL, segtype,
-			      0, first_seg(lv)->area_count, log_count - old_log_count, region_size,
+			      0, 0, log_count - old_log_count, region_size,
 			      lv->le_count, allocatable_pvs,
 			      alloc, 0, parallel_areas);
 	if (!ah) {

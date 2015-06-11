@@ -24,6 +24,15 @@
 #include <time.h>
 #include <sys/utsname.h>
 
+/* HM FIXME: REMOVEME: devel output */
+#ifdef USE_PFL
+#define PFL() printf("%s %u\n", __func__, __LINE__);
+#define PFLA(format, arg...) printf("%s %u " format "\n", __func__, __LINE__, arg);
+#else
+#define PFL()
+#define PFLA(format, arg...)
+#endif
+
 static struct utsname _utsname;
 static int _utsinit = 0;
 
@@ -912,14 +921,17 @@ static int _lv_is_exclusive(struct logical_volume *lv)
 int lv_active_change(struct cmd_context *cmd, struct logical_volume *lv,
 		     enum activation_change activate, int needs_exclusive)
 {
+PFLA("activate=%x", activate);
 	switch (activate) {
 	case CHANGE_AN:
 deactivate:
+PFL();
 		log_verbose("Deactivating logical volume \"%s\"", lv->name);
 		if (!deactivate_lv(cmd, lv))
 			return_0;
 		break;
 	case CHANGE_ALN:
+PFL();
 		if (vg_is_clustered(lv->vg) && (needs_exclusive || _lv_is_exclusive(lv))) {
 			if (!lv_is_active_locally(lv)) {
 				log_error("Cannot deactivate remotely exclusive device locally.");
@@ -935,6 +947,7 @@ deactivate:
 		break;
 	case CHANGE_ALY:
 	case CHANGE_AAY:
+PFL();
 		if (needs_exclusive || _lv_is_exclusive(lv)) {
 			log_verbose("Activating logical volume \"%s\" exclusively locally.",
 				    lv->name);
@@ -949,12 +962,14 @@ deactivate:
 		break;
 	case CHANGE_AEY:
 exclusive:
+PFL();
 		log_verbose("Activating logical volume \"%s\" exclusively.",
 			    lv->name);
 		if (!activate_lv_excl(cmd, lv))
 			return_0;
 		break;
 	default: /* CHANGE_AY */
+PFL();
 		if (needs_exclusive || _lv_is_exclusive(lv))
 			goto exclusive;
 		log_verbose("Activating logical volume \"%s\".", lv->name);

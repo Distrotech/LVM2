@@ -2210,6 +2210,7 @@ static int _mirror_emit_segment_line(struct dm_task *dmt, struct load_segment *s
 	const char *logtype;
 	unsigned kmaj = 0, kmin = 0, krel = 0;
 
+PFL();
 	if (uname(&uts) == -1) {
 		log_error("Cannot read kernel release version.");
 		return 0;
@@ -2318,7 +2319,7 @@ static int _mirror_emit_segment_line(struct dm_task *dmt, struct load_segment *s
 
 	if (handle_errors)
 		EMIT_PARAMS(pos, " 1 handle_errors");
-
+PFLA("params=%s", params);
 	return 1;
 }
 
@@ -2376,7 +2377,7 @@ PFLA("seg->area_count=%u", seg->area_count);
 
 	/* Kernel only expects "raid0", not "raid0_meta" */
 	type = seg->type;
-	if (seg->type == SEG_RAID0_META)
+	if (type == SEG_RAID0_META)
 		type = SEG_RAID0;
 
 	EMIT_PARAMS(pos, "%s %d %u", _dm_segtypes[type].target,
@@ -2388,6 +2389,7 @@ PFLA("seg->area_count=%u", seg->area_count);
 		EMIT_PARAMS(pos, " sync");
 
 #if 0
+	/* HM FIXME: support raid10 format and copies */
 	if (seg->raid10_format)
 		EMIT_PARAMS(pos, " %s", seg->raid10_format);
 
@@ -2546,7 +2548,7 @@ static int _emit_segment_line(struct dm_task *dmt, uint32_t major,
 	int r;
 	int target_type_is_raid = 0;
 	char originbuf[DM_FORMAT_DEV_BUFSIZE], cowbuf[DM_FORMAT_DEV_BUFSIZE];
-
+PFL()
 	switch(seg->type) {
 	case SEG_ERROR:
 	case SEG_ZERO:
@@ -2822,6 +2824,7 @@ int dm_tree_preload_children(struct dm_tree_node *dnode,
 	struct dm_info newinfo;
 	int update_devs_flag = 0;
 
+PFL();
 	/* Preload children first */
 	while ((child = dm_tree_next_child(&handle, dnode, 0))) {
 		/* Skip existing non-device-mapper devices */

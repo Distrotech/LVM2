@@ -23,15 +23,6 @@
 #include "crc.h"
 #include "lvm-signal.h"
 
-#ifdef USE_PFL
-#define PFL() printf("%s %u\n", __func__, __LINE__);
-#define PFLA(format, arg...) printf("%s %u " format "\n", __func__, __LINE__, arg);
-#else
-#define PFL()
-#define PFLA(format, arg...)
-#endif
-
-
 #define SCAN_TIMEOUT_SECONDS	80
 #define MAX_RESCANS		10	/* Maximum number of times to scan all PVs and retry if the daemon returns a token mismatch error */
 
@@ -55,6 +46,10 @@ void lvmetad_init(struct cmd_context *cmd)
 	if (!_lvmetad_use && !access(getenv("LVM_LVMETAD_PIDFILE") ? : LVMETAD_PIDFILE, F_OK))
 		log_warn("WARNING: lvmetad is running but disabled."
 			 " Restart lvmetad before enabling it!");
+
+	if (_lvmetad_connected)
+		log_debug(INTERNAL_ERROR "Refreshing lvmetad global handle while connection with the daemon is active");
+
 	_lvmetad_cmd = cmd;
 }
 

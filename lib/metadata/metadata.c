@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.
- * Copyright (C) 2004-2012 Red Hat, Inc. All rights reserved.
+ * Copyright (C) 2004-2015 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
  *
@@ -34,15 +34,6 @@
 
 #include <math.h>
 #include <sys/param.h>
-
-/* HM FIXME: REMOVEME: devel output */
-#ifdef USE_PFL
-#define PFL() printf("%s %u\n", __func__, __LINE__);
-#define PFLA(format, arg...) printf("%s %u " format "\n", __func__, __LINE__, arg);
-#else
-#define PFL()
-#define PFLA(format, arg...)
-#endif
 
 static struct physical_volume *_pv_read(struct cmd_context *cmd,
 					struct dm_pool *pvmem,

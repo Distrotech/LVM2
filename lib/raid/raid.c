@@ -44,7 +44,7 @@ static void _raid_display(const struct lv_segment *seg)
 	}
 
 	if (seg->meta_areas)
-		for (s = 0; seg->meta_areas && s < seg->area_count; ++s)
+		for (s = 0; s < seg->area_count; ++s)
 			log_print("  Raid Metadata LV%2d\t%s", s, seg_metalv(seg, s)->name);
 
 	log_print(" ");
@@ -55,7 +55,7 @@ static int _raid_text_import_area_count(const struct dm_config_node *sn,
 {
 	if (!dm_config_get_uint32(sn, "device_count", area_count) &&
 	    !dm_config_get_uint32(sn, "stripe_count", area_count)) {
-		log_error("Couldn't read '{device|stripe}_count' for "
+		log_error("Couldn't read '(device|stripe)_count' for "
 			  "segment '%s'.", dm_config_parent_name(sn));
 		return 0;
 	}
@@ -169,7 +169,7 @@ static int _raid_text_import(struct lv_segment *seg,
 
 static int _raid_text_export(const struct lv_segment *seg, struct formatter *f)
 {
-	int raid0 = (seg_is_raid0(seg) || seg_is_raid0_meta(seg));
+	int raid0 = seg_is_any_raid0(seg);
 
 	if (raid0)
 		outfc(f, (seg->area_count == 1) ? "# linear" : NULL,

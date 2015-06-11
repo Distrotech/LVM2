@@ -809,6 +809,7 @@ int lv_change_activate(struct cmd_context *cmd, struct logical_volume *lv,
 {
 	int r = 1;
 
+PFLA("activate=%x", activate);
 	if (lv_is_cache_pool(lv)) {
 		if (is_change_activating(activate)) {
 			log_verbose("Skipping activation of cache pool %s.",

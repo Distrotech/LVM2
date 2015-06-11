@@ -1752,6 +1752,22 @@ PFLA("lp->segtype=%s\n", lp->segtype->name);
 		unsigned stripes = 0;
 		unsigned stripe_size = arg_count(cmd, stripesize_ARG) ? lp->stripe_size  : 0;
 
+		/* Check for raid0 support if requested */
+		if (segtype_is_any_raid0(lp->segtype) &&
+		    !(lp->target_attr & RAID_FEATURE_RAID0)) {
+			log_error("RAID module does not support RAID0.");
+			return 0;
+		}
+
+		/* Check for reshaping support if requested */
+		if (((seg->segtype != lp->segtype && !strncmp(seg->segtype->name, lp->segtype->name, 5)) ||
+		     (stripes && stripes != seg->area_count - seg->segtype->parity_devs) ||
+		     (stripe_size && stripe_size != seg->stripe_size)) &&
+		     !(lp->target_attr & RAID_FEATURE_RESHAPING)) {
+			log_error("RAID module does not support reshaping.");
+			return 0;
+		}
+
 		if (arg_count(cmd, stripes_long_ARG)) {
 			unsigned stripe_count = seg->area_count - seg->segtype->parity_devs;
 
@@ -1772,15 +1788,6 @@ PFLA("lp->segtype=%s\n", lp->segtype->name);
 		if (seg_is_reshapable_raid(seg) || seg_is_raid1(seg))
 			seg->region_size = lp->region_size ?: 1024;
 
-		/* Check for reshaping support if requested */
-		if (((seg->segtype != lp->segtype && !strncmp(seg->segtype->name, lp->segtype->name, 5)) ||
-		     (stripes && stripes != seg->area_count - seg->segtype->parity_devs) ||
-		     (stripe_size && stripe_size != seg->stripe_size)) &&
-		     !(lp->target_attr & RAID_FEATURE_RESHAPING)) {
-			log_error("RAID module does not support reshaping.");
-			return 0;
-		}
-
 		return lv_raid_convert(lv, lp->segtype, lp->yes, lp->force, image_count, stripes, stripe_size, lp->pvh);
 	}
 
@@ -1797,7 +1804,7 @@ PFLA("lp->segtype=%s\n", lp->segtype->name);
 		}
 
 		if (!seg_is_striped(seg) &&
-		    !seg_is_raid0(seg) &&
+		    !seg_is_any_raid0(seg) &&
 		    !lv_raid_percent(lv, &sync_percent)) {
 			log_error("Unable to determine sync status of %s/%s.",
 				  lv->vg->name, lv->name);
@@ -1822,39 +1829,6 @@ PFLA("replace=%d", replace);
 
 PFLA("replace=%d", replace);
 		if (replace) {
-
-
-#if 0
-{
-			int r;
-			struct pv_list *pvl;
-			struct volume_group *vg;
-
-#if 0
-			dm_list_iterate_items(pvl, &lv->vg->pvs);
-				if (pvl->pv && pvl->pv->dev)
-					lvmetad_pv_gone_by_dev(pvl->pv->dev, NULL);
-					// lvmetad_pvscan_single(cmd, pvl->pv->dev, NULL);
-#endif
-#if 1
-			r = lvmetad_pvscan_all_devs(cmd, NULL);
-			log_warn("lvmetad_pvscan_all_devs returnd %d", r);
-#if 0
-			vg = vg_read(cmd, lv->vg->name, NULL, 0);
-			log_warn("vg_read returnd %p lv->vg==vg=%d", vg, lv->vg == vg);
-			if (!vg)
-				return 0;
-
-			lv->vg = vg;
-#endif
-#else
-			r = pvscan(cmd, 0, NULL);
-			log_warn("pvscan returnd %d", r);
-#endif
-}
-#endif
-
-
 			if (!(failed_pvs = _failed_pv_list(lv->vg)))
 				return_0;
 

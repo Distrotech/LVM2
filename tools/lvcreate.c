@@ -1024,7 +1024,7 @@ static int _lvcreate_params(struct cmd_context *cmd,
 			return 0;
 		}
 
-		if (segtype_is_raid0(lp->segtype) &&
+		if (segtype_is_any_raid0(lp->segtype) &&
 		    !(lp->target_attr & RAID_FEATURE_RAID0)) {
 			log_error("RAID module does not support RAID0.");
 			return 0;

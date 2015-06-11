@@ -118,16 +118,16 @@
 #define CACHE_POOL_METADATA	UINT64_C(0x0000800000000000)    /* LV - Internal use only */
 #define CACHE			UINT64_C(0x0001000000000000)    /* LV - Internal use only */
 
-#define LV_PENDING_DELETE	UINT64_C(0x0002000000000000)    /* LV - Internal use only */
+#define LV_PENDING_DELETE	UINT64_C(0x0004000000000000)    /* LV - Internal use only */
 
-#define LV_RESHAPE_DELTA_DISKS_PLUS		UINT64_C(0x0004000000000000)    /* LV reshape flag delta disks plus image(s) */
-#define LV_RESHAPE_DELTA_DISKS_MINUS		UINT64_C(0x0008000000000000)    /* LV reshape flag delta disks minus image(s) */
+#define LV_RESHAPE_DELTA_DISKS_PLUS		UINT64_C(0x0008000000000000)    /* LV reshape flag delta disks plus image(s) */
+#define LV_RESHAPE_DELTA_DISKS_MINUS		UINT64_C(0x0010000000000000)    /* LV reshape flag delta disks minus image(s) */
 
-#define PV_ALLOCATION_PROHIBITED	UINT64_C(0x0010000000000000)	/* PV - internal use only - allocation prohibited
+#define PV_ALLOCATION_PROHIBITED	UINT64_C(0x0020000000000000)	/* PV - internal use only - allocation prohibited
 									e.g. to prohibit allocation of a RAID image
 									on a PV already holing an image of the RAID set */
 
-#define LV_REMOVED		UINT64_C(0x0020000000000000)	/* LV - Internal use only
+#define LV_REMOVED		UINT64_C(0x0040000000000000)	/* LV - Internal use only
 								   This flag is used to mark an LV once it has
 								   been removed from the VG. It might still
 								   be referenced on internal lists of LVs.
@@ -136,8 +136,8 @@
 								   FIXME: Remove this flag once we have indexed
 									  vg->removed_lvs for quick lookup.
 								*/
-#define LV_ERROR_WHEN_FULL		UINT64_C(0x0040000000000000)    /* LV - error when full */
-/* Next unused flag:		UINT64_C(0x0080000000000000)    */
+#define LV_ERROR_WHEN_FULL		UINT64_C(0x0080000000000000)    /* LV - error when full */
+/* Next unused flag:		UINT64_C(0x0100000000000000)    */
 
 /* Format features flags */
 #define FMT_SEGMENTS		0x00000001U	/* Arbitrary segment params? */

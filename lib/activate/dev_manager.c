@@ -2733,17 +2733,24 @@ static int _add_new_lv_to_dtree(struct dev_manager *dm, struct dm_tree *dtree,
 	uint32_t read_ahead_flags = UINT32_C(0);
 	int save_pending_delete = dm->track_pending_delete;
 
+PFLA("lv=%s delete=%d", lv->name, lv_is_pending_delete(lv));
 	/* LV with pending delete is never put new into a table */
 	if (lv_is_pending_delete(lv) && !_cached_dm_info(dm->mem, dtree, lv, NULL))
+{
+PFL();
 		return 1; /* Replace with error only when already exists */
+}
 
 	if (lv_is_cache_pool(lv) &&
 	    !dm_list_empty(&lv->segs_using_this_lv)) {
+PFL();
 		/* cache pool is 'meta' LV and does not have a real device node */
 		if (!_add_new_lv_to_dtree(dm, dtree, seg_lv(first_seg(lv), 0), laopts, NULL))
 			return_0;
+PFL();
 		if (!_add_new_lv_to_dtree(dm, dtree, first_seg(lv)->metadata_lv, laopts, NULL))
 			return_0;
+PFL();
 		return 1;
 	}
 
@@ -2771,6 +2778,7 @@ static int _add_new_lv_to_dtree(struct dev_manager *dm, struct dm_tree *dtree,
 				laopts->no_merging = 1;
 		}
 	}
+PFL();
 
 	if (!(name = dm_build_dm_name(dm->mem, lv->vg->name, lv->name, layer)))
 		return_0;
@@ -2804,6 +2812,7 @@ static int _add_new_lv_to_dtree(struct dev_manager *dm, struct dm_tree *dtree,
 	/* FIXME Move the clear from here until later, so we can leave
 	 * identical inactive tables untouched. (For pvmove.)
 	 */
+PFL();
 	if (!(dnode = dm_tree_add_new_dev_with_udev_flags(dtree, name, dlid,
 					     layer ? UINT32_C(0) : (uint32_t) lv->major,
 					     layer ? UINT32_C(0) : (uint32_t) lv->minor,
@@ -2819,31 +2828,39 @@ static int _add_new_lv_to_dtree(struct dev_manager *dm, struct dm_tree *dtree,
 	/* Create table */
 	dm->pvmove_mirror_count = 0u;
 
+PFL();
 	if (lv_is_pending_delete(lv))
 		/* Handle LVs with pending delete */
 		/* Fow now used only by cache segtype, TODO snapshots */
 		dm->track_pending_delete = 1;
+PFL();
 
 	/* This is unused cache-pool - make metadata accessible */
 	if (lv_is_cache_pool(lv))
 		lv = first_seg(lv)->metadata_lv;
 
+PFL();
 	/* If this is a snapshot origin, add real LV */
 	/* If this is a snapshot origin + merging snapshot, add cow + real LV */
 	/* Snapshot origin could be also external origin */
 	if (lv_is_origin(lv) && !layer) {
+PFL();
 		if (!_add_new_lv_to_dtree(dm, dtree, lv, laopts, "real"))
 			return_0;
+
 		if (!laopts->no_merging && lv_is_merging_origin(lv)) {
+PFL();
 			if (!_add_new_lv_to_dtree(dm, dtree,
 						  find_snapshot(lv)->cow, laopts, "cow"))
 				return_0;
+PFL();
 			/*
 			 * Must also add "real" LV for use when
 			 * snapshot-merge target is added
 			 */
 			if (!_add_snapshot_merge_target_to_dtree(dm, dnode, lv))
 				return_0;
+PFL();
 		} else if (!_add_origin_target_to_dtree(dm, dnode, lv))
 			return_0;
 
@@ -2855,10 +2872,13 @@ static int _add_new_lv_to_dtree(struct dev_manager *dm, struct dm_tree *dtree,
 						  laopts, NULL))
 				return_0;
 	} else if (lv_is_cow(lv) && !layer) {
+PFL();
 		if (!_add_new_lv_to_dtree(dm, dtree, lv, laopts, "cow"))
 			return_0;
+
 		if (!_add_snapshot_target_to_dtree(dm, dnode, lv, laopts))
 			return_0;
+PFL();
 	} else if (!layer && ((lv_is_thin_pool(lv) && !lv_is_new_thin_pool(lv)) ||
 			      lv_is_external_origin(lv))) {
 		/* External origin or 'used' Thin pool is using layer */
@@ -2867,6 +2887,7 @@ static int _add_new_lv_to_dtree(struct dev_manager *dm, struct dm_tree *dtree,
 		if (!_add_layer_target_to_dtree(dm, dnode, lv))
 			return_0;
 	} else {
+PFL();
 		/* Add 'real' segments for LVs */
 		dm_list_iterate_items(seg, &lv->segments) {
 			if (!_add_segment_to_dtree(dm, dtree, dnode, seg, laopts, layer))
@@ -2874,6 +2895,7 @@ static int _add_new_lv_to_dtree(struct dev_manager *dm, struct dm_tree *dtree,
 			if (max_stripe_size < seg->stripe_size * seg->area_count)
 				max_stripe_size = seg->stripe_size * seg->area_count;
 		}
+PFL();
 	}
 
 	/* Setup thin pool callback */
@@ -2896,6 +2918,7 @@ static int _add_new_lv_to_dtree(struct dev_manager *dm, struct dm_tree *dtree,
 
 	dm_tree_node_set_read_ahead(dnode, read_ahead, read_ahead_flags);
 
+PFL();
 	/* Add any LVs referencing a PVMOVE LV unless told not to */
 	if (dm->track_pvmove_deps && lv_is_pvmove(lv))
 		dm_list_iterate_items(sl, &lv->segs_using_this_lv)
@@ -2909,6 +2932,7 @@ static int _add_new_lv_to_dtree(struct dev_manager *dm, struct dm_tree *dtree,
 #endif
 
 	dm->track_pending_delete = save_pending_delete; /* restore */
+PFL();
 
 	return 1;
 }

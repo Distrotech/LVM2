@@ -153,7 +153,7 @@ static const char *_lv_type_names[] = {
 	[LV_TYPE_PRIVATE] =				"private",
 	[LV_TYPE_LINEAR] =				"linear",
 	[LV_TYPE_STRIPED] =				"striped",
-	[LV_TYPE_MIRROR] =				SEG_TYPE_NAME_MIRROR,
+	[LV_TYPE_MIRROR] =				"mirror", // SEG_TYPE_NAME_MIRROR,
 	[LV_TYPE_RAID] =				"raid",
 	[LV_TYPE_THIN] =				"thin",
 	[LV_TYPE_CACHE] =				"cache",
@@ -177,6 +177,7 @@ static const char *_lv_type_names[] = {
 	[LV_TYPE_DATA] =				"data",
 	[LV_TYPE_SPARE] =				"spare",
 	[LV_TYPE_VIRTUAL] =				"virtual",
+
 	[LV_TYPE_RAID0] =				SEG_TYPE_NAME_RAID0,
 	[LV_TYPE_RAID0_META] =				SEG_TYPE_NAME_RAID0_META,
 	[LV_TYPE_RAID1] =				SEG_TYPE_NAME_RAID1,
@@ -926,7 +927,7 @@ dm_percent_t copy_percent(const struct logical_volume *lv)
 	uint32_t numerator = 0u, denominator = 0u;
 	struct lv_segment *seg;
 
-	if (seg_is_raid0(first_seg(lv)) || seg_is_raid0_meta(first_seg(lv)))
+	if (seg_is_any_raid0(first_seg(lv)))
 		return DM_PERCENT_INVALID;
 
 	dm_list_iterate_items(seg, &lv->segments) {
@@ -1092,6 +1093,15 @@ PFLA("seg_lv(seg, %u)=%s, area_reduction=%u, with_discard=%d", s, seg_type(seg, 
 		return 1;
 	}
 
+	if (seg_is_cache_pool(seg) &&
+	    !dm_list_empty(&seg->lv->segs_using_this_lv)) {
+		if (!(cache_seg = get_only_segment_using_this_lv(seg->lv)))
+			return_0;
+
+		if (!lv_cache_remove(cache_seg->lv))
+			return_0;
+	}
+
 	if (lv_is_raid_image(lv)) {
 		if (seg->meta_areas) {
 			uint32_t meta_area_reduction;
@@ -1117,15 +1127,6 @@ PFLA("meta_area_reduction=%u" , meta_area_reduction);
 			return_0; /* FIXME: any upper level reporting */
 
 		return 1;
-	}
-
-	if (seg_is_cache_pool(seg) &&
-	    !dm_list_empty(&seg->lv->segs_using_this_lv)) {
-		if (!(cache_seg = get_only_segment_using_this_lv(seg->lv)))
-			return_0;
-
-		if (!lv_cache_remove(cache_seg->lv))
-			return_0;
 
 	} else if (area_reduction == seg->area_len) {
 		log_very_verbose("Remove %s:%" PRIu32 "[%" PRIu32 "] from "
@@ -1528,7 +1529,10 @@ int lv_reduce(struct logical_volume *lv, uint32_t extents)
  */
 int lv_remove(struct logical_volume *lv)
 {
-	return lv_reduce(lv, lv->le_count);
+	if (!lv_reduce(lv, lv->le_count))
+		return 0;
+
+	return 1;
 }
 
 /*
@@ -1831,7 +1835,7 @@ static int _sufficient_pes_free(struct alloc_handle *ah, struct dm_list *pvms,
 {
 	uint32_t area_extents_needed = (extents_still_needed - allocated) * ah->area_count / ah->area_multiple;
 	uint32_t parity_extents_needed = (extents_still_needed - allocated) * ah->parity_count / ah->area_multiple;
-	uint32_t metadata_extents_needed = ah->metadata_area_count * ah->log_len;
+	uint32_t metadata_extents_needed = ah->alloc_and_split_meta ? 0 : ah->metadata_area_count * ah->log_len;
 	uint32_t total_extents_needed = area_extents_needed + parity_extents_needed + metadata_extents_needed;
 	uint32_t free_pes = pv_maps_size(pvms);
 
@@ -2168,7 +2172,7 @@ static int _for_each_pv(struct cmd_context *cmd, struct logical_volume *lv,
 
 	area_multiple = _calc_area_multiple(seg->segtype, seg->area_count, 0);
 PFLA("area_multiple=%u", area_multiple);
-	area_len = remaining_seg_len / (area_multiple ? : 1);
+	area_len = remaining_seg_len / (area_multiple ?: 1);
 
 	/* For striped mirrors, all the areas are counted, through the mirror layer */
 	if (top_level_area_index == -1)
@@ -3977,7 +3981,7 @@ PFLA("lv->le_count=%u", lv->le_count);
 	 *
 	 * the "raid0" personality does not utilize a bitmap.
 	 */
-	if (seg_is_striped_raid(seg)) {
+	if (seg_is_striped_raid(seg) && !seg_is_any_raid0(seg)) {
 		int adjusted = 0;
 
 		/* HM FIXME: make it larger than just to suit the LV size */
@@ -4024,7 +4028,7 @@ int lv_extend(struct logical_volume *lv,
 		return lv_add_virtual_segment(lv, 0u, extents, segtype);
 
 PFLA("extents=%u", extents);
-	if (segtype_is_pool(segtype) && !lv->le_count) {
+	if (!lv->le_count && segtype_is_pool(segtype)) {
 		/*
 		 * Thinpool and cache_pool allocations treat the metadata
 		 * device like a mirror log.
@@ -4032,12 +4036,12 @@ PFLA("extents=%u", extents);
 		/* FIXME Support striped metadata pool */
 		log_count = 1;
 	// } else if (segtype_is_striped(segtype) || (segtype_is_raid(segtype) && !segtype_is_raid1(segtype))) {
-	} else if (segtype_is_striped(segtype) || segtype_is_raid(segtype)) {
+	} else if (segtype_is_striped(segtype) || segtype_is_striped_raid(segtype)) {
 		extents = _round_to_stripe_boundary(lv, extents, stripes, 1);
 
 PFL();
 		/* Make sure metadata LVs are being extended as well */
-		if (!(segtype_is_striped(segtype) || segtype_is_raid0(segtype)))
+		if (!segtype_is_striped(segtype) && !segtype_is_raid0(segtype))
 			log_count = (mirrors ?: 1) * stripes + segtype->parity_devs;
 
 	}
@@ -4183,7 +4187,7 @@ static int _rename_sub_lv(struct logical_volume *lv,
 			  lv_name_old, lv->name);
 		return 0;
 	}
-	suffix = (char *) lv->name + len;
+	suffix = lv->name + len;
 
 	/*
 	 * Compose a new name for sub lv:
@@ -4685,7 +4689,7 @@ static int _lvresize_check_lv(struct cmd_context *cmd, struct logical_volume *lv
 		return 0;
 	}
 
-	if (lv_is_raid_image(lv) || lv_is_raid_metadata(lv)) {
+	if (lv_is_raid_metadata(lv) || lv_is_raid_image(lv)) {
 		log_error("Cannot resize a RAID %s directly",
 			  (lv->status & RAID_IMAGE) ? "image" :
 			  "metadata area");
@@ -7074,18 +7078,20 @@ static struct logical_volume *_lv_create_an_lv(struct volume_group *vg,
 		}
 	}
 
-	if (seg_is_raid(lp) && (vg->extent_size < STRIPE_SIZE_MIN)) {
-		/*
-		 * FIXME: RAID will simply fail to load the table if
-		 *        this is the case, but we should probably
-		 *        honor the stripe minimum for regular stripe
-		 *        volumes as well.  Avoiding doing that now
-		 *        only to minimize the change.
-		 */
-		log_error("The extent size in volume group %s is too "
-			  "small to support striped RAID volumes.",
-			  vg->name);
-		return NULL;
+	if (lp->stripe_size > vg->extent_size) {
+		if (seg_is_raid(lp) && (vg->extent_size < STRIPE_SIZE_MIN)) {
+			/*
+		 	* FIXME: RAID will simply fail to load the table if
+		 	*        this is the case, but we should probably
+		 	*        honor the stripe minimum for regular stripe
+		 	*        volumes as well.  Avoiding doing that now
+		 	*        only to minimize the change.
+		 	*/
+			log_error("The extent size in volume group %s is too "
+				  "small to support striped RAID volumes.",
+				  vg->name);
+			return NULL;
+		}
 	}
 
 	if (lp->stripe_size > vg->extent_size) {
@@ -7211,7 +7217,7 @@ static struct logical_volume *_lv_create_an_lv(struct volume_group *vg,
 		if (!(create_segtype = get_segtype_from_string(vg->cmd, "striped")))
 			return_0;
 	} else if (seg_is_mirrored(lp) || seg_is_raid(lp)) {
-		if (!(seg_is_raid0(lp) || seg_is_raid0_meta(lp))) {
+		if (!seg_is_any_raid0(lp)) {
 			/* FIXME: this will not pass cluster lock! */
 			init_mirror_in_sync(lp->nosync);
 

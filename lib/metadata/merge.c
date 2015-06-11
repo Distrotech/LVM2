@@ -493,7 +493,7 @@ PFLA("lv=%s s=%u seg->status=%lX seg_lv(seg, %u)=%s", lv->name, s, seg->status, 
 			inc_error_count;
 		}
 	}
-PFL();
+PFLA("error_count=%u", error_count);
 
 	if (le != lv->le_count) {
 		log_error("LV %s: inconsistent LE count %u != %u",
