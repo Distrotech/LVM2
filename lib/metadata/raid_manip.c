@@ -2342,11 +2342,12 @@ int lv_raid_merge(struct logical_volume *image_lv)
 }
 
 /*
- * Rename all data sub LVs of @lv to mirror
+ * Adjust all data sub LVs of @lv to mirror
  * or raid name depending on @direction
+ * adjusting their lv status
  */
 enum mirror_raid_conv { mirror_to_raid1 = 0, raid1_to_mirror };
-static int _rename_data_lvs(struct logical_volume *lv, enum mirror_raid_conv direction)
+static int _adjust_data_lvs(struct logical_volume *lv, enum mirror_raid_conv direction)
 {
 	uint32_t s;
 	char *p;
@@ -2421,15 +2422,10 @@ static int _convert_mirror_to_raid(struct logical_volume *lv,
 	if (!_alloc_and_add_rmeta_devs_for_lv(lv))
 		return 0;
 
-	/* Rename all data sub lvs for "*_rimage_*" to "*_mimage_*" */
-	log_debug_metadata("Renaming data LVs of %s", display_lvname(lv));
-	if (!_rename_data_lvs(lv, mirror_to_raid1))
+	/* Rename all data sub lvs from "*_mimage_*" to "*_rimage_*" and set their status */
+	log_debug_metadata("Adjust data LVs of %s", display_lvname(lv));
+	if (!_adjust_data_lvs(lv, mirror_to_raid1))
 		return 0;
-
-	for (s = 0; s < seg->area_count; s++) {
-		seg_lv(seg, s)->status &= ~MIRROR_IMAGE;
-		seg_lv(seg, s)->status |= RAID_IMAGE;
-	}
 
 	init_mirror_in_sync(1);
 
@@ -2498,15 +2494,10 @@ static int _convert_raid1_to_mirror(struct logical_volume *lv,
 
 	seg->meta_areas = NULL;
 
-	/* Rename all data sub lvs for "*_rimage_*" to "*_mimage_*" */
-	log_debug_metadata("Renaming data LVs of %s", display_lvname(lv));
-	if (!_rename_data_lvs(lv, raid1_to_mirror))
+	/* Rename all data sub lvs from "*_rimage_*" to "*_mimage_*" and set their status */
+	log_debug_metadata("Adjust data LVs of %s", display_lvname(lv));
+	if (!_adjust_data_lvs(lv, raid1_to_mirror))
 		return 0;
-
-	for (s = 0; s < seg->area_count; s++) {
-		seg_lv(seg, s)->status &= ~RAID_IMAGE;
-		seg_lv(seg, s)->status |= MIRROR_IMAGE;
-	}
 
 	seg->segtype = new_segtype;
 	lv->status &= ~RAID;
