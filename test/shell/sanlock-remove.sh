@@ -20,9 +20,9 @@ test_description='Remove the sanlock test setup'
 
 vgremove --config 'devices { global_filter=["a|GL_DEV|", "r|.*|"] filter=["a|GL_DEV|", "r|.*|"]}' glvg
 
-dmsetup remove GL_DEV
 
-# FIXME: reverse prepare_lvmlockd_sanlock
-sanlock shutdown -f 1
 killall lvmlockd
+killall sanlock
 
+dmsetup remove GL_DEV
+dmsetup remove glvg-lvmlock
