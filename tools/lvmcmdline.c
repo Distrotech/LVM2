@@ -579,20 +579,6 @@ int string_arg(struct cmd_context *cmd __attribute__((unused)),
 	return 1;
 }
 
-int arg_tag_count(int argc, char **argv)
-{
-	const char *name;
-	int count = 0;
-	int i;
-
-	for (i = 0; i < argc; i++) {
-		name = argv[i];
-		if (*name == '@')
-			count++;
-	}
-	return count;
-}
-
 int tag_arg(struct cmd_context *cmd __attribute__((unused)), struct arg_values *av)
 {
 	char *pos = av->value;

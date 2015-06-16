@@ -84,10 +84,6 @@ int pvresize(struct cmd_context *cmd, int argc, char **argv)
 
 	handle->custom_handle = &params;
 
-	/* Needed for a current listing of the global VG namespace. */
-	if (!lockd_gl(cmd, "sh", 0))
-		return_ECMD_FAILED;
-
 	ret = process_each_pv(cmd, argc, argv, NULL, READ_FOR_UPDATE, handle,
 			      _pvresize_single);
 
