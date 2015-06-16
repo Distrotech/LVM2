@@ -625,6 +625,19 @@ int alloc_arg(struct cmd_context *cmd __attribute__((unused)), struct arg_values
 	return 1;
 }
 
+int locktype_arg(struct cmd_context *cmd __attribute__((unused)), struct arg_values *av)
+{
+	lock_type_t lock_type;
+
+	av->sign = SIGN_NONE;
+
+	lock_type = get_lock_type_from_string(av->value);
+	if (lock_type == LOCK_TYPE_INVALID)
+		return 0;
+
+	return 1;
+}
+
 int segtype_arg(struct cmd_context *cmd, struct arg_values *av)
 {
 	struct segment_type *segtype;
