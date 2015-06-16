@@ -241,24 +241,6 @@ int lm_data_size_sanlock(void);
 int lm_is_running_sanlock(void);
 int lm_find_free_lock_sanlock(struct lockspace *ls, uint64_t *free_offset);
 
-#if __BYTE_ORDER == __BIG_ENDIAN
-#define le16_to_cpu(x) (bswap_16((x)))
-#define le32_to_cpu(x) (bswap_32((x)))
-#define le64_to_cpu(x) (bswap_64((x)))
-#define cpu_to_le16(x) (bswap_16((x)))
-#define cpu_to_le32(x) (bswap_32((x)))
-#define cpu_to_le64(x) (bswap_64((x)))
-#endif
-
-#if __BYTE_ORDER == __LITTLE_ENDIAN
-#define le16_to_cpu(x) (x)
-#define le32_to_cpu(x) (x)
-#define le64_to_cpu(x) (x)
-#define cpu_to_le16(x) (x)
-#define cpu_to_le32(x) (x)
-#define cpu_to_le64(x) (x)
-#endif
-
 #define container_of(ptr, type, member) ({                      \
 	const typeof( ((type *)0)->member ) *__mptr = (ptr);    \
 	(type *)( (char *)__mptr - offsetof(type,member) );})
