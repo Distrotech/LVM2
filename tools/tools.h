@@ -149,6 +149,7 @@ int metadatatype_arg(struct cmd_context *cmd, struct arg_values *av);
 int units_arg(struct cmd_context *cmd, struct arg_values *av);
 int segtype_arg(struct cmd_context *cmd, struct arg_values *av);
 int alloc_arg(struct cmd_context *cmd, struct arg_values *av);
+int locktype_arg(struct cmd_context *cmd, struct arg_values *av);
 int readahead_arg(struct cmd_context *cmd, struct arg_values *av);
 int metadatacopies_arg(struct cmd_context *cmd __attribute__((unused)), struct arg_values *av);
 

@@ -949,6 +949,8 @@ int vgcreate_params_set_from_args(struct cmd_context *cmd,
 			return 0;
 		}
 		break;
+	case LOCK_TYPE_NONE:
+		break;
 	};
 
 	/*
