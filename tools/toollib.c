@@ -1990,9 +1990,14 @@ int process_each_vg(struct cmd_context *cmd, int argc, char **argv,
 	 *   any tags were supplied and need resolving; or
 	 *   no VG names were given and the command defaults to processing all VGs.
 	 */
-	if (((dm_list_empty(&arg_vgnames) && enable_all_vgs) || !dm_list_empty(&arg_tags)) &&
-	    !get_vgnameids(cmd, &vgnameids_on_system, NULL, 0))
-		goto_out;
+	if ((dm_list_empty(&arg_vgnames) && enable_all_vgs) || !dm_list_empty(&arg_tags)) {
+		/* Needed for a current listing of the global VG namespace. */
+		if (!lockd_gl(cmd, "sh", 0))
+			goto_out;
+
+		if (!get_vgnameids(cmd, &vgnameids_on_system, NULL, 0))
+			goto_out;
+	}
 
 	if (dm_list_empty(&arg_vgnames) && dm_list_empty(&vgnameids_on_system)) {
 		/* FIXME Should be log_print, but suppressed for reporting cmds */
@@ -2433,8 +2438,14 @@ int process_each_lv(struct cmd_context *cmd, int argc, char **argv, uint32_t fla
 	else if (dm_list_empty(&arg_vgnames) && handle->internal_report_for_select)
 		need_vgnameids = 1;
 
-	if (need_vgnameids && !get_vgnameids(cmd, &vgnameids_on_system, NULL, 0))
-		goto_out;
+	if (need_vgnameids) {
+		/* Needed for a current listing of the global VG namespace. */
+		if (!lockd_gl(cmd, "sh", 0))
+			goto_out;
+
+		if (!get_vgnameids(cmd, &vgnameids_on_system, NULL, 0))
+			goto_out;
+	}
 
 	if (dm_list_empty(&arg_vgnames) && dm_list_empty(&vgnameids_on_system)) {
 		/* FIXME Should be log_print, but suppressed for reporting cmds */
@@ -2922,6 +2933,10 @@ int process_each_pv(struct cmd_context *cmd,
 
 	process_all_devices = process_all_pvs && (cmd->command->flags & ENABLE_ALL_DEVS) &&
 			      arg_count(cmd, all_ARG);
+
+	/* Needed for a current listing of the global VG namespace. */
+	if (!only_this_vgname && !lockd_gl(cmd, "sh", 0))
+		return_ECMD_FAILED;
 
 	/*
 	 * Need pvid's set on all PVs before processing so that pvid's

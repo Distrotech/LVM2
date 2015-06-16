@@ -199,10 +199,6 @@ int pvchange(struct cmd_context *cmd, int argc, char **argv)
 		goto out;
 	}
 
-	/* Needed for a current listing of the global VG namespace. */
-	if (!lockd_gl(cmd, "sh", 0))
-		return_ECMD_FAILED;
-
 	if (!argc) {
 		/*
 		 * Take the global lock here so the lvmcache remains
