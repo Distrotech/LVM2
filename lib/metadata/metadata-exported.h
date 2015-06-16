@@ -264,6 +264,14 @@ typedef enum {
 	THIN_DISCARDS_PASSDOWN,
 } thin_discards_t;
 
+typedef enum {
+	LOCK_TYPE_INVALID = -1,
+	LOCK_TYPE_NONE = 0,
+	LOCK_TYPE_CLVM = 1,
+	LOCK_TYPE_DLM = 2,
+	LOCK_TYPE_SANLOCK = 3,
+} lock_type_t;
+
 struct cmd_context;
 struct format_handler;
 struct labeller;

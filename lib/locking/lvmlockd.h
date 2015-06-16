@@ -16,11 +16,6 @@
 
 #define LOCKD_SANLOCK_LV_NAME "lvmlock"
 
-#define LOCK_TYPE_NONE    0
-#define LOCK_TYPE_CLVM    1
-#define LOCK_TYPE_DLM     2
-#define LOCK_TYPE_SANLOCK 3
-
 /* lockd_gl flags */
 #define LDGL_MODE_NOARG           0x00000001
 #define LDGL_SKIP_CACHE_VALIDATE  0x00000002
@@ -52,32 +47,9 @@
 #define LDST_FAIL		(LDST_FAIL_REQUEST | LDST_FAIL_NOLS | LDST_FAIL_STARTING | LDST_FAIL_OTHER)
 
 /*
- * lock_type    lock_type_num
- * "none"    -> LOCK_TYPE_NONE
- * "clvm"    -> LOCK_TYPE_CLVM
- * "dlm      -> LOCK_TYPE_DLM
- * "sanlock" -> LOCK_TYPE_SANLOCK
- */
-
-static inline int lock_type_to_num(const char *lock_type)
-{
-	if (!lock_type)
-		return LOCK_TYPE_NONE;
-	if (!strcmp(lock_type, "none"))
-		return LOCK_TYPE_NONE;
-	if (!strcmp(lock_type, "clvm"))
-		return LOCK_TYPE_CLVM;
-	if (!strcmp(lock_type, "dlm"))
-		return LOCK_TYPE_DLM;
-	if (!strcmp(lock_type, "sanlock"))
-		return LOCK_TYPE_SANLOCK;
-	return -1;
-}
-
-/*
  * Check if a lock_type uses lvmlockd.
  * If not (none, clvm), return 0.
- * If so (dlm, sanlock), return > 0 (LOCK_TYPE_)
+ * If so (dlm, sanlock), return 1.
  */
 
 static inline int is_lockd_type(const char *lock_type)
@@ -86,9 +58,9 @@ static inline int is_lockd_type(const char *lock_type)
 		return 0;
 
 	if (!strcmp(lock_type, "dlm"))
-		return LOCK_TYPE_DLM;
+		return 1;
 	if (!strcmp(lock_type, "sanlock"))
-		return LOCK_TYPE_SANLOCK;
+		return 1;
 
 	return 0;
 }
