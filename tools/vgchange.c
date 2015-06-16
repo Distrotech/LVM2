@@ -1038,11 +1038,8 @@ static int lockd_vgchange(struct cmd_context *cmd, int argc, char **argv)
 	if (arg_is_set(cmd, systemid_ARG) || arg_is_set(cmd, locktype_ARG))
 		cmd->command->flags &= ~ALL_VGS_IS_DEFAULT;
 
-	if (!argc || arg_tag_count(argc, argv) || arg_is_set(cmd, lockstart_ARG)) {
+	if (arg_is_set(cmd, lockstart_ARG)) {
 		/*
-		 * Needed for a current listing of the global VG namespace.
-		 * (And all VGs must be searched and read to match tags.)
-		 *
 		 * The lockstart condition takes the global lock to serialize
 		 * with any other host that tries to remove the VG while this
 		 * tries to start it.

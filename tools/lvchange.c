@@ -1284,13 +1284,6 @@ int lvchange(struct cmd_context *cmd, int argc, char **argv)
 	if (arg_count(cmd, activate_ARG) || arg_count(cmd, refresh_ARG))
 		cmd->lockd_vg_default_sh = 1;
 
-	/*
-	 * Needed for a current listing of the global VG namespace.
-	 * (All VGs must be searched and read to match tags.)
-	 */
-	if (arg_tag_count(argc, argv) && !lockd_gl(cmd, "sh", 0))
-		return_ECMD_FAILED;
-
 	return process_each_lv(cmd, argc, argv,
 			       update ? READ_FOR_UPDATE : 0, NULL,
 			       &_lvchange_single);
