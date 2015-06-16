@@ -728,7 +728,7 @@ int vgcreate_params_set_from_args(struct cmd_context *cmd,
 	int locking_type;
 	int use_lvmlockd;
 	int use_clvmd;
-	int lock_type_num; /* LOCK_TYPE_ */
+	lock_type_t lock_type_num;
 
 	vp_new->vg_name = skip_dev_dir(cmd, vp_def->vg_name, NULL);
 	vp_new->max_lv = arg_uint_value(cmd, maxlogicalvolumes_ARG,
@@ -929,18 +929,27 @@ int vgcreate_params_set_from_args(struct cmd_context *cmd,
 	 * Check that the lock_type is recognized, and is being
 	 * used with the correct lvm.conf settings.
 	 */
-	lock_type_num = lock_type_to_num(lock_type);
+	lock_type_num = get_lock_type_from_string(lock_type);
 
-	if (lock_type_num < 0) {
+	switch (lock_type_num) {
+	case LOCK_TYPE_INVALID:
 		log_error("lock_type %s is invalid", lock_type);
 		return 0;
-	} else if ((lock_type_num == LOCK_TYPE_DLM || lock_type_num == LOCK_TYPE_SANLOCK) && !use_lvmlockd) {
-		log_error("lock_type %s requires use_lvmlockd configuration setting", lock_type);
-		return 0;
-	} else if ((lock_type_num == LOCK_TYPE_CLVM) && !use_clvmd) {
-		log_error("lock_type clvm requires locking_type 3 configuration setting");
-		return 0;
-	}
+
+	case LOCK_TYPE_SANLOCK:
+	case LOCK_TYPE_DLM:
+		if (!use_lvmlockd) {
+			log_error("lock_type %s requires use_lvmlockd configuration setting", lock_type);
+			return 0;
+		}
+		break;
+	case LOCK_TYPE_CLVM:
+		if (!use_clvmd) {
+			log_error("lock_type clvm requires locking_type 3 configuration setting");
+			return 0;
+		}
+		break;
+	};
 
 	/*
 	 * The vg is not owned by one host/system_id.

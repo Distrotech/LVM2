@@ -769,7 +769,7 @@ static int _free_vg_sanlock(struct cmd_context *cmd, struct volume_group *vg)
 int lockd_init_vg(struct cmd_context *cmd, struct volume_group *vg,
 		  const char *lock_type)
 {
-	switch (lock_type_to_num(lock_type)) {
+	switch (get_lock_type_from_string(lock_type)) {
 	case LOCK_TYPE_NONE:
 	case LOCK_TYPE_CLVM:
 		return 1;
@@ -790,7 +790,7 @@ int lockd_free_vg_before(struct cmd_context *cmd, struct volume_group *vg)
 	if (cmd->lock_vg_mode && !strcmp(cmd->lock_vg_mode, "na"))
 		return 1;
 
-	switch (lock_type_to_num(vg->lock_type)) {
+	switch (get_lock_type_from_string(vg->lock_type)) {
 	case LOCK_TYPE_NONE:
 	case LOCK_TYPE_CLVM:
 	case LOCK_TYPE_DLM:
@@ -811,7 +811,7 @@ void lockd_free_vg_final(struct cmd_context *cmd, struct volume_group *vg)
 	if (cmd->lock_vg_mode && !strcmp(cmd->lock_vg_mode, "na"))
 		return;
 
-	switch (lock_type_to_num(vg->lock_type)) {
+	switch (get_lock_type_from_string(vg->lock_type)) {
 	case LOCK_TYPE_NONE:
 	case LOCK_TYPE_CLVM:
 	case LOCK_TYPE_SANLOCK:
@@ -2087,7 +2087,7 @@ int lockd_init_lv_args(struct cmd_context *cmd, struct volume_group *vg,
 int lockd_init_lv(struct cmd_context *cmd, struct volume_group *vg, struct logical_volume *lv,
 		  struct lvcreate_params *lp)
 {
-	int lock_type_num = lock_type_to_num(vg->lock_type);
+	int lock_type_num = get_lock_type_from_string(vg->lock_type);
 
 	if (cmd->lock_lv_mode && !strcmp(cmd->lock_lv_mode, "na"))
 		return 1;
@@ -2211,7 +2211,7 @@ int lockd_free_lv(struct cmd_context *cmd, struct volume_group *vg,
 	if (cmd->lock_lv_mode && !strcmp(cmd->lock_lv_mode, "na"))
 		return 1;
 
-	switch (lock_type_to_num(vg->lock_type)) {
+	switch (get_lock_type_from_string(vg->lock_type)) {
 	case LOCK_TYPE_NONE:
 	case LOCK_TYPE_CLVM:
 		return 1;
