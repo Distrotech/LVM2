@@ -848,13 +848,17 @@ int pvmove(struct cmd_context *cmd, int argc, char **argv)
 	}
 
 	if (lvmlockd_use() && !lvmpolld_use()) {
+		/*
+		 * Don't want to spend the time making lvmlockd
+		 * work without lvmpolld.
+		 */
 		log_error("Enable lvmpolld when using lvmlockd.");
 		return ECMD_FAILED;
 	}
 
 	if (lvmlockd_use() && !argc) {
 		/*
-		 * TODO: move process_each_vg from polldaemon up to here,
+		 * FIXME: move process_each_vg from polldaemon up to here,
 		 * then we can remove this limitation.
 		 */
 		log_error("Specify pvmove args when using lvmlockd.");
