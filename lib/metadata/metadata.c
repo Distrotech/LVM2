@@ -3934,6 +3934,16 @@ static struct volume_group *_vg_read_by_vgid(struct cmd_context *cmd,
 		release_vg(vg);
 	}
 
+	/*
+	 * When using lvmlockd we should never reach this point.
+	 * The VG is locked, then vg_read() is done, which gets
+	 * the latest VG from lvmetad, or disk if lvmetad has
+	 * been invalidated.  When we get here the VG should
+	 * always be cached and returned above.
+	 */
+	if (lvmlockd_use())
+		log_error(INTERNAL_ERROR "vg_read_by_vgid failed with lvmlockd");
+
 	/* Mustn't scan if memory locked: ensure cache gets pre-populated! */
 	if (critical_section())
 		return_NULL;
