@@ -140,6 +140,7 @@ struct resource {
 	uint32_t version;
 	unsigned int lm_init : 1;	/* lm_data is initialized */
 	unsigned int adopt : 1;		/* temp flag in remove_inactive_lvs */
+	unsigned int version_zero_valid : 1;
 	struct list_head locks;
 	struct list_head actions;
 	struct val_blk *vb;
