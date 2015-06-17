@@ -2018,3 +2018,9 @@ AS_IF([test -n "$CACHE_CONFIGURE_WARN"],
 
 AS_IF([test "$ODIRECT" != yes],
       [AC_MSG_WARN([O_DIRECT disabled: low-memory pvmove may lock up])])
+
+AS_IF([test "$BUILD_LVMLOCKD" == yes && test "$BUILD_LVMPOLLD" == no],
+      [AC_MSG_WARN([lvmlockd requires lvmpolld])])
+
+AS_IF([test "$BUILD_LVMLOCKD" == yes && test "$BUILD_LVMETAD" == no],
+      [AC_MSG_WARN([lvmlockd requires lvmetad])])
