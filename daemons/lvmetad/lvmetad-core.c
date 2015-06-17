@@ -1218,7 +1218,8 @@ static response set_global_info(lvmetad_state *s, request r)
 static response get_global_info(lvmetad_state *s, request r)
 {
 	return daemon_reply_simple("OK", "global_invalid = %d",
-					 (s->flags & GLFL_INVALID) ? 1 : 0);
+					 (s->flags & GLFL_INVALID) ? 1 : 0,
+					 NULL);
 }
 
 static response set_vg_info(lvmetad_state *s, request r)
