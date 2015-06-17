@@ -994,7 +994,7 @@ static int _lvchange_single(struct cmd_context *cmd, struct logical_volume *lv,
 		 * Otherwise, the lv lock will be taken as non-persistent
 		 * and released when this command exits.
 		 *
-		 * TODO: use "sh" if the options imply that the lvchange
+		 * FIXME: use "sh" if the options imply that the lvchange
 		 * operation does not modify the LV.
 		 */
 		if (!lockd_lv(cmd, lv, "ex", 0)) {

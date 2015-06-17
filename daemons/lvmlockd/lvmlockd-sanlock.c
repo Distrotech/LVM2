@@ -82,8 +82,8 @@
  * the error conditions are often not as simple as storage being lost and then
  * later connecting, will result in this option being too unreliable.
  *
- * TODO: add a config option that we could use to select a different behavior
- * than the default.  Then implement one of the simpler options as a proof of
+ * Add a config option that we could use to select a different behavior than
+ * the default.  Then implement one of the simpler options as a proof of
  * concept, which could be extended if needed.
  */
 
@@ -563,7 +563,7 @@ int lm_rename_vg_sanlock(char *ls_name, char *vg_name, uint32_t flags, char *vg_
 	if (daemon_test)
 		return 0;
 
-	/* FIXME: remove this, device is not always ready for us here */
+	/* FIXME: device is not always ready for us here */
 	sleep(1);
 
 	align_size = sanlock_align(&disk);
@@ -997,13 +997,13 @@ int lm_prepare_lockspace_sanlock(struct lockspace *ls)
 	 * activated before lvmlockd is asked to add the lockspace.
 	 * (sanlock needs to use the lv.)
 	 *
-	 * TODO: can we ask something on the system to activate the
-	 * sanlock lv or should we just require that vgchange be used
-	 * to start sanlock vgs?
-	 * Should sanlock lvs be "auto-activated"?
+	 * In the future we might be able to ask something on the system
+	 * to activate the sanlock lv from here, and with that we might be
+	 * able to start sanlock VGs without requiring a
+	 * vgchange --lock-start command.
 	 */
 
-	/* FIXME: remove this, device is not always ready for us here */
+	/* FIXME: device is not always ready for us here */
 	sleep(1);
 
 	rv = stat(disk_path, &st);
@@ -1186,69 +1186,13 @@ out:
 	free(lms);
 	ls->lm_data = NULL;
 
-	/* TODO: should we only clear gl_lsname when doing free_vg? */
+	/* FIXME: should we only clear gl_lsname when doing free_vg? */
 
 	if (!strcmp(ls->name, gl_lsname_sanlock))
 		memset(gl_lsname_sanlock, 0, sizeof(gl_lsname_sanlock));
 
 	return 0;
 }
-
-#if 0
-static int find_lv_offset(struct lockspace *ls, struct resource *r,
-			  uint64_t *lv_args_offset)
-{
-	struct lm_sanlock *lms = (struct lm_sanlock *)ls->lm_data;
-	struct sanlk_resourced rd;
-	uint64_t offset;
-	int align_size;
-	int lv_count = 0;
-	int rv;
-
-	memset(&rd, 0, sizeof(rd));
-
-	strncpy(rd.rs.lockspace_name, ls->name, SANLK_NAME_LEN);
-	rd.rs.num_disks = 1;
-	memcpy(rd.rs.disks[0].path, lms->ss.host_id_disk.path, SANLK_PATH_LEN);
-
-	align_size = sanlock_align(&rd.rs.disks[0]);
-	if (align_size <= 0) {
-		log_error("find_lv_offset align error %d", align_size);
-		return -EINVAL;
-	}
-
-	offset = align_size * LV_LOCK_BEGIN;
-
-	while (1) {
-		rd.rs.disks[0].offset = offset;
-
-		memset(rd.rs.name, 0, SANLK_NAME_LEN);
-
-		rv = sanlock_read_resource(&rd.rs, 0);
-		if (rv == -EMSGSIZE || rv == -ENOSPCE) {
-			/* This indicates the end of the device is reached. */
-			rv = -EMSGSIZE;
-			break;
-		}
-
-		if (rv) {
-			log_error("S %s find_lv_offset read error %d offset %llu",
-				  ls->name, rv, (unsigned long long)offset);
-			break;
-		}
-
-		if (!strncmp(rd.rs.name, r->name, SANLK_NAME_LEN)) {
-			/* found it */
-			*lv_args_offset = offset;
-			rv = 0;
-			break;
-		}
-
-		offset += align_size;
-	}
-	return rv;
-}
-#endif
 
 static int lm_add_resource_sanlock(struct lockspace *ls, struct resource *r)
 {
@@ -1281,7 +1225,7 @@ int lm_rem_resource_sanlock(struct lockspace *ls, struct resource *r)
 {
 	struct rd_sanlock *rds = (struct rd_sanlock *)r->lm_data;
 
-	/* TODO: assert r->mode == UN or unlock if it's not? */
+	/* FIXME: assert r->mode == UN or unlock if it's not? */
 
 	if (rds->vb)
 		free(rds->vb);
@@ -1384,8 +1328,6 @@ int lm_lock_sanlock(struct lockspace *ls, struct resource *r, int ld_mode,
 		 * It appears that sanlock_acquire returns EAGAIN when we request
 		 * a shared lock but the lock is held ex by another host.
 		 * There's no point in retrying this case, just return an error.
-		 *
-		 * TODO: verify the sanlock behavior here.
 		 */
 		log_debug("S %s R %s lock_san acquire mode %d rv EAGAIN", ls->name, r->name, ld_mode);
 		*retry = 0;
@@ -1443,8 +1385,6 @@ int lm_lock_sanlock(struct lockspace *ls, struct resource *r, int ld_mode,
 		 * We can't distinguish between the two cases above,
 		 * so if requesting a sh lock, retry a couple times,
 		 * otherwise don't.
-		 *
-		 * TODO: verify sanlock behavior here.
 		 */
 		log_debug("S %s R %s lock_san acquire mode %d rv %d", ls->name, r->name, ld_mode, rv);
 		*retry = (ld_mode == LD_LK_SH) ? 1 : 0;
@@ -1548,7 +1488,7 @@ int lm_convert_sanlock(struct lockspace *ls, struct resource *r,
 
 	rv = sanlock_convert(lms->sock, -1, flags, rs);
 	if (rv == -EAGAIN) {
-		/* TODO: what case is this? what should be done? */
+		/* FIXME: When could this happen?  Should something different be done? */
 		log_error("S %s R %s convert_san EAGAIN", ls->name, r->name);
 		return -EAGAIN;
 	}
@@ -1703,19 +1643,16 @@ int lm_hosts_sanlock(struct lockspace *ls, int notify)
 	free(hss);
 
 	if (found_others && notify) {
-#if 0
-		struct sanlk_host_event he;
-		memset(&he, 0, sizeof(he));
-		hm.host_id = 1;
-		hm.generation = 0;
-		hm.event = EVENT_VGSTOP;
-		sanlock_set_event(ls->name, &he, SANLK_SETEV_ALL_HOSTS);
-#endif
 		/*
-		 * We'll need to retry for a while before all the hosts see
-		 * this event and stop the vg.
-		 * We'll need to register for events from the lockspace
-		 * and add the registered fd to our poll set.
+		 * We could use the sanlock event mechanism to notify lvmlockd
+		 * on other hosts to stop this VG.  lvmlockd would need to
+		 * register for and listen for sanlock events in the main loop.
+		 * The events are slow to propagate.  We'd need to retry for a
+		 * while before all the hosts see the event and stop the VG.
+		 * sanlock_set_event(ls->name, &he, SANLK_SETEV_ALL_HOSTS);
+		 *
+		 * Wait to try this until there appears to be real value/interest
+		 * in doing it.
 		 */
 	}
 

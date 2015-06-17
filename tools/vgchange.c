@@ -645,7 +645,7 @@ static int _vgchange_locktype(struct cmd_context *cmd,
 	 * lockd_free_vg_after();
 	 */
 	if (is_lockd_type(vg->lock_type)) {
-		/* TODO */
+		/* FIXME: implement full undoing of the lock_type */
 		log_error("Changing VG %s from lock type %s not yet allowed.",
 			  vg->name, vg->lock_type);
 		return 0;

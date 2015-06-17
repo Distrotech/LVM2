@@ -1620,7 +1620,7 @@ static void res_process(struct lockspace *ls, struct resource *r,
 			add_client_result(act);
 		} else {
 			/* persistent lock is sh, transient request is ex */
-			/* TODO: can we remove this case? do a convert here? */
+			/* FIXME: can we remove this case? do a convert here? */
 			log_debug("res_process %s existing persistent lock new transient", r->name);
 			act->result = -EEXIST;
 			list_del(&act->list);
@@ -1654,7 +1654,7 @@ static void res_process(struct lockspace *ls, struct resource *r,
 			continue;
 
 		if (lk->mode != act->mode) {
-			/* TODO: convert and change to persistent? */
+			/* FIXME: convert and change to persistent? */
 			log_debug("res_process %s existing transient lock new persistent", r->name);
 			act->result = -EEXIST;
 			list_del(&act->list);
@@ -2342,7 +2342,7 @@ static int vg_ls_name(const char *vg_name, char *ls_name)
 	return 0;
 }
 
-/* TODO: add mutex for gl_lsname_ ? */
+/* FIXME: add mutex for gl_lsname_ ? */
 
 static int gl_ls_name(char *ls_name)
 {
@@ -2811,10 +2811,7 @@ static int for_each_lockspace(int do_stop, int do_free, int do_force)
 				pthread_join(ls->thread, NULL);
 				list_del(&ls->list);
 
-				/* TODO: remove this if unneeded */
-				if (!list_empty(&ls->actions))
-					log_error("TODO: free ls actions");
-
+				/* In future we may need to free ls->actions here */
 				free_ls_resources(ls);
 				list_add(&ls->list, &lockspaces_inactive);
 				free_count++;
@@ -4031,7 +4028,7 @@ static void client_recv_action(struct client *cl)
 	    op == LD_OP_DUMP_INFO || op == LD_OP_DUMP_LOG) {
 
 		/*
-		 * TODO: add the client command name to the hello messages
+		 * FIXME: add the client command name to the hello messages
 		 * so it can be saved in cl->name here.
 		 */
 
@@ -4104,7 +4101,7 @@ static void client_recv_action(struct client *cl)
 	if (cl_pid && cl_pid != cl->pid)
 		log_error("client recv bad message pid %d client %d", cl_pid, cl->pid);
 
-	/* TODO: do this in hello message instead */
+	/* FIXME: do this in hello message instead */
 	if (!cl->name[0] && cl_name)
 		strncpy(cl->name, cl_name, MAX_NAME);
 
@@ -4342,52 +4339,6 @@ static void close_client_thread(void)
 	pthread_mutex_unlock(&client_mutex);
 	pthread_join(client_thread, NULL);
 }
-
-#if 0
-static void setup_listener(void)
-{
-	struct sockaddr_un addr;
-	int rv, fd, ci;
-
-	rv = lvmlockd_socket_address(&addr);
-	if (rv < 0)
-		return rv;
-
-	fd = socket(AF_LOCAL, SOCK_STREAM, 0);
-	if (fd < 0)
-		return fd;
-
-	unlink(addr.sun_path);
-	rv = bind(fd, (struct sockaddr *) &addr, sizeof(struct sockaddr_un));
-	if (rv < 0)
-		goto exit_fail;
-
-	rv = chmod(addr.sun_path, DEFAULT_SOCKET_MODE);
-	if (rv < 0)
-		goto exit_fail;
-
-	rv = chown(addr.sun_path, com.uid, com.gid);
-	if (rv < 0) {
-		log_error("could not set socket %s permissions: %s",
-			  addr.sun_path, strerror(errno));
-		goto exit_fail;
-	}
-
-	rv = listen(fd, 5);
-	if (rv < 0)
-		goto exit_fail;
-
-	fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
-
-	listen_pi = add_pollfd(fd);
-
-	return 0;
-
-exit_fail:
-	close(fd);
-	return -1;
-}
-#endif
 
 /*
  * Get a list of all VGs with a lockd type (sanlock|dlm) from lvmetad.
@@ -4929,7 +4880,7 @@ static void adopt_locks(void)
 	list_for_each_entry_safe(ls, lsafe, &vg_lockd, list) {
 		if (!list_empty(&ls->resources)) {
 			/* We should have found a lockspace. */
-			/* TODO: add this ls and acquire locks for ls->resources? */
+			/* add this ls and acquire locks for ls->resources? */
 			log_error("No lockspace %s %s found for VG %s with active LVs",
 				  ls->name, lm_str(ls->lm_type), ls->vg_name);
 		} else {
@@ -5249,7 +5200,7 @@ static void adopt_locks(void)
 
 		if (act->mode == LD_LK_EX) {
 			/*
-			 * TODO: we probably want to check somehow that
+			 * FIXME: we probably want to check somehow that
 			 * there's no lvm command still running that's
 			 * using this ex lock and changing things.
 			 */
@@ -5294,7 +5245,7 @@ static void adopt_locks(void)
 	}
 
 
-	/* TODO: purge any remaining orphan locks in each rejoined ls? */
+	/* FIXME: purge any remaining orphan locks in each rejoined ls? */
 
 	if (count_start_fail || count_adopt_fail)
 		goto fail;
@@ -5546,8 +5497,8 @@ static int main_loop(daemon_state *ds_arg)
 			}
 			pthread_mutex_unlock(&client_mutex);
 
-			/* TODO?: after set_dead, scan pollfd for last unused
-			   slot and reduce pollfd_maxi */
+			/* After set_dead, should we scan pollfd for
+			   last unused slot and reduce pollfd_maxi? */
 		}
 	}
 
