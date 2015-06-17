@@ -311,6 +311,9 @@ static daemon_reply _lvmlockd_send(const char *req_name, ...)
 	return repl;
 }
 
+/* See the same in lib/locking/lvmlockd.c */
+#define NO_LOCKD_RESULT -1000
+
 static int _lvmlockd_result(daemon_reply reply, int *result)
 {
 	int reply_result;
@@ -327,9 +330,7 @@ static int _lvmlockd_result(daemon_reply reply, int *result)
 		return 0;
 	}
 
-	/* FIXME: using -1000 is dumb */
-
-	reply_result = daemon_reply_int(reply, "op_result", -1000);
+	reply_result = daemon_reply_int(reply, "op_result", NO_LOCKD_RESULT);
 	if (reply_result == -1000) {
 		log_error("lvmlockd_result no op_result");
 		return 0;

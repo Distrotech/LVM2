@@ -372,7 +372,7 @@ static int report_progress(struct cmd_context *cmd, struct poll_operation_id *id
 	int ret;
 
 	/*
-	 * TODO: we don't really need to take the vg lock here,
+	 * FIXME: we don't really need to take the vg lock here,
 	 * because we only report the progress on the same host
 	 * where the pvmove/lvconvert is happening.  This means
 	 * that the local pvmove/lvconvert/lvpoll commands are
