@@ -1046,7 +1046,7 @@ static int res_lock(struct lockspace *ls, struct resource *r, struct action *act
 
 	/* lm_lock() reads new r_version */
 
-	if (r_version > r->version) {
+	if ((r_version > r->version) || (!r->version && !r->version_zero_valid)) {
 		/*
 		 * New r_version of the lock: means that another
 		 * host has changed data protected by this lock
@@ -1055,6 +1055,17 @@ static int res_lock(struct lockspace *ls, struct resource *r, struct action *act
 		 * protected by this lock and reread it from disk.
 		 */
 		r->version = r_version;
+
+		/*
+		 * When a new global lock is enabled in a new vg,
+		 * it will have version zero, and the first time
+		 * we use it we need to validate the global cache
+		 * since we don't have any version history to know
+		 * the state of the cache.  The version could remain
+		 * zero for a long time if no global state is changed
+		 * to cause the GL version to be incremented to 1.
+		 */
+		r->version_zero_valid = 1;
 
 		/*
 		 * r is vglk: tell lvmetad to set the vg invalid
