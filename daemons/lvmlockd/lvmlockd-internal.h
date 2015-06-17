@@ -11,7 +11,6 @@
 #ifndef _LVM_LVMLOCKD_INTERNAL_H
 #define _LVM_LVMLOCKD_INTERNAL_H
 
-/* TODO: figure out real restraints/requirements for these */
 #define MAX_NAME 64
 #define MAX_ARGS 64
 
@@ -184,7 +183,6 @@ struct lockspace {
 
 	struct list_head actions;	/* new client actions */
 	struct list_head resources;	/* resource/lock state for gl/vg/lv */
-					/* TODO: should probably be tree */
 };
 
 #define VAL_BLK_VERSION 0x0101

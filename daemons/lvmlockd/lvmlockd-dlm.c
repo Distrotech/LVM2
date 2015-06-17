@@ -236,10 +236,11 @@ int lm_rem_lockspace_dlm(struct lockspace *ls, int free_vg)
 		goto out;
 
 	/*
-	 * TODO: if free_vg is set, it means we are doing vgremove,
-	 * and we may want to tell any other nodes to leave the lockspace.
-	 * This is not really necessary since there should be no harm in
-	 * having an unused lockspace sitting around.
+	 * If free_vg is set, it means we are doing vgremove, and we may want
+	 * to tell any other nodes to leave the lockspace.  This is not really
+	 * necessary since there should be no harm in having an unused
+	 * lockspace sitting around.  A new "notification lock" would need to
+	 * be added with a callback to signal this. 
 	 */
 
 	rv = dlm_release_lockspace(ls->name, lmd->dh, 1);
@@ -403,7 +404,7 @@ static int lm_adopt_dlm(struct lockspace *ls, struct resource *r, int ld_mode,
 	}
 
 	/*
-	 * TODO: for GL/VG locks we probably want to read the lvb,
+	 * FIXME: For GL/VG locks we probably want to read the lvb,
 	 * especially if adopting an ex lock, because when we
 	 * release this adopted ex lock we may want to write new
 	 * lvb values based on the current lvb values (at lease
@@ -478,7 +479,6 @@ int lm_lock_dlm(struct lockspace *ls, struct resource *r, int ld_mode,
 			      r->name, strlen(r->name),
 			      0, NULL, NULL, NULL);
 	if (rv == -EAGAIN) {
-		/* TODO: what case is this? what should be done? */
 		log_error("S %s R %s lock_dlm mode %d rv EAGAIN", ls->name, r->name, mode);
 		return -EAGAIN;
 	}
@@ -557,7 +557,7 @@ int lm_convert_dlm(struct lockspace *ls, struct resource *r,
 			      r->name, strlen(r->name),
 			      0, NULL, NULL, NULL);
 	if (rv == -EAGAIN) {
-		/* TODO: what case is this? what should be done? */
+		/* FIXME: When does this happen?  Should something different be done? */
 		log_error("S %s R %s convert_dlm mode %d rv EAGAIN", ls->name, r->name, mode);
 		return -EAGAIN;
 	}
