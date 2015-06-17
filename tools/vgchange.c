@@ -1042,9 +1042,10 @@ static int lockd_vgchange(struct cmd_context *cmd, int argc, char **argv)
 		/*
 		 * The lockstart condition takes the global lock to serialize
 		 * with any other host that tries to remove the VG while this
-		 * tries to start it.
+		 * tries to start it.  (Zero argc means all VGs, in wich case
+		 * process_each_vg will acquire the global lock.)
 		 */
-		if (!lockd_gl(cmd, "sh", 0))
+		if (argc && !lockd_gl(cmd, "sh", 0))
 			return_ECMD_FAILED;
 
 	} else if (arg_is_set(cmd, systemid_ARG) ||
