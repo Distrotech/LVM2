@@ -960,8 +960,10 @@ int lockd_stop_vg(struct cmd_context *cmd, struct volume_group *vg)
 		ret = (result < 0) ? 0 : 1;
 	}
 
-	if (result == -ENOLS)
+	if (result == -ENOLS) {
+		ret = 1;
 		goto out;
+	}
 
 	if (result == -EBUSY) {
 		log_error("VG %s stop failed: LVs must first be deactivated", vg->name);
