@@ -1005,7 +1005,7 @@ int lockd_start_wait(struct cmd_context *cmd)
 		log_error("Lock start failed");
 
 	/*
-	 * Get a list of vgs that started so we can
+	 * FIXME: get a list of vgs that started so we can
 	 * better report what worked and what didn't?
 	 */
 
@@ -1043,16 +1043,6 @@ static int _mode_compare(const char *m1, const char *m2)
 		return 1;
 	return -2;
 }
-
-/*
- * Mode is selected by:
- * 1. mode from command line option (only taken if allow_override is set)
- * 2. the function arg passed by the calling command (def_mode)
- * 3. look up a default mode for the command
- *    (cases where the caller doesn't know a default)
- *
- * MODE_NOARG: don't use mode from command line option
- */
 
 /*
  * lockd_gl_create() is a variation of lockd_gl() used only by vgcreate.
@@ -1093,7 +1083,7 @@ static int _mode_compare(const char *m1, const char *m2)
  *    lockd_gl_create sees sanlock/ENOLS/NO_GL_LS (and optionally the
  *    "enable" lock-gl arg), determines that this is the sanlock
  *    bootstrap special case, and returns success without the global lock.
- *   
+ *
  *    vgcreate creates the VG on disk, and calls lockd_init_vg() which
  *    initializes/enables a global lock on the new VG's internal sanlock lv.
  *    Future lockd_gl/lockd_gl_create calls will acquire the existing gl.
@@ -1127,7 +1117,7 @@ int lockd_gl_create(struct cmd_context *cmd, const char *def_mode, const char *v
 	}
 
 	if (!strcmp(mode, "ex") && find_config_tree_bool(cmd, global_read_only_lock_modes_CFG, NULL)) {
-		log_error("Disallow lock-gl ex with read_only_lock_modes");
+		log_error("Exclusive global lock not allowed with read_only_lock_modes");
 		return 0;
 	}
 
@@ -1136,7 +1126,7 @@ int lockd_gl_create(struct cmd_context *cmd, const char *def_mode, const char *v
 			      NULL, vg_lock_type, NULL, NULL, NULL, NULL, mode, NULL,
 			      &result, &lockd_flags)) {
 		/* No result from lvmlockd, it is probably not running. */
-		log_error("Locking failed for global lock");
+		log_error("Global lock failed: check that lvmlockd is running.");
 		return 0;
 	}
 
@@ -1150,8 +1140,6 @@ int lockd_gl_create(struct cmd_context *cmd, const char *def_mode, const char *v
 	}
 
 	/*
-	 * result and lockd_flags were returned from lvmlockd.
-	 *
 	 * ENOLS: no lockspace was found with a global lock.
 	 * It may not exist (perhaps this command is creating the first),
 	 * or it may not be visible or started on the system yet.
@@ -1194,7 +1182,7 @@ int lockd_gl_create(struct cmd_context *cmd, const char *def_mode, const char *v
 		if ((lockd_flags & LD_RF_NO_GL_LS) &&
 		    !strcmp(vg_lock_type, "sanlock") &&
 		    !strcmp(mode, "enable")) {
-			log_debug("Enabling sanlock global lock");
+			log_print_unless_silent("Enabling sanlock global lock");
 			lvmetad_validate_global_cache(cmd, 1);
 			return 1;
 		}
@@ -1221,15 +1209,24 @@ int lockd_gl_create(struct cmd_context *cmd, const char *def_mode, const char *v
 			return 1;
 		}
 
-		log_error("Global lock %s error %d", mode, result);
+		if (!strcmp(vg_lock_type, "sanlock"))
+			log_error("Global lock failed: check that VG holding global lock exists and is started.");
+		else
+			log_error("Global lock failed: check that global lockspace is started.");
 		return 0;
 	}
 
+	/*
+	 * Check for each specific error that can be returned so a helpful
+	 * message can be printed for it.
+	 */
 	if (result < 0) {
 		if (result == -ESTARTING)
-			log_error("Global lock %s error: lockspace is starting", mode);
+			log_error("Global lock failed: lockspace is starting.");
+		else if (result -EAGAIN)
+			log_error("Global lock failed: held by other host.");
 		else
-			log_error("Global lock %s error %d", mode, result);
+			log_error("Global lock failed: error %d", result);
 		return 0;
 	}
 
@@ -1321,7 +1318,7 @@ int lockd_gl(struct cmd_context *cmd, const char *def_mode, uint32_t flags)
 	}
 
 	if (!strcmp(mode, "ex") && find_config_tree_bool(cmd, global_read_only_lock_modes_CFG, NULL)) {
-		log_error("Disallow lock-gl ex with read_only_lock_modes");
+		log_error("Exclusive global lock not allowed with read_only_lock_modes");
 		return 0;
 	}
 
@@ -1331,25 +1328,18 @@ int lockd_gl(struct cmd_context *cmd, const char *def_mode, uint32_t flags)
 			    &result, &lockd_flags)) {
 		/* No result from lvmlockd, it is probably not running. */
 
-		/*
-		 * We don't care if an unlock operation fails in this case, and
-		 * we can allow a shared lock request to succeed without any
-		 * serious harm.  To disallow basic reading/reporting when
-		 * lvmlockd is stopped is too strict, unnecessary, and
-		 * inconvenient.  We force a global cache validation in this
-		 * case.
-		 */
-
+		/* We don't care if an unlock fails. */
 		if (!strcmp(mode, "un"))
 			return 1;
 
+		/* We can continue reading if a shared lock fails. */
 		if (!strcmp(mode, "sh")) {
 			log_warn("Reading without shared global lock.");
 			lvmetad_validate_global_cache(cmd, 1);
 			return 1;
 		}
 
-		log_error("Locking failed for global lock");
+		log_error("Global lock failed: check that lvmlockd is running.");
 		return 0;
 	}
 
@@ -1363,8 +1353,6 @@ int lockd_gl(struct cmd_context *cmd, const char *def_mode, uint32_t flags)
 	}
 
 	/*
-	 * result and lockd_flags were returned from lvmlockd.
-	 *
 	 * ENOLS: no lockspace was found with a global lock.
 	 * The VG with the global lock may not be visible or started yet,
 	 * this should be a temporary condition.
@@ -1378,26 +1366,23 @@ int lockd_gl(struct cmd_context *cmd, const char *def_mode, uint32_t flags)
 			return 1;
 
 		/*
-		 * This is a general condition for allowing the command to
-		 * proceed without a shared global lock when the global lock is
-		 * not found or ready.  This should not be a persistent
-		 * condition.  The VG containing the global lock should appear
-		 * on the system, or the global lock should be enabled in
-		 * another VG, or the the lockspace with the gl should finish
-		 * starting.
-		 *
-		 * Same reasons as above for allowing the command to proceed
-		 * with the shared gl.  We force a global cache validation and
-		 * print a warning.
+		 * If an ex global lock fails, then the command fails.
 		 */
-
 		if (strcmp(mode, "sh")) {
 			if (result == -ESTARTING)
-				log_error("Global lock %s error: lockspace is starting", mode);
+				log_error("Global lock failed: lockspace is starting.");
+			else if (result == -ENOLS)
+				log_error("Global lock failed: check that global lockspace is started.");
 			else
-				log_error("Global lock %s error %d", mode, result);
+				log_error("Global lock failed: error %d", result);
 			return 0;
 		}
+
+		/*
+		 * If a sh global lock fails, then the command can continue
+		 * reading without it, but force a global cache validation,
+		 * and print a warning.
+		 */
 
 		if (result == -ESTARTING) {
 			log_warn("Skipping global lock: lockspace is starting");
@@ -1405,14 +1390,18 @@ int lockd_gl(struct cmd_context *cmd, const char *def_mode, uint32_t flags)
 			return 1;
 		}
 
-		if ((lockd_flags & LD_RF_NO_GL_LS) ||
-		    (lockd_flags & LD_RF_NO_LOCKSPACES)) {
-			log_warn("Skipping global lock: not found");
+		if ((lockd_flags & LD_RF_NO_GL_LS) || (lockd_flags & LD_RF_NO_LOCKSPACES)) {
+			log_warn("Skipping global lock: lockspace not found or started");
 			lvmetad_validate_global_cache(cmd, 1);
 			return 1;
 		}
 
-		log_error("Global lock %s error %d", mode, result);
+		/*
+		 * This is for completeness.  If we reach here, then
+		 * a specific check for the error should be added above
+		 * with a more helpful message.
+		 */
+		log_error("Global lock failed: error %d", result);
 		return 0;
 	}
 
@@ -1424,8 +1413,19 @@ int lockd_gl(struct cmd_context *cmd, const char *def_mode, uint32_t flags)
 			log_debug("Ignore failed locking for global lock");
 			lvmetad_validate_global_cache(cmd, 1);
 			return 1;
+		} else if (result == -EAGAIN) {
+			/*
+			 * Most of the time, retries should avoid this case.
+			 */
+			log_error("Global lock failed: held by other host.");
+			return 0;
 		} else {
-			log_error("Global lock %s error %d", mode, result);
+			/*
+			 * We don't intend to reach this.  We should check
+			 * any known/possible error specifically and print
+			 * a more helpful message.  This is for completeness.
+			 */
+			log_error("Global lock failed: error %d.", result);
 			return 0;
 		}
 	}
@@ -1548,7 +1548,7 @@ int lockd_vg(struct cmd_context *cmd, const char *vg_name, const char *def_mode,
 		mode = cmd->lockd_vg_default_sh ? "sh" : "ex";
 
 	if (!strcmp(mode, "ex") && find_config_tree_bool(cmd, global_read_only_lock_modes_CFG, NULL)) {
-		log_error("Disallow VG ex lock with read_only_lock_modes");
+		log_error("Exclusive VG lock not allowed with read_only_lock_modes");
 		return 0;
 	}
 
@@ -1674,7 +1674,9 @@ int lockd_vg(struct cmd_context *cmd, const char *vg_name, const char *def_mode,
 	}
 
 	/*
-	 * Unknown error.
+	 * Another error.  We don't intend to reach here, but
+	 * want to check for each specific error above so that
+	 * a helpful message can be printed.
 	 */
 	if (result) {
 		if (!strcmp(mode, "un")) {
@@ -1842,8 +1844,13 @@ int lockd_lv_name(struct cmd_context *cmd, struct volume_group *vg,
 		}
 	}
 
+	if (result == -ENOLS) {
+		log_error("LV %s/%s lock failed: lockspace is inactive", vg->name, lv_name);
+		return 0;
+	}
+
 	if (result < 0) {
-		log_error("LV lock %s error %d: %s/%s", mode, result, vg->name, lv_name);
+		log_error("LV %s/%s lock failed: error %d", vg->name, lv_name, result);
 		return 0;
 	}
 
