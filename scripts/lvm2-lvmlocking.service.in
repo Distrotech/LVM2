@@ -12,10 +12,10 @@ Type=oneshot
 ExecStart=@sbindir@/vgchange --lock-start --lock-opt autowait
 
 # auto activate LVs in the newly started lockd VGs
-ExecStart=@sbindir@/vgchange -aay -S locktype=sanlock || locktype=dlm
+ExecStart=@sbindir@/vgchange -aay -S 'locktype=sanlock || locktype=dlm'
 
 # deactivate LVs in lockd VGs
-ExecStop=@sbindir@/vgchange -an -S locktype=sanlock || locktype=dlm
+ExecStop=@sbindir@/vgchange -an -S 'locktype=sanlock || locktype=dlm'
 
 # stop lockspaces and wait for them to finish stopping
 ExecStop=@sbindir@/lvmlockctl --stop-lockspaces --wait
