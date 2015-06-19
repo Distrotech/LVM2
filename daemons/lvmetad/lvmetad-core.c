@@ -28,6 +28,87 @@
 
 #define LVMETAD_SOCKET DEFAULT_RUN_DIR "/lvmetad.socket"
 
+/*
+ * valid/invalid state of cached metadata
+ *
+ * The metadata cached in lvmetad may become out of date (invalid/stale)
+ * compared to what is on disk.  This is expected when using lvmlockd,
+ * because multiple hosts can be changing metadata on disk.  To deal with
+ * this, the metadata cached in lvmetad can be flagged as invalid.
+ * This invalid flag is returned along with the metadata when read by
+ * a command.  The command can check for the invalid flag and decide
+ * that it should either use the stale metadata (uncommon), or read the
+ * latest metadata from disk rather than using the invalid metadata that
+ * was returned.  If the command reads the latest metadata from disk,
+ * it can choose to send it to lvmetad to update the cached copy and
+ * clear the invalid flag in lvmetad.  Otherwise, the next command to
+ * read the metadata from lvmetad will also receive the invalid metadata
+ * with the invalid flag (and like the previous command, it too may
+ * choose to read the latest metadata from disk and can then also choose
+ * to update the lvmetad copy.)
+ *
+ * For purposes of tracking the invalid state, LVM metadata is considered
+ * to be either VG-specific or global.  VG-specific metadata is metadata
+ * that is isolated to a VG, such as the LVs it contains.  Global
+ * metadata is metadata that is not isolated to a single VG.  Global
+ * metdata includes:
+ * . the VG namespace (which VG names are used)
+ * . the set of orphan PVs (which PVs are in VGs and which are not)
+ * . properties of orphan PVs (the size of an orphan PV)
+ *
+ * If the metadata for a single VG becomes invalid, the VGFL_INVALID
+ * flag can be set in the vg_info struct for that VG.  If the global
+ * metdata becomes invalid, the GLFL_INVALID flag can be set in the
+ * lvmetad daemon state.
+ *
+ * If a command reads VG metadata and VGFL_INVALID is set, an
+ * extra config node called "vg_invalid" is added to the config
+ * data returned to the command.
+ *
+ * If a command reads global metdata and GLFL_INVALID is set, an
+ * extra config node called "global_invalid" is added to the
+ * config data returned to the command.
+ *
+ * If a command sees vg_invalid, and wants the latest VG metadata,
+ * it only needs to scan disks of the PVs in that VG.
+ * It can then use vg_update to send the latest metadata to lvmetad
+ * which clears the VGFL_INVALID flag.
+ *
+ * If a command sees global_invalid, and wants the latest metadata,
+ * it should scan all devices to update lvmetad, and then send
+ * lvmetad the "set_global_info global_invalid=0" message to clear
+ * GLFL_INVALID.
+ *
+ * The lvmetad INVALID flags can be set by sending lvmetad the messages:
+ *
+ * . set_vg_info with the latest VG seqno.  If the VG seqno is larger
+ *   than the cached VG seqno, VGFL_INVALID is set for the VG.
+ *
+ * . set_global_info with global_invalid=1 sets GLFL_INVALID.
+ *
+ * Different entities could use these functions to invalidate metadata
+ * if/when they detected that the cache is stale.  How they detect that
+ * the cache is stale depends on the details of the specific entity.
+ *
+ * In the case of lvmlockd, it embeds values into its locks to keep track
+ * of when other nodes have changed metadata on disk related to those locks.
+ * When acquring locks it can look at these values and detect that
+ * the metadata associated with the lock has been changed.
+ * When the values change, it uses set_vg_info/set_global_info to
+ * invalidate the lvmetad cache.
+ *
+ * The values that lvmlockd distributes through its locks are the
+ * latest VG seqno in VG locks and a global counter in the global lock.
+ * When a host acquires a VG lock and sees that the embedded seqno is
+ * larger than it was previously, it knows that it should invalidate the
+ * lvmetad cache for the VG.  If the host acquires the global lock
+ * and sees that the counter is larger than previously, it knows that
+ * it should invalidate the global info in lvmetad.  This invalidation
+ * is done before the lock is returned to the command.  This way the
+ * invalid flag will be set on the metadata before the command reads
+ * it from lvmetad.
+ */
+
 struct vg_info {
 	int64_t external_version;
 	uint32_t flags; /* VGFL_ */
