@@ -3078,9 +3078,9 @@ int vg_commit(struct volume_group *vg)
 	if ((vg->fid->fmt->features & FMT_PRECOMMIT) && !lvmetad_vg_update(vg))
 		return_0;
 
-	lockd_vg_update(vg);
-
 	cache_updated = _vg_commit_mdas(vg);
+
+	lockd_vg_update(vg);
 
 	if (cache_updated) {
 		/* Instruct remote nodes to upgrade cached metadata. */
