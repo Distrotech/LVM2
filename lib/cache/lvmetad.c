@@ -1285,7 +1285,7 @@ int lvmetad_vg_clear_outdated_pvs(struct volume_group *vg)
 }
 
 /*
- * Represents the state of PVs in lvmetad so we can look for changes
+ * Records the state of cached PVs in lvmetad so we can look for changes
  * after rescanning.
  */
 struct pv_cache_list {
@@ -1297,6 +1297,9 @@ struct pv_cache_list {
 	unsigned update_udev : 1;
 };
 
+/*
+ * Get the list of PVs known to lvmetad.
+ */
 static int _lvmetad_get_pv_cache_list(struct cmd_context *cmd, struct dm_list *pvc_list)
 {
 	daemon_reply reply;
@@ -1352,27 +1355,32 @@ static void _update_pv_in_udev(struct cmd_context *cmd, dev_t devt)
 {
 	struct device *dev;
 
-	log_debug("device %d:%d open to update udev",
-		  (int)MAJOR(devt), (int)MINOR(devt));
+	log_debug_devs("device %d:%d open to update udev",
+		       (int)MAJOR(devt), (int)MINOR(devt));
 
 	if (!(dev = dev_cache_get_by_devt(devt, cmd->lvmetad_filter))) {
 		log_error("_update_pv_in_udev no dev found");
 		return;
 	}
 
-	if (!dev_open(dev)) {
-		log_error("_update_pv_in_udev open failed");
+	if (!dev_open(dev))
 		return;
-	}
-
-	if (!dev_close(dev))
-		log_error("_update_pv_in_udev close failed");
+	dev_close(dev);
 }
 
 /*
- * For PVs that have changed pvid or vgid since we last saw them,
- * there may be information in the udev database to update, so
- * open these devices to trigger a udev update.
+ * Compare before and after PV lists from before/after rescanning,
+ * and update udev db for changes.
+ *
+ * For PVs that have changed pvid or vgid in lvmetad from rescanning,
+ * there may be information in the udev database to update, so open
+ * these devices to trigger a udev update.
+ *
+ * "before" refers to the list of pvs from lvmetad before rescanning
+ * "after" refers to the list of pvs from lvmetad after rescanning
+ *
+ * Comparing both lists, we can see which PVs changed (pvid or vgid),
+ * and trigger a udev db update for those.
  */
 static void _update_changed_pvs_in_udev(struct cmd_context *cmd,
 					struct dm_list *pvc_before,
@@ -1400,9 +1408,9 @@ static void _update_changed_pvs_in_udev(struct cmd_context *cmd,
 				strncpy(&id_before[0], (char *) &before->pvid, sizeof(id_before) - 1);
 				strncpy(&id_after[0], (char *) &after->pvid, sizeof(id_after) - 1);
 
-				log_debug("device %d:%d changed pvid from %s to %s",
-					  (int)MAJOR(before->devt), (int)MINOR(before->devt),
-					  id_before, id_after);
+				log_debug_devs("device %d:%d changed pvid from %s to %s",
+					       (int)MAJOR(before->devt), (int)MINOR(before->devt),
+					       id_before, id_after);
 
 				before->update_udev = 1;
 
@@ -1410,9 +1418,9 @@ static void _update_changed_pvs_in_udev(struct cmd_context *cmd,
 				   (after->vgid && !before->vgid) ||
 				   (before->vgid && after->vgid && strcmp(before->vgid, after->vgid))) {
 
-				log_debug("device %d:%d changed vg from %s to %s",
-					  (int)MAJOR(before->devt), (int)MINOR(before->devt),
-					  before->vgid ?: "none", after->vgid ?: "none");
+				log_debug_devs("device %d:%d changed vg from %s to %s",
+					       (int)MAJOR(before->devt), (int)MINOR(before->devt),
+					       before->vgid ?: "none", after->vgid ?: "none");
 
 				before->update_udev = 1;
 			}
@@ -1427,9 +1435,9 @@ static void _update_changed_pvs_in_udev(struct cmd_context *cmd,
 			memset(id_before, 0, sizeof(id_before));
 			strncpy(&id_before[0], (char *) &before->pvid, sizeof(id_before) - 1);
 
-			log_debug("device %d:%d pvid %s vg %s is gone",
-				  (int)MAJOR(before->devt), (int)MINOR(before->devt),
-				  id_before, before->vgid ? before->vgid : "none");
+			log_debug_devs("device %d:%d pvid %s vg %s is gone",
+				       (int)MAJOR(before->devt), (int)MINOR(before->devt),
+				       id_before, before->vgid ? before->vgid : "none");
 
 			before->update_udev = 1;
 		}
@@ -1515,22 +1523,29 @@ void lvmetad_validate_global_cache(struct cmd_context *cmd, int force)
 		return;
 	}
 
+ do_scan:
 	/*
 	 * Save the current state of pvs from lvmetad so after devices are
 	 * scanned, we can compare to the new state to see if pvs changed.
 	 */
 	_lvmetad_get_pv_cache_list(cmd, &pvc_before);
 
- do_scan:
+	/*
+	 * Update the local lvmetad cache so it correctly reflects any
+	 * changes made on remote hosts.
+	 */
 	lvmetad_pvscan_all_devs(cmd, NULL);
 
-	/* Clear the global_invalid flag in lvmetad. */
-
+	/*
+	 * Clear the global_invalid flag in lvmetad.
+	 * Subsequent local commands that read global state
+	 * from lvmetad will not see global_invalid until
+	 * another host makes another global change.
+	 */
 	reply = daemon_send_simple(_lvmetad, "set_global_info",
 				   "token = %s", "skip",
 				   "global_invalid = %d", 0,
 				   NULL);
-
 	if (reply.error)
 		log_error("lvmetad_validate_global_cache set_global_info error %d", reply.error);
 
@@ -1539,11 +1554,25 @@ void lvmetad_validate_global_cache(struct cmd_context *cmd, int force)
 
 	daemon_reply_destroy(reply);
 
+	/*
+	 * Populate this command's lvmcache structures from lvmetad.
+	 */
 	lvmcache_seed_infos_from_lvmetad(cmd);
 
 	/*
-	 * If a PV has a different PVID or VG than before, then
-	 * open the device to trigger a uevent to update the udev db.
+	 * Update the local udev database to reflect PV changes from
+	 * other hosts.
+	 *
+	 * Compare the before and after PV lists, and if a PV's
+	 * pvid or vgid has changed, then open that device to trigger
+	 * a uevent to update the udev db.
+	 *
+	 * This has no direct benefit to lvm, but is just a best effort
+	 * attempt to keep the udev db updated and reflecting current
+	 * lvm information.
+	 *
+	 * FIXME: lvmcache_seed_infos_from_lvmetad() and _lvmetad_get_pv_cache_list()
+	 * each get pv_list from lvmetad, and they could share a single pv_list reply.
 	 */
 	if (!dm_list_empty(&pvc_before)) {
 		_lvmetad_get_pv_cache_list(cmd, &pvc_after);
