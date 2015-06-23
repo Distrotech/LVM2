@@ -1285,6 +1285,168 @@ int lvmetad_vg_clear_outdated_pvs(struct volume_group *vg)
 }
 
 /*
+ * Represents the state of PVs in lvmetad so we can look for changes
+ * after rescanning.
+ */
+struct pv_cache_list {
+	struct dm_list list;
+	dev_t devt;
+	struct id pvid;
+	const char *vgid;
+	unsigned found : 1;
+	unsigned update_udev : 1;
+};
+
+static int _lvmetad_get_pv_cache_list(struct cmd_context *cmd, struct dm_list *pvc_list)
+{
+	daemon_reply reply;
+	struct dm_config_node *cn;
+	struct pv_cache_list *pvcl;
+	const char *pvid_txt;
+	const char *vgid;
+
+	if (!lvmetad_active())
+		return 1;
+
+	log_debug_lvmetad("Asking lvmetad for complete list of known PVs");
+	reply = _lvmetad_send("pv_list", NULL);
+	if (!_lvmetad_handle_reply(reply, "list PVs", "", NULL)) {
+		log_error("lvmetad message failed.");
+		daemon_reply_destroy(reply);
+		return_0;
+	}
+
+	if ((cn = dm_config_find_node(reply.cft->root, "physical_volumes"))) {
+		for (cn = cn->child; cn; cn = cn->sib) {
+			if (!(pvcl = dm_pool_zalloc(cmd->mem, sizeof(*pvcl)))) {
+				log_error("pv_cache_list allocation failed.");
+				return 0;
+			}
+
+			pvid_txt = cn->key;
+			if (!id_read_format(&pvcl->pvid, pvid_txt)) {
+				stack;
+				continue;
+			}
+
+			pvcl->devt = dm_config_find_int(cn->child, "device", 0);
+
+			if ((vgid = dm_config_find_str(cn->child, "vgid", NULL)))
+				pvcl->vgid = dm_pool_strdup(cmd->mem, vgid);
+
+			dm_list_add(pvc_list, &pvcl->list);
+		}
+	}
+
+	daemon_reply_destroy(reply);
+
+	return 1;
+}
+
+/*
+ * Opening the device RDWR should trigger a udev db update.
+ * FIXME: should we just use libudev and directly update
+ * what might have changed?
+ */
+static void _update_pv_in_udev(struct cmd_context *cmd, dev_t devt)
+{
+	struct device *dev;
+
+	log_debug("device %d:%d open to update udev",
+		  (int)MAJOR(devt), (int)MINOR(devt));
+
+	if (!(dev = dev_cache_get_by_devt(devt, cmd->lvmetad_filter))) {
+		log_error("_update_pv_in_udev no dev found");
+		return;
+	}
+
+	if (!dev_open(dev)) {
+		log_error("_update_pv_in_udev open failed");
+		return;
+	}
+
+	if (!dev_close(dev))
+		log_error("_update_pv_in_udev close failed");
+}
+
+/*
+ * For PVs that have changed pvid or vgid since we last saw them,
+ * there may be information in the udev database to update, so
+ * open these devices to trigger a udev update.
+ */
+static void _update_changed_pvs_in_udev(struct cmd_context *cmd,
+					struct dm_list *pvc_before,
+					struct dm_list *pvc_after)
+{
+	struct pv_cache_list *before;
+	struct pv_cache_list *after;
+	char id_before[ID_LEN + 1]  __attribute__((aligned(8)));
+	char id_after[ID_LEN + 1]  __attribute__((aligned(8)));
+	int found;
+
+	dm_list_iterate_items(before, pvc_before) {
+		found = 0;
+
+		dm_list_iterate_items(after, pvc_after) {
+			if (after->found)
+				continue;
+
+			if (before->devt != after->devt)
+				continue;
+
+			if (!id_equal(&before->pvid, &after->pvid)) {
+				memset(id_before, 0, sizeof(id_before));
+				memset(id_after, 0, sizeof(id_after));
+				strncpy(&id_before[0], (char *) &before->pvid, sizeof(id_before) - 1);
+				strncpy(&id_after[0], (char *) &after->pvid, sizeof(id_after) - 1);
+
+				log_debug("device %d:%d changed pvid from %s to %s",
+					  (int)MAJOR(before->devt), (int)MINOR(before->devt),
+					  id_before, id_after);
+
+				before->update_udev = 1;
+
+			} else if ((before->vgid && !after->vgid) ||
+				   (after->vgid && !before->vgid) ||
+				   (before->vgid && after->vgid && strcmp(before->vgid, after->vgid))) {
+
+				log_debug("device %d:%d changed vg from %s to %s",
+					  (int)MAJOR(before->devt), (int)MINOR(before->devt),
+					  before->vgid ?: "none", after->vgid ?: "none");
+
+				before->update_udev = 1;
+			}
+
+			after->found = 1;
+			before->found = 1;
+			found = 1;
+			break;
+		}
+
+		if (!found) {
+			memset(id_before, 0, sizeof(id_before));
+			strncpy(&id_before[0], (char *) &before->pvid, sizeof(id_before) - 1);
+
+			log_debug("device %d:%d pvid %s vg %s is gone",
+				  (int)MAJOR(before->devt), (int)MINOR(before->devt),
+				  id_before, before->vgid ? before->vgid : "none");
+
+			before->update_udev = 1;
+		}
+	}
+
+	dm_list_iterate_items(before, pvc_before) {
+		if (before->update_udev)
+			_update_pv_in_udev(cmd, before->devt);
+	}
+
+	dm_list_iterate_items(after, pvc_after) {
+		if (after->update_udev)
+			_update_pv_in_udev(cmd, after->devt);
+	}
+}
+
+/*
  * Before this command was run, some external entity may have
  * invalidated lvmetad's cache of global information, e.g. lvmlockd.
  *
@@ -1316,8 +1478,13 @@ int lvmetad_vg_clear_outdated_pvs(struct volume_group *vg)
 
 void lvmetad_validate_global_cache(struct cmd_context *cmd, int force)
 {
+	struct dm_list pvc_before; /* pv_cache_list */
+	struct dm_list pvc_after; /* pv_cache_list */
 	daemon_reply reply;
 	int global_invalid;
+
+	dm_list_init(&pvc_before);
+	dm_list_init(&pvc_after);
 
 	if (!lvmetad_used())
 		return;
@@ -1348,6 +1515,12 @@ void lvmetad_validate_global_cache(struct cmd_context *cmd, int force)
 		return;
 	}
 
+	/*
+	 * Save the current state of pvs from lvmetad so after devices are
+	 * scanned, we can compare to the new state to see if pvs changed.
+	 */
+	_lvmetad_get_pv_cache_list(cmd, &pvc_before);
+
  do_scan:
 	lvmetad_pvscan_all_devs(cmd, NULL);
 
@@ -1367,4 +1540,13 @@ void lvmetad_validate_global_cache(struct cmd_context *cmd, int force)
 	daemon_reply_destroy(reply);
 
 	lvmcache_seed_infos_from_lvmetad(cmd);
+
+	/*
+	 * If a PV has a different PVID or VG than before, then
+	 * open the device to trigger a uevent to update the udev db.
+	 */
+	if (!dm_list_empty(&pvc_before)) {
+		_lvmetad_get_pv_cache_list(cmd, &pvc_after);
+		_update_changed_pvs_in_udev(cmd, &pvc_before, &pvc_after);
+	}
 }
