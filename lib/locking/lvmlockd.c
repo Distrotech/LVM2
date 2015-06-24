@@ -1101,7 +1101,28 @@ int lockd_gl_create(struct cmd_context *cmd, const char *def_mode, const char *v
 	int retries = 0;
 	int result;
 
-	/* A specific lock mode was given on the command line. */
+	/*
+	 * There are four variations of creating a local/lockd VG
+	 * with/without use_lvmlockd set.
+	 *
+	 * use_lvmlockd=1, lockd VG:
+	 * This function should acquire or create the global lock.
+	 *
+	 * use_lvmlockd=0, local VG:
+	 * This function is a no-op, just returns 1.
+	 *
+	 * use_lvmlockd=0, lockd VG
+	 * An error is returned in vgcreate_params_set_from_args (before this is called).
+	 *
+	 * use_lvmlockd=1, local VG
+	 * This function should acquire the global lock.
+	 */
+	if (!_use_lvmlockd && !is_lockd_type(vg_lock_type))
+		return 1;
+
+	/*
+	 * A specific lock mode was given on the command line.
+	 */
 	if (cmd->lock_gl_mode) {
 		mode = cmd->lock_gl_mode;
 		if (mode && def_mode && strcmp(mode, "enable") && (_mode_compare(mode, def_mode) < 0)) {
@@ -1292,6 +1313,36 @@ int lockd_gl_create(struct cmd_context *cmd, const char *def_mode, const char *v
  * a change is made to the state associated with the global lock, and
  * if the local version number is lower than the version number in the
  * lock, then the local lvmetad state must be updated.
+ *
+ * Effects of misconfiguring use_lvmlockd.
+ *
+ * - Setting use_lvmlockd=1 tells lvm commands to use the global lock.
+ * This should not be set unless a lock manager and lockd VGs will
+ * be used.  Setting use_lvmlockd=1 without setting up a lock manager
+ * or using lockd VGs will cause lvm commands to fail when they attempt
+ * to change any global state (requiring the ex global lock), and will
+ * cause warnings when the commands read global state (requiring the sh
+ * global lock).  In this condition, lvm is nominally useful, and local
+ * VGs can continue to be used mostly as usual.  But, the warnings/errors
+ * should lead a user to either set up a lock manager and lockd VGs,
+ * or set use_lvmlockd to 0.
+ *
+ * - Setting use_lvmlockd=0 tells lvm commands to not use the global lock.
+ * If use_lvmlockd=0 when lockd VGs exist which require lvmlockd, the
+ * lockd_gl() calls become no-ops, but the lockd_vg() calls for the lockd
+ * VGs will fail.  The warnings/errors from accessing the lockd VGs
+ * should lead the user to set use_lvmlockd to 1 and run the necessary
+ * lock manager.  In this condition, lvm reverts to the behavior of
+ * the following case, in which system ID largely protects shared
+ * devices, but has limitations.
+ *
+ * - Setting use_lvmlockd=0 with shared devices, no lockd VGs and
+ * no lock manager is a recognized mode of operation that is
+ * described in the lvmsystemid man page.  Using lvm on shared
+ * devices this way is made safe by using system IDs to assign
+ * ownership of VGs to single hosts.  The main limitation of this
+ * mode (among others outlined in the man page), is that orphan PVs
+ * are not protected from concurrent used among hosts.
  */
 
 int lockd_gl(struct cmd_context *cmd, const char *def_mode, uint32_t flags)
@@ -1302,8 +1353,21 @@ int lockd_gl(struct cmd_context *cmd, const char *def_mode, uint32_t flags)
 	int retries = 0;
 	int result;
 
-	/* A specific lock mode was given on the command line. */
-	if (!(flags & LDGL_MODE_NOARG) && cmd->lock_gl_mode) {
+	if (!_use_lvmlockd)
+		return 1;
+
+	if (def_mode && !strcmp(def_mode, "un")) {
+		if (cmd->lock_gl_mode && !strcmp(cmd->lock_gl_mode, "na"))
+			return 1;
+
+		mode = "un";
+		goto req;
+	}
+
+	/*
+	 * A specific lock mode was given on the command line.
+	 */
+	if (cmd->lock_gl_mode) {
 		mode = cmd->lock_gl_mode;
 		if (mode && def_mode && (_mode_compare(mode, def_mode) < 0)) {
 			if (!find_config_tree_bool(cmd, global_allow_override_lock_modes_CFG, NULL)) {
@@ -1482,9 +1546,12 @@ int lockd_vg(struct cmd_context *cmd, const char *vg_name, const char *def_mode,
 {
 	const char *mode = NULL;
 	uint32_t lockd_flags;
+	uint32_t prev_state = *lockd_state;
 	int retries = 0;
 	int result;
 	int ret;
+
+	*lockd_state = 0;
 
 	if (!is_real_vg(vg_name))
 		return 1;
@@ -1511,7 +1578,7 @@ int lockd_vg(struct cmd_context *cmd, const char *vg_name, const char *def_mode,
 		if (cmd->lock_vg_mode && !strcmp(cmd->lock_vg_mode, "na"))
 			return 1;
 
-		if (*lockd_state & LDST_FAIL) {
+		if (prev_state & LDST_FAIL) {
 			log_debug("VG %s unlock skipped: lockd_state is failed", vg_name);
 			return 1;
 		}
@@ -1520,13 +1587,10 @@ int lockd_vg(struct cmd_context *cmd, const char *vg_name, const char *def_mode,
 		goto req;
 	}
 
-	*lockd_state = 0;
-
 	/*
 	 * A specific lock mode was given on the command line.
-	 * LDVG_MODE_NOARG disables getting the mode from --lock-vg arg.
 	 */
-	if (!(flags & LDVG_MODE_NOARG) && cmd->lock_vg_mode) {
+	if (cmd->lock_vg_mode) {
 		mode = cmd->lock_vg_mode;
 		if (mode && def_mode && (_mode_compare(mode, def_mode) < 0)) {
 			if (!find_config_tree_bool(cmd, global_allow_override_lock_modes_CFG, NULL)) {
@@ -1559,17 +1623,16 @@ int lockd_vg(struct cmd_context *cmd, const char *vg_name, const char *def_mode,
 
 	if (!strcmp(mode, "ex"))
 		*lockd_state |= LDST_EX;
-	else if (!strcmp(mode, "sh"))
-		*lockd_state |= LDST_SH;
-
  req:
 	if (!_lockd_request(cmd, "lock_vg",
 			      vg_name, NULL, NULL, NULL, NULL, NULL, mode, NULL,
 			      &result, &lockd_flags)) {
 		/*
 		 * No result from lvmlockd, it is probably not running.
-		 * Decide if it is ok to continue without a lock after
-		 * reading the VG and looking at the lock_type.
+		 * Decide if it is ok to continue without a lock in
+		 * access_vg_lock_type() after the VG has been read and
+		 * the lock_type can be checked.  We don't care about
+		 * this error for local VGs, but we do care for lockd VGs.
 		 */
 		*lockd_state |= LDST_FAIL_REQUEST;
 		return 1;
@@ -1936,6 +1999,12 @@ int lockd_lv(struct cmd_context *cmd, struct logical_volume *lv,
 {
 	if (!is_lockd_type(lv->vg->lock_type))
 		return 1;
+
+	if (!_use_lvmlockd) {
+		log_error("LV in VG %s with lock_type %s requires lvmlockd.",
+			  lv->vg->name, lv->vg->lock_type);
+		return 0;
+	}
 
 	if (lv_is_thin_type(lv))
 		return _lockd_lv_thin(cmd, lv, def_mode, flags);
