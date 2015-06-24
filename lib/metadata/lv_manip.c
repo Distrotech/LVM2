@@ -5830,7 +5830,7 @@ int lv_remove_single(struct cmd_context *cmd, struct logical_volume *lv,
 
 	backup(vg);
 
-	lockd_lv(cmd, lock_lv, "un", LDLV_PERSISTENT | LDLV_MODE_NOARG);
+	lockd_lv(cmd, lock_lv, "un", LDLV_PERSISTENT);
 	lockd_free_lv(cmd, vg, lv->name, &lv->lvid.id[1], lv->lock_args);
 
 	if (!suppress_remove_message && visible)
