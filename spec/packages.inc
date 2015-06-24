@@ -189,10 +189,11 @@ fi
   %{_unitdir}/lvm2-lvmpolld.service
   %{_unitdir}/lvm2-lvmpolld.socket
  %endif
- #%if %{have_service lvmlockd}
- # %{_unitdir}/lvm2-lvmlockd.service
- # %{_unitdir}/lvm2-lvmlockd.socket
- #%endif
+ %if %{have_service lvmlockd}
+  %{_unitdir}/lvm2-lvmlockd.service
+  %{_unitdir}/lvm2-lvmlocking.service
+  #%{_unitdir}/lvm2-lvmlockd.socket
+ %endif
 %else
  %{_sysconfdir}/rc.d/init.d/lvm2-monitor
  %{_sysconfdir}/rc.d/init.d/blk-availability
