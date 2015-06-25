@@ -17,6 +17,7 @@
 #include "lvm2cmdline.h"
 #include "label.h"
 #include "lvm-version.h"
+#include "lvmlockd.h"
 
 #include "stub.h"
 #include "last-path-component.h"
@@ -1108,12 +1109,8 @@ static int _get_settings(struct cmd_context *cmd)
 	cmd->include_foreign_vgs = arg_is_set(cmd, foreign_ARG) ? 1 : 0;
 	cmd->include_active_foreign_vgs = cmd->command->flags & ENABLE_FOREIGN_VGS ? 1 : 0;
 		
-	if (!arg_count(cmd, sysinit_ARG)) {
+	if (!arg_count(cmd, sysinit_ARG))
 		lvmetad_connect_or_warn();
-
-		if (lvmlockd_use())
-			lvmlockd_connect();
-	}
 
 	if (arg_count(cmd, nosuffix_ARG))
 		cmd->current_settings.suffix = 0;
@@ -1434,6 +1431,31 @@ static int _prepare_profiles(struct cmd_context *cmd)
 	return 1;
 }
 
+static int _init_lvmlockd(struct cmd_context *cmd)
+{
+	const char *lvmlockd_socket;
+	int use_lvmlockd = find_config_tree_bool(cmd, global_use_lvmlockd_CFG, NULL);
+
+	if (use_lvmlockd && locking_is_clustered()) {
+		log_error("ERROR: configuration setting use_lvmlockd cannot be used with clustered locking_type 3.");
+		return 0;
+	}
+
+	lvmlockd_disconnect(); /* start over when tool context is refreshed */
+	lvmlockd_socket = getenv("LVM_LVMLOCKD_SOCKET");
+	if (!lvmlockd_socket)
+		lvmlockd_socket = DEFAULT_RUN_DIR "/lvmlockd.socket";
+
+	lvmlockd_set_socket(lvmlockd_socket);
+	lvmlockd_set_use(use_lvmlockd);
+	if (use_lvmlockd) {
+		lvmlockd_init(cmd);
+		lvmlockd_connect();
+	}
+
+	return 1;
+}
+
 int lvm_run_command(struct cmd_context *cmd, int argc, char **argv)
 {
 	struct dm_config_tree *config_string_cft;
@@ -1561,6 +1583,11 @@ int lvm_run_command(struct cmd_context *cmd, int argc, char **argv)
 		goto_out;
 	}
 
+	if (!_init_lvmlockd(cmd)) {
+		ret = ECMD_FAILED;
+		goto_out;
+	}
+
 	/*
 	 * Other hosts might have changed foreign VGs so enforce a rescan
 	 * before processing any command using them.
@@ -1576,6 +1603,7 @@ int lvm_run_command(struct cmd_context *cmd, int argc, char **argv)
 	 */
 	ret = cmd->command->fn(cmd, argc, argv);
 
+	lvmlockd_disconnect();
 	fin_locking();
 
       out:
