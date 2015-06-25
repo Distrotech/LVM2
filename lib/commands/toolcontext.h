@@ -100,6 +100,7 @@ struct cmd_context {
 	unsigned include_foreign_vgs:1;
 	unsigned include_active_foreign_vgs:1;
 	unsigned error_foreign_vgs:1;
+	unsigned error_lockd_vgs:1;
 	unsigned lockd_vg_disable:1;
 	unsigned lockd_lv_disable:1;
 	unsigned lockd_vg_default_sh:1;

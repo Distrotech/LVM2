@@ -4648,17 +4648,15 @@ static int _access_vg_lock_type(struct cmd_context *cmd, struct volume_group *vg
 		return 1;
 
 	/*
-	 * When lvmlockd is not used, only allow read access to the VG.
+	 * Some commands always produce an error when accessing lockd VG
+	 * without lvmlockd.
 	 */
 	if (!lvmlockd_use()) {
-		if (lockd_state & LDST_EX) {
-			log_error("Cannot access VG %s which requires lvmlockd for lock_type %s.",
+		if (cmd->error_lockd_vgs) {
+			log_error("Cannot access VG %s with lock type %s that requires lvmlockd.",
 				  vg->name, vg->lock_type);
-			return 0;
-		} else {
-			log_warn("Reading VG %s without a lock.", vg->name);
-			return 1;
 		}
+		return 0;
 	}
 
 	/*

@@ -214,16 +214,26 @@ static int _ignore_vg(struct volume_group *vg, const char *vg_name,
 		}
 	}
 
+	/*
+	 * Accessing a lockd VG when lvmlockd is not used is similar
+	 * to accessing a foreign VG.
+	 */
+	if (read_error & FAILED_LOCK_TYPE) {
+		if (arg_vgnames && str_list_match_item(arg_vgnames, vg->name)) {
+			log_error("Cannot access VG %s with lock_type %s that requires lvmlockd.",
+				  vg->name, vg->lock_type);
+			return 1;
+		} else {
+			read_error &= ~FAILED_LOCK_TYPE; /* Check for other errors */
+			log_verbose("Skipping volume group %s", vg_name);
+			*skip = 1;
+		}
+	}
+
 	if (read_error == FAILED_CLUSTERED) {
 		*skip = 1;
 		stack;	/* Error already logged */
 		return 1;
-	}
-
-	if (read_error & FAILED_LOCK_TYPE) {
-		read_error &= ~FAILED_LOCK_TYPE; /* Check for other errors */
-		log_verbose("Skipping volume group %s", vg_name);
-		*skip = 1;
 	}
 
 	if (read_error != SUCCESS) {
@@ -1983,7 +1993,9 @@ int process_each_vg(struct cmd_context *cmd, int argc, char **argv,
 	unsigned one_vgname_arg = (flags & ONE_VGNAME_ARG);
 	int ret;
 
+	/* Disable error in access_vg because error is printed by ignore_vg. */
 	cmd->error_foreign_vgs = 0;
+	cmd->error_lockd_vgs = 0;
 
 	dm_list_init(&arg_tags);
 	dm_list_init(&arg_vgnames);
@@ -2415,7 +2427,9 @@ int process_each_lv(struct cmd_context *cmd, int argc, char **argv, uint32_t fla
 	int need_vgnameids = 0;
 	int ret;
 
+	/* Disable error in access_vg because error is printed by ignore_vg. */
 	cmd->error_foreign_vgs = 0;
+	cmd->error_lockd_vgs = 0;
 
 	dm_list_init(&arg_tags);
 	dm_list_init(&arg_vgnames);
@@ -2919,7 +2933,9 @@ int process_each_pv(struct cmd_context *cmd,
 	int ret_max = ECMD_PROCESSED;
 	int ret;
 
+	/* Disable error in access_vg because error is printed by ignore_vg. */
 	cmd->error_foreign_vgs = 0;
+	cmd->error_lockd_vgs = 0;
 
 	dm_list_init(&arg_tags);
 	dm_list_init(&arg_pvnames);
