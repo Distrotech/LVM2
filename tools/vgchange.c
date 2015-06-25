@@ -1053,9 +1053,7 @@ static int lockd_vgchange(struct cmd_context *cmd, int argc, char **argv)
 		if (argc && !lockd_gl(cmd, "sh", 0))
 			return_ECMD_FAILED;
 
-	} else if (arg_is_set(cmd, systemid_ARG) ||
-		   arg_is_set(cmd, uuid_ARG) ||
-		   arg_is_set(cmd, locktype_ARG)) {
+	} else if (arg_is_set(cmd, systemid_ARG) || arg_is_set(cmd, locktype_ARG)) {
 		/*
 		 * This is a special case where taking the global lock is
 		 * helpful to detect changes to local VGs from other hosts.  VG
