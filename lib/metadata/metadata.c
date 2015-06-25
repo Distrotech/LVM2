@@ -4651,22 +4651,44 @@ static int _access_vg_lock_type(struct cmd_context *cmd, struct volume_group *vg
 		return 1;
 
 	/*
-	 * When lvmlockd is not used, only allow read access to the VG.
+	 * When lvmlockd is not used, lockd VGs are ignored by lvm
+	 * and cannot be used, with two exceptions:
+	 *
+	 * . The --shared option allows them to be revealed with
+	 *   reporting/display commands.
+	 *
+	 * . If a command asks to operate on one specifically
+	 *   by name, then an error is printed.
 	 */
 	if (!lvmlockd_use()) {
-		if (lockd_state & LDST_EX) {
-			log_error("Cannot access VG %s which requires lvmlockd for lock_type %s.",
-				  vg->name, vg->lock_type);
-			return 0;
-		} else {
-			log_warn("Reading VG %s without a lock.", vg->name);
+		/*
+	 	 * Some reporting/display commands have the --shared option
+		 * (like --foreign) to allow them to reveal lockd VGs that
+		 * are otherwise ignored.  The --shared option must only be
+		 * permitted in commands that read the VG for report or display,
+		 * not any that write the VG or activate LVs.
+	 	 */
+		if (cmd->include_shared_vgs)
 			return 1;
+
+		/*
+		 * Some commands want the error printed by vg_read, others by ignore_vg.
+		 * Those using ignore_vg may choose to skip the error.
+		 */
+		if (cmd->vg_read_print_access_error) {
+			log_error("Cannot access VG %s with lock type %s that requires lvmlockd.",
+				  vg->name, vg->lock_type);
 		}
+
+		return 0;
 	}
 
 	/*
-	 * The lock failed.  If the lock was ex, we cannot continue.
-	 * If the lock was sh, we can allow reading.
+	 * The lock request from lvmlockd failed.  If the lock was ex,
+	 * we cannot continue.  If the lock was sh, we could also fail
+	 * to continue but since the lock was sh, it means the VG is
+	 * only being read, and it doesn't hurt to allow reading with
+	 * no lock.
 	 */
 	if (lockd_state & LDST_FAIL) {
 		if (lockd_state & LDST_EX) {
@@ -4737,18 +4759,16 @@ static int _access_vg_systemid(struct cmd_context *cmd, struct volume_group *vg)
 	}
 
 	/*
-	 * Some commands always produce an error when accessing foreign VG.
+	 * Some commands want the error printed by vg_read, others by ignore_vg.
+	 * Those using ignore_vg may choose to skip the error.
 	 */
-	if (cmd->error_foreign_vgs) {
+	if (cmd->vg_read_print_access_error) {
 		log_error("Cannot access VG %s with system ID %s with local system ID %s.",
 			  vg->name, vg->system_id, cmd->system_id);
 		return 0;
 	}
 
-	/*
-	 * When include_foreign_vgs is 0 and error_foreign_vgs is 0,
-	 * the result is to silently ignore foreign vgs.
-	 */
+	/* Silently ignore foreign vgs. */
 
 	return 0;
 }
