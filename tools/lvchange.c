@@ -1273,6 +1273,11 @@ int lvchange(struct cmd_context *cmd, int argc, char **argv)
 		}
 	}
 
+	/*
+	 * Include foreign VGs that contain active LVs.
+	 * That shouldn't happen in general, but if it does by some
+	 * mistake, then we want to allow those LVs to be deactivated.
+	 */
 	if (arg_is_set(cmd, activate_ARG))
 		cmd->include_active_foreign_vgs = 1;
 

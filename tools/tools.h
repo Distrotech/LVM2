@@ -109,10 +109,8 @@ struct arg_value_group_list {
 #define ENABLE_ALL_DEVS		0x00000008	
 /* Exactly one VG name argument required. */
 #define ONE_VGNAME_ARG		0x00000010
-/* Command is allowed to read foreign VGs. */
-#define ENABLE_FOREIGN_VGS	0x00000020
 /* Command needs a shared lock on a VG; it only reads the VG. */
-#define LOCKD_VG_SH		0x00000040
+#define LOCKD_VG_SH		0x00000020
  
 /* a register of the lvm commands */
 struct command {
