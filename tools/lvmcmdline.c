@@ -1105,10 +1105,10 @@ static int _get_settings(struct cmd_context *cmd)
 		init_ignorelockingfailure(0);
 
 	cmd->ignore_clustered_vgs = arg_is_set(cmd, ignoreskippedcluster_ARG);
-	cmd->error_foreign_vgs = cmd->command->flags & ENABLE_FOREIGN_VGS ? 0 : 1;
-	cmd->error_lockd_vgs = cmd->command->flags & ENABLE_FOREIGN_VGS ? 0 : 1;
+	cmd->error_foreign_vgs = cmd->command->flags & ADVANCED_READ_ERROR ? 0 : 1;
+	cmd->error_lockd_vgs = cmd->command->flags & ADVANCED_READ_ERROR ? 0 : 1;
 	cmd->include_foreign_vgs = arg_is_set(cmd, foreign_ARG) ? 1 : 0;
-	cmd->include_active_foreign_vgs = cmd->command->flags & ENABLE_FOREIGN_VGS ? 1 : 0;
+	cmd->include_active_foreign_vgs = cmd->command->flags & ADVANCED_READ_ERROR ? 1 : 0;
 		
 	if (!arg_count(cmd, sysinit_ARG))
 		lvmetad_connect_or_warn();
