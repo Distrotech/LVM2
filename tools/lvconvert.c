@@ -3380,7 +3380,7 @@ bad:
 	 * The command may sit and monitor progress for some time,
 	 * and we do not need or want the VG lock held during that.
 	 */
-	lockd_vg(cmd, vg->name, "un", 0, &lockd_state);
+	lockd_vg(cmd, lp->vg_name, "un", 0, &lockd_state);
 
 	if (ret == ECMD_PROCESSED && lp->need_polling)
 		ret = _poll_logical_volume(cmd, lp->lv_to_poll,
