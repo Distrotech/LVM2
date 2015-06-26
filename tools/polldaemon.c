@@ -195,7 +195,7 @@ int wait_for_single_lv(struct cmd_context *cmd, struct poll_operation_id *id,
 
 		unlock_and_release_vg(cmd, vg, vg->name);
 
-		lockd_vg(cmd, vg->name, "un", 0, &lockd_state);
+		lockd_vg(cmd, id->vg_name, "un", 0, &lockd_state);
 
 		/*
 		 * FIXME Sleeping after testing, while preferred, also works around
@@ -431,7 +431,7 @@ static int report_progress(struct cmd_context *cmd, struct poll_operation_id *id
 out:
 	unlock_and_release_vg(cmd, vg, vg->name);
 out_ret:
-	lockd_vg(cmd, vg->name, "un", 0, &lockd_state);
+	lockd_vg(cmd, id->vg_name, "un", 0, &lockd_state);
 	return ret;
 }
 
