@@ -421,7 +421,6 @@ static int report_progress(struct cmd_context *cmd, struct poll_operation_id *id
 	}
 
 	if (parms->poll_fns->poll_progress(cmd, lv, id->display_name, parms) == PROGRESS_CHECK_FAILED) {
-		unlock_and_release_vg(cmd, vg, vg->name);
 		ret = 0;
 		goto out;
 	}
