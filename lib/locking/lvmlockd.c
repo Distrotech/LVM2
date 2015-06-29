@@ -1117,8 +1117,12 @@ int lockd_gl_create(struct cmd_context *cmd, const char *def_mode, const char *v
 	 * use_lvmlockd=1, local VG
 	 * This function should acquire the global lock.
 	 */
-	if (!_use_lvmlockd && !is_lockd_type(vg_lock_type))
-		return 1;
+	if (!_use_lvmlockd) {
+		if (!is_lockd_type(vg_lock_type))
+			return 1;
+		log_error("Cannot create VG with lock_type %s without lvmlockd.", vg_lock_type);
+		return 0;
+	}
 
 	/*
 	 * A specific lock mode was given on the command line.
