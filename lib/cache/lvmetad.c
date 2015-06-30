@@ -1503,6 +1503,8 @@ void lvmetad_validate_global_cache(struct cmd_context *cmd, int force)
 	if (!lvmetad_used())
 		return;
 
+	log_debug_lvmetad("Validating global lvmetad cache");
+
 	if (force)
 		goto do_scan;
 

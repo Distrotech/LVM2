@@ -1139,6 +1139,8 @@ int lockd_gl_create(struct cmd_context *cmd, const char *def_mode, const char *v
 		}
 	}
 
+	log_debug("lockd global lock_type %s", vg_lock_type);
+
 	if (!mode)
 		mode = def_mode;
 	if (!mode) {
@@ -1396,6 +1398,8 @@ int lockd_gl(struct cmd_context *cmd, const char *def_mode, uint32_t flags)
 	}
 
  req:
+	log_debug("lockd global mode %s", mode);
+
 	if (!_lockd_request(cmd, "lock_gl",
 			    NULL, NULL, NULL, NULL, NULL, NULL, mode, opts,
 			    &result, &lockd_flags)) {
@@ -1628,6 +1632,8 @@ int lockd_vg(struct cmd_context *cmd, const char *vg_name, const char *def_mode,
 	if (!strcmp(mode, "ex"))
 		*lockd_state |= LDST_EX;
  req:
+	log_debug("lockd VG %s mode %s", vg_name, mode);
+
 	if (!_lockd_request(cmd, "lock_vg",
 			      vg_name, NULL, NULL, NULL, NULL, NULL, mode, NULL,
 			      &result, &lockd_flags)) {
@@ -1886,6 +1892,8 @@ int lockd_lv_name(struct cmd_context *cmd, struct volume_group *vg,
 		opts = "persistent";
 
  retry:
+	log_debug("lockd LV %s/%s mode %s uuid %s", vg->name, lv_name, mode, lv_uuid);
+
 	if (!_lockd_request(cmd, "lock_lv",
 			       vg->name, vg->lock_type, vg->lock_args,
 			       lv_name, lv_uuid, lock_args, mode, opts,
