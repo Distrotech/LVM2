@@ -3468,12 +3468,6 @@ static int _lvconvert_lvmpolld_merge_single(struct cmd_context *cmd, struct logi
 	if ((ret = _lvconvert_single(cmd, lv, lp)) != ECMD_PROCESSED)
 		stack;
 
-	if (ret == ECMD_PROCESSED && lp->need_polling) {
-		if ((ret = _poll_logical_volume(cmd, lp->lv_to_poll,
-						 lp->wait_completion)) != ECMD_PROCESSED)
-			stack;
-	}
-
 	return ret;
 }
 
@@ -3498,11 +3492,16 @@ int lvconvert(struct cmd_context * cmd, int argc, char **argv)
 		goto_out;
 	}
 
-	if (lp.merge)
+	if (lp.merge) {
 		ret = process_each_lv(cmd, argc, argv, READ_FOR_UPDATE, handle,
 				    lvmpolld_use() ? &_lvconvert_lvmpolld_merge_single :
 				    		     &_lvconvert_merge_single);
-	else
+
+		if (ret == ECMD_PROCESSED && lvmpolld_use() && lp.need_polling) {
+			if ((ret = _poll_logical_volume(cmd, lp.lv_to_poll, lp.wait_completion)) != ECMD_PROCESSED)
+				stack;
+		}
+	} else
 		ret = lvconvert_single(cmd, &lp);
 out:
 	destroy_processing_handle(cmd, handle);
