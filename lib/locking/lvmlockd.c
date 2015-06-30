@@ -21,9 +21,9 @@
 static daemon_handle _lvmlockd;
 static const char *_lvmlockd_socket = NULL;
 static struct cmd_context *_lvmlockd_cmd = NULL;
-static int _use_lvmlockd;         /* is 1 if command is configured to use lvmlockd */
-static int _lvmlockd_connected;   /* is 1 if command is connected to lvmlockd */
-static int _lvmlockd_init_failed; /* used to suppress further warnings */
+static int _use_lvmlockd = 0;         /* is 1 if command is configured to use lvmlockd */
+static int _lvmlockd_connected = 0;   /* is 1 if command is connected to lvmlockd */
+static int _lvmlockd_init_failed = 0; /* used to suppress further warnings */
 
 void lvmlockd_set_socket(const char *sock)
 {
