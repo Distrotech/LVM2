@@ -242,7 +242,7 @@ static int _lockd_request(struct cmd_context *cmd,
 		return 1;
 
 	if (!_use_lvmlockd)
-		return 1;
+		return 0;
 	if (!_lvmlockd_connected)
 		return 0;
 
@@ -490,7 +490,7 @@ static int _init_vg_dlm(struct cmd_context *cmd, struct volume_group *vg)
 	int ret;
 
 	if (!_use_lvmlockd)
-		return 1;
+		return 0;
 	if (!_lvmlockd_connected)
 		return 0;
 
@@ -564,7 +564,7 @@ static int _init_vg_sanlock(struct cmd_context *cmd, struct volume_group *vg)
 	int ret;
 
 	if (!_use_lvmlockd)
-		return 1;
+		return 0;
 	if (!_lvmlockd_connected)
 		return 0;
 
@@ -681,6 +681,11 @@ static int _free_vg_dlm(struct cmd_context *cmd, struct volume_group *vg)
 	int result;
 	int ret;
 
+	if (!_use_lvmlockd)
+		return 0;
+	if (!_lvmlockd_connected)
+		return 0;
+
 	/*
 	 * Unlocking the vg lock here preempts the lvmlockd unlock in
 	 * toollib.c which happens too late since the lockspace is
@@ -712,7 +717,7 @@ static int _free_vg_sanlock(struct cmd_context *cmd, struct volume_group *vg)
 	int ret;
 
 	if (!_use_lvmlockd)
-		return 1;
+		return 0;
 	if (!_lvmlockd_connected)
 		return 0;
 
@@ -851,24 +856,24 @@ int lockd_start_vg(struct cmd_context *cmd, struct volume_group *vg)
 
 	memset(uuid, 0, sizeof(uuid));
 
-	if (!_use_lvmlockd)
-		return 1;
-
-	/* Skip starting the vg lockspace when the vg lock is skipped. */
-
-	if (cmd->lock_vg_mode && !strcmp(cmd->lock_vg_mode, "na"))
-		return 1;
-
 	if (!is_lockd_type(vg->lock_type))
 		return 1;
 
+	/* Skip starting the vg lockspace when the vg lock is skipped. */
+	if (cmd->lock_vg_mode && !strcmp(cmd->lock_vg_mode, "na"))
+		return 1;
+
+	if (!_use_lvmlockd) {
+		log_error("VG %s start failed: lvmlockd is not enabled", vg->name);
+		return 0;
+	}
 	if (!_lvmlockd_connected) {
-		log_error("VG %s start failed: lvmlockd not running", vg->name);
+		log_error("VG %s start failed: lvmlockd is not running", vg->name);
 		return 0;
 	}
 
-	log_debug("lockd_start_vg %s lock_type %s", vg->name,
-		  vg->lock_type ? vg->lock_type : "empty");
+	log_debug("lockd start VG %s lock_type %s",
+		  vg->name, vg->lock_type ? vg->lock_type : "empty");
 
 	if (vg->lock_type && !strcmp(vg->lock_type, "sanlock")) {
 		/*
@@ -940,14 +945,13 @@ int lockd_stop_vg(struct cmd_context *cmd, struct volume_group *vg)
 
 	if (!is_lockd_type(vg->lock_type))
 		return 1;
-
 	if (!_use_lvmlockd)
-		return 1;
+		return 0;
 	if (!_lvmlockd_connected)
 		return 0;
 
-	log_debug("lockd_stop_vg %s lock_type %s", vg->name,
-		  vg->lock_type ? vg->lock_type : "empty");
+	log_debug("lockd stop VG %s lock_type %s",
+		  vg->name, vg->lock_type ? vg->lock_type : "empty");
 
 	reply = _lockd_send("stop_vg",
 			"pid = %d", getpid(),
@@ -992,7 +996,7 @@ int lockd_start_wait(struct cmd_context *cmd)
 	int ret;
 
 	if (!_use_lvmlockd)
-		return 1;
+		return 0;
 	if (!_lvmlockd_connected)
 		return 0;
 
@@ -1631,7 +1635,22 @@ int lockd_vg(struct cmd_context *cmd, const char *vg_name, const char *def_mode,
 
 	if (!strcmp(mode, "ex"))
 		*lockd_state |= LDST_EX;
+
  req:
+	/*
+	 * This check is not at the top of the function so that
+	 * we can first set LDST_EX which will be used later to
+	 * decide whether a failure can be ignored or not.
+	 *
+	 * We do not know if this is a local VG or lockd VG yet,
+	 * so we must return success, go ahead and read the VG,
+	 * then check if the lock_type required lvmlockd or not.
+	 */
+	if (!_use_lvmlockd) {
+		*lockd_state |= LDST_FAIL_REQUEST;
+		return 1;
+	}
+
 	log_debug("lockd VG %s mode %s", vg_name, mode);
 
 	if (!_lockd_request(cmd, "lock_vg",
@@ -1806,9 +1825,8 @@ int lockd_vg_update(struct volume_group *vg)
 
 	if (!is_lockd_type(vg->lock_type))
 		return 1;
-
 	if (!_use_lvmlockd)
-		return 1;
+		return 0;
 	if (!_lvmlockd_connected)
 		return 0;
 
@@ -1846,6 +1864,11 @@ int lockd_lv_name(struct cmd_context *cmd, struct volume_group *vg,
 
 	if (cmd->lockd_lv_disable)
 		return 1;
+
+	if (!_use_lvmlockd)
+		return 0;
+	if (!_lvmlockd_connected)
+		return 0;
 
 	id_write_format(lv_id, lv_uuid, sizeof(lv_uuid));
 
@@ -2018,6 +2041,9 @@ int lockd_lv(struct cmd_context *cmd, struct logical_volume *lv,
 		return 0;
 	}
 
+	if (!_lvmlockd_connected)
+		return 0;
+
 	if (lv_is_thin_type(lv))
 		return _lockd_lv_thin(cmd, lv, def_mode, flags);
 
@@ -2055,7 +2081,7 @@ static int _init_lv_sanlock(struct cmd_context *cmd, struct volume_group *vg,
 	int ret;
 
 	if (!_use_lvmlockd)
-		return 1;
+		return 0;
 	if (!_lvmlockd_connected)
 		return 0;
 
@@ -2121,7 +2147,7 @@ static int _free_lv(struct cmd_context *cmd, struct volume_group *vg,
 	int ret;
 
 	if (!_use_lvmlockd)
-		return 1;
+		return 0;
 	if (!_lvmlockd_connected)
 		return 0;
 
@@ -2196,6 +2222,11 @@ int lockd_init_lv(struct cmd_context *cmd, struct volume_group *vg, struct logic
 		log_error("lockd_init_lv: unknown lock_type.");
 		return 0;
 	}
+
+	if (!_use_lvmlockd)
+		return 0;
+	if (!_lvmlockd_connected)
+		return 0;
 
 	if (!lp->needs_lockd_init) {
 		/* needs_lock_init is set for LVs that need a lockd lock. */
@@ -2328,6 +2359,10 @@ int lockd_rename_vg_before(struct cmd_context *cmd, struct volume_group *vg)
 
 	if (!is_lockd_type(vg->lock_type))
 		return 1;
+	if (!_use_lvmlockd)
+		return 0;
+	if (!_lvmlockd_connected)
+		return 0;
 
 	if (lvs_in_vg_activated(vg)) {
 		log_error("LVs must be inactive before vgrename.");
@@ -2391,6 +2426,10 @@ int lockd_rename_vg_final(struct cmd_context *cmd, struct volume_group *vg, int 
 
 	if (!is_lockd_type(vg->lock_type))
 		return 1;
+	if (!_use_lvmlockd)
+		return 0;
+	if (!_lvmlockd_connected)
+		return 0;
 
 	if (!success) {
 		/*
