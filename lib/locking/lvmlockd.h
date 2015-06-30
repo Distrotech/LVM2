@@ -197,6 +197,7 @@ static inline int lockd_gl(struct cmd_context *cmd, const char *def_mode, uint32
 static inline int lockd_vg(struct cmd_context *cmd, const char *vg_name, const char *def_mode,
 	     uint32_t flags, uint32_t *lockd_state)
 {
+	*lockd_state = 0;
 	return 1;
 }
 
