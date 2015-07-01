@@ -1913,8 +1913,10 @@ static int _process_vgnameid_list(struct cmd_context *cmd, uint32_t flags,
 		vg_uuid = vgnl->vgid;
 		skip = 0;
 
-		if (!lockd_vg(cmd, vg_name, NULL, 0, &lockd_state))
+		if (!lockd_vg(cmd, vg_name, NULL, 0, &lockd_state)) {
+			ret_max = ECMD_FAILED;
 			continue;
+		}
 
 		vg = vg_read(cmd, vg_name, vg_uuid, flags, lockd_state);
 		if (_ignore_vg(vg, vg_name, arg_vgnames, flags & READ_ALLOW_INCONSISTENT, &skip)) {
@@ -2017,8 +2019,10 @@ int process_each_vg(struct cmd_context *cmd, int argc, char **argv,
 	 */
 	if ((dm_list_empty(&arg_vgnames) && enable_all_vgs) || !dm_list_empty(&arg_tags)) {
 		/* Needed for a current listing of the global VG namespace. */
-		if (!lockd_gl(cmd, "sh", 0))
+		if (!lockd_gl(cmd, "sh", 0)) {
+			ret = ECMD_FAILED;
 			goto_out;
+		}
 
 		if (!get_vgnameids(cmd, &vgnameids_on_system, NULL, 0))
 			goto_out;
@@ -2383,8 +2387,10 @@ static int _process_lv_vgnameid_list(struct cmd_context *cmd, uint32_t flags,
 			}
 		}
 
-		if (!lockd_vg(cmd, vg_name, NULL, 0, &lockd_state))
+		if (!lockd_vg(cmd, vg_name, NULL, 0, &lockd_state)) {
+			ret_max = ECMD_FAILED;
 			continue;
+		}
 
 		vg = vg_read(cmd, vg_name, vg_uuid, flags, lockd_state);
 		if (_ignore_vg(vg, vg_name, arg_vgnames, flags & READ_ALLOW_INCONSISTENT, &skip)) {
@@ -2466,8 +2472,10 @@ int process_each_lv(struct cmd_context *cmd, int argc, char **argv, uint32_t fla
 
 	if (need_vgnameids) {
 		/* Needed for a current listing of the global VG namespace. */
-		if (!lockd_gl(cmd, "sh", 0))
+		if (!lockd_gl(cmd, "sh", 0)) {
+			ret = ECMD_FAILED;
 			goto_out;
+		}
 
 		if (!get_vgnameids(cmd, &vgnameids_on_system, NULL, 0))
 			goto_out;
@@ -2877,8 +2885,10 @@ static int _process_pvs_in_vgs(struct cmd_context *cmd, uint32_t flags,
 		vg_uuid = vgnl->vgid;
 		skip = 0;
 
-		if (!lockd_vg(cmd, vg_name, NULL, 0, &lockd_state))
+		if (!lockd_vg(cmd, vg_name, NULL, 0, &lockd_state)) {
+			ret_max = ECMD_FAILED;
 			continue;
+		}
 
 		vg = vg_read(cmd, vg_name, vg_uuid, flags | READ_WARN_INCONSISTENT, lockd_state);
 		if (_ignore_vg(vg, vg_name, NULL, flags & READ_ALLOW_INCONSISTENT, &skip)) {
