@@ -827,9 +827,6 @@ void lockd_free_vg_final(struct cmd_context *cmd, struct volume_group *vg)
 	default:
 		log_error("Unknown lock_type.");
 	}
-
-	/* The vg lock no longer exists, so don't bother trying to unlock. */
-	cmd->lockd_vg_disable = 1;
 }
 
 /*
