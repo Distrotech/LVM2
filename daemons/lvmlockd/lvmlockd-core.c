@@ -5565,6 +5565,8 @@ static void usage(char *prog, FILE *file)
 	fprintf(file, "        Set the local sanlock host id.\n");
 	fprintf(file, "  --host-id-file | -F <path>\n");
 	fprintf(file, "        A file containing the local sanlock host_id.\n");
+	fprintf(file, "  --sanlock-timeout | -o <seconds>\n");
+	fprintf(file, "        Set the sanlock lockspace I/O timeout.\n");
 	fprintf(file, "  --adopt | -A 0|1\n");
 	fprintf(file, "        Adopt locks from a previous instance of lvmlockd.\n");
 }
@@ -5595,6 +5597,7 @@ int main(int argc, char *argv[])
 		{"host-id-file",    required_argument, 0, 'F' },
 		{"adopt",           required_argument, 0, 'A' },
 		{"syslog-priority", required_argument, 0, 'S' },
+		{"sanlock-timeout", required_argument, 0, 'o' },
 		{0, 0, 0, 0 }
 	};
 
@@ -5603,7 +5606,7 @@ int main(int argc, char *argv[])
 		int lm;
 		int option_index = 0;
 
-		c = getopt_long(argc, argv, "hVTfDp:s:l:g:S:I:A:",
+		c = getopt_long(argc, argv, "hVTfDp:s:l:g:S:I:A:o:",
 				long_options, &option_index);
 		if (c == -1)
 			break;
@@ -5649,6 +5652,9 @@ int main(int argc, char *argv[])
 			break;
 		case 'F':
 			daemon_host_id_file = strdup(optarg);
+			break;
+		case 'o':
+			sanlock_io_timeout = atoi(optarg);
 			break;
 		case 'A':
 			adopt_opt = atoi(optarg);

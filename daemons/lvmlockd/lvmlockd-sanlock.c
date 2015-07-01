@@ -321,7 +321,7 @@ int lm_init_vg_sanlock(char *ls_name, char *vg_name, uint32_t flags, char *vg_ar
 	memcpy(ss.host_id_disk.path, disk.path, SANLK_PATH_LEN);
 	ss.host_id_disk.offset = LS_BEGIN * align_size;
 
-	rv = sanlock_write_lockspace(&ss, 0, 0, 0);
+	rv = sanlock_write_lockspace(&ss, 0, 0, sanlock_io_timeout);
 	if (rv < 0) {
 		log_error("S %s init_vg_san write_lockspace error %d %s",
 			  ls_name, rv, ss.host_id_disk.path);
@@ -590,7 +590,7 @@ int lm_rename_vg_sanlock(char *ls_name, char *vg_name, uint32_t flags, char *vg_
 
 	strncpy(ss.name, ls_name, SANLK_NAME_LEN);
 
-	rv = sanlock_write_lockspace(&ss, 0, 0, 0);
+	rv = sanlock_write_lockspace(&ss, 0, 0, sanlock_io_timeout);
 	if (rv < 0) {
 		log_error("S %s rename_vg_san write_lockspace error %d %s",
 			  ls_name, rv, ss.host_id_disk.path);
@@ -1113,7 +1113,7 @@ int lm_add_lockspace_sanlock(struct lockspace *ls, int adopt)
 	struct lm_sanlock *lms = (struct lm_sanlock *)ls->lm_data;
 	int rv;
 
-	rv = sanlock_add_lockspace(&lms->ss, 0);
+	rv = sanlock_add_lockspace_timeout(&lms->ss, 0, sanlock_io_timeout);
 	if (rv == -EEXIST && adopt) {
 		/* We could alternatively just skip the sanlock call for adopt. */
 		log_debug("S %s add_lockspace_san adopt found ls", ls->name);
@@ -1174,7 +1174,7 @@ int lm_rem_lockspace_sanlock(struct lockspace *ls, int free_vg)
 		 */
 		strncpy(lms->ss.name, "#unused", SANLK_NAME_LEN);
 
-		rv = sanlock_write_lockspace(&lms->ss, 0, 0, 0);
+		rv = sanlock_write_lockspace(&lms->ss, 0, 0, sanlock_io_timeout);
 		if (rv < 0) {
 			log_error("S %s rem_lockspace free_vg write_lockspace error %d %s",
 				  ls->name, rv, lms->ss.host_id_disk.path);

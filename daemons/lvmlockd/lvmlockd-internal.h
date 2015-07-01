@@ -362,6 +362,7 @@ EXTERN int daemon_test; /* run as much as possible without a live lock manager *
 EXTERN int daemon_debug;
 EXTERN int daemon_host_id;
 EXTERN const char *daemon_host_id_file;
+EXTERN int sanlock_io_timeout;
 
 void log_level(int level, const char *fmt, ...)  __attribute__((format(printf, 2, 3)));
 #define log_debug(fmt, args...) log_level(LOG_DEBUG, fmt, ##args)
