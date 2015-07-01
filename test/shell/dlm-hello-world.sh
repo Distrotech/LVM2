@@ -9,20 +9,19 @@
 # along with this program; if not, write to the Free Software Foundation,
 # Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 
-test_description='Remove the sanlock test setup'
+test_description='Hello world for vgcreate with lvmlockd and dlm'
 
 . lib/inittest
 
-[ -z "$LVM_TEST_LOCK_TYPE_SANLOCK" ] && skip;
+[ -z "$LVM_TEST_LOCK_TYPE_DLM" ] && skip;
 
-# Removes the VG with the global lock that was created by
-# the corresponding create script.
+aux prepare_devs 1 1024
 
-vgremove --config 'devices { global_filter=["a|GL_DEV|", "r|.*|"] filter=["a|GL_DEV|", "r|.*|"]}' glvg
+vgcreate $SHARED $vg "$dev1"
 
+vgs -o+locktype,lockargs $vg
 
-killall lvmlockd
-killall sanlock
+check vg_field $vg vg_locktype dlm
 
-dmsetup remove GL_DEV
-# dmsetup remove glvg-lvmlock
+vgremove $vg
+

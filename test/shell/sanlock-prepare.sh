@@ -43,15 +43,16 @@ prepare_lvmlockd_sanlock() {
 
 	create_sanlock_conf
 
-	# FIXME: use 'systemctl start sanlock' once sysconfig options work
-	sanlock daemon -U sanlock -G sanlock -w 0
+	# FIXME: use 'systemctl start sanlock' once we can pass options
+	sanlock daemon -U sanlock -G sanlock -w 0 -e testhostname
 	sleep 1
 	if ! pgrep sanlock; then
 		echo "Failed to start sanlock"
 		exit 1
 	fi
 
-	lvmlockd
+	# FIXME: use 'systemctl start lvm2-lvmlockd' once we can pass -o 2
+	lvmlockd -o 2
 	sleep 1
 	if ! pgrep lvmlockd; then
 		echo "Failed to start lvmlockd"

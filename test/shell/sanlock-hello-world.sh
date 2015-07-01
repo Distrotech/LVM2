@@ -9,7 +9,7 @@
 # along with this program; if not, write to the Free Software Foundation,
 # Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 
-test_description='Hello world for vgcreate with sanlock'
+test_description='Hello world for vgcreate with lvmlockd and sanlock'
 
 . lib/inittest
 
@@ -17,7 +17,7 @@ test_description='Hello world for vgcreate with sanlock'
 
 aux prepare_pvs 1 1024
 
-vgcreate --shared $vg "$dev1"
+vgcreate $SHARED $vg "$dev1"
 
 vgs -o+locktype,lockargs $vg
 
