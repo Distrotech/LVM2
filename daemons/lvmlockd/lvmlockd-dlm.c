@@ -115,7 +115,7 @@ static int read_cluster_name(char *clustername)
 
 	fd = open(DLM_CLUSTER_NAME_PATH, O_RDONLY);
 	if (fd < 0) {
-		log_error("read_cluster_name: open error %d, check dlm_controld", fd);
+		log_debug("read_cluster_name: open error %d, check dlm_controld", fd);
 		return fd;
 	}
 
