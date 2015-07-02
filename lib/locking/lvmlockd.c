@@ -1324,6 +1324,12 @@ int lockd_gl_create(struct cmd_context *cmd, const char *def_mode, const char *v
  * if the local version number is lower than the version number in the
  * lock, then the local lvmetad state must be updated.
  *
+ * There are two cases where the global lock can be taken in shared mode,
+ * and then later converted to ex.  pvchange and pvresize use process_each_pv
+ * which does lockd_gl("sh") to get the list of VGs.  Later, in the "_single"
+ * function called within process_each_pv, the PV may be an orphan, in which
+ * case the ex global lock is needed, so it's converted to ex at that point.
+ *
  * Effects of misconfiguring use_lvmlockd.
  *
  * - Setting use_lvmlockd=1 tells lvm commands to use the global lock.
@@ -1364,6 +1370,9 @@ int lockd_gl(struct cmd_context *cmd, const char *def_mode, uint32_t flags)
 	int result;
 
 	if (!_use_lvmlockd)
+		return 1;
+
+	if (cmd->lockd_gl_disable)
 		return 1;
 
 	if (def_mode && !strcmp(def_mode, "un")) {
