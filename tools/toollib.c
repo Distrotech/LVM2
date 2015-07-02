@@ -981,6 +981,13 @@ int vgcreate_params_set_from_args(struct cmd_context *cmd,
 		vp_new->clustered = 0;
 
 	log_debug("Setting lock_type to %s", vp_new->lock_type);
+
+	if (is_lockd_type(vp_new->lock_type)) {
+		log_print("WARNING: shared lock type \"%s\" and lvmlockd are Technology Preview.", vp_new->lock_type);
+		log_print("For more information on Technology Preview features, visit:");
+		log_print("https://access.redhat.com/support/offerings/techpreview/");
+	}
+
 	return 1;
 }
 
