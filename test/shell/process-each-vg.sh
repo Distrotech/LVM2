@@ -13,7 +13,7 @@ test_description='Exercise toollib process_each_vg'
 
 . lib/inittest
 
-aux prepare_devs 6 1024
+aux prepare_devs 6
 
 #
 # process_each_vg is used by a number of vg commands;

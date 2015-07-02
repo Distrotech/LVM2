@@ -16,7 +16,7 @@ export LVM_TEST_LVMETAD_DEBUG_OPTS=${LVM_TEST_LVMETAD_DEBUG_OPTS-}
 
 . lib/inittest
 
-aux prepare_devs 10 1024
+aux prepare_devs 10
 
 #
 # process_each_lv is used by a number of lv commands:

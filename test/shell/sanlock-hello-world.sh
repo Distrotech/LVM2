@@ -15,7 +15,7 @@ test_description='Hello world for vgcreate with lvmlockd and sanlock'
 
 [ -z "$LVM_TEST_LOCK_TYPE_SANLOCK" ] && skip;
 
-aux prepare_pvs 1 1024
+aux prepare_pvs 1
 
 vgcreate $SHARED $vg "$dev1"
 

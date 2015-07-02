@@ -15,7 +15,7 @@ test_description='Hello world for vgcreate with lvmlockd and dlm'
 
 [ -z "$LVM_TEST_LOCK_TYPE_DLM" ] && skip;
 
-aux prepare_devs 1 1024
+aux prepare_devs 1
 
 vgcreate $SHARED $vg "$dev1"
 
