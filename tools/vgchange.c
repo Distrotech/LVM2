@@ -1014,7 +1014,7 @@ static int vgchange_single(struct cmd_context *cmd, const char *vg_name,
  * Acquire the gl lock according to which kind of vgchange command this is.
  */
 
-static int lockd_vgchange(struct cmd_context *cmd, int argc, char **argv)
+static int _lockd_vgchange(struct cmd_context *cmd, int argc, char **argv)
 {
 	/* The default vg lock mode is ex, but these options only need sh. */
 
@@ -1201,7 +1201,7 @@ int vgchange(struct cmd_context *cmd, int argc, char **argv)
 	if (arg_is_set(cmd, activate_ARG))
 		cmd->include_active_foreign_vgs = 1;
 
-	if (!lockd_vgchange(cmd, argc, argv))
+	if (!_lockd_vgchange(cmd, argc, argv))
 		return_ECMD_FAILED;
 
 	ret = process_each_vg(cmd, argc, argv, update ? READ_FOR_UPDATE : 0,
