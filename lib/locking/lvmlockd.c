@@ -320,6 +320,9 @@ static int _lockd_request(struct cmd_context *cmd,
 
 /*
  * Eventually add an option to specify which pv the lvmlock lv should be placed on.
+ * FIXME: when converting a VG from lock_type none to sanlock, we need to count
+ * the number of existing LVs to ensure that the new sanlock_lv is large enough
+ * for all of them that need locks.
  */
 
 static int _create_sanlock_lv(struct cmd_context *cmd, struct volume_group *vg,
