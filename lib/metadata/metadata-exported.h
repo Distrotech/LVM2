@@ -1238,4 +1238,7 @@ int vgcreate_params_validate(struct cmd_context *cmd,
 int validate_vg_rename_params(struct cmd_context *cmd,
 			      const char *vg_name_old,
 			      const char *vg_name_new);
+
+int is_lockd_type(const char *lock_type);
+
 #endif

@@ -5398,3 +5398,21 @@ const struct logical_volume *lv_ondisk(const struct logical_volume *lv)
 
 	return lvl->lv;
 }
+
+/*
+ * Check if a lock_type uses lvmlockd.
+ * If not (none, clvm), return 0.
+ * If so (dlm, sanlock), return 1.
+ */
+
+int is_lockd_type(const char *lock_type)
+{
+	if (!lock_type)
+		return 0;
+	if (!strcmp(lock_type, "dlm"))
+		return 1;
+	if (!strcmp(lock_type, "sanlock"))
+		return 1;
+	return 0;
+}
+

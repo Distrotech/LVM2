@@ -41,25 +41,6 @@
 #define LDST_FAIL_OTHER		0x00000020
 #define LDST_FAIL		(LDST_FAIL_REQUEST | LDST_FAIL_NOLS | LDST_FAIL_STARTING | LDST_FAIL_OTHER)
 
-/*
- * Check if a lock_type uses lvmlockd.
- * If not (none, clvm), return 0.
- * If so (dlm, sanlock), return 1.
- */
-
-static inline int is_lockd_type(const char *lock_type)
-{
-	if (!lock_type)
-		return 0;
-
-	if (!strcmp(lock_type, "dlm"))
-		return 1;
-	if (!strcmp(lock_type, "sanlock"))
-		return 1;
-
-	return 0;
-}
-
 #ifdef LVMLOCKD_SUPPORT
 
 /* lvmlockd connection and communication */
