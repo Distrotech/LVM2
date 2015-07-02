@@ -1056,13 +1056,11 @@ static int lockd_vgchange(struct cmd_context *cmd, int argc, char **argv)
 	} else if (arg_is_set(cmd, systemid_ARG) || arg_is_set(cmd, locktype_ARG)) {
 		/*
 		 * This is a special case where taking the global lock is
-		 * helpful to detect changes to local VGs from other hosts.  VG
-		 * names, uuids and system_ids are the three things that other
-		 * hosts cache related to local VGs, so we use the VG namespace
-		 * change detection of the global lock to indicate that one of
-		 * these global VG properties has changed so other hosts will
-		 * update these cached values in VGs that they otherwise ignore
-		 * (because they have foreign system_ids).
+		 * not needed to protect global state, because the change is
+		 * only to an existing VG.  But, taking the global lock ex is
+		 * helpful in this case to trigger a global cache validation
+		 * on other hosts, to cause them to see the new system_id or
+		 * lock_type.
 		 */
 		if (!lockd_gl(cmd, "ex", LDGL_UPDATE_NAMES))
 			return_ECMD_FAILED;
