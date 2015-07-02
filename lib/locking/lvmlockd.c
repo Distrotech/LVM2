@@ -772,6 +772,37 @@ static int _free_vg_sanlock(struct cmd_context *cmd, struct volume_group *vg)
 	return ret;
 }
 
+/*
+ * Tell lvmlockd to forget about an old VG name.
+ * lvmlockd remembers previous lockd VGs so that it can provide more
+ * informative error messages (see INACTIVE_LS, ADD_LS_ERROR).
+ *
+ * If a new local VG is created with the same name as a previous lockd VG,
+ * lvmlockd's memory of the previous lockd VG interferes (causes incorrect
+ * lockd_vg failures).
+ *
+ * We could also remove the list of inactive (old) VG names from lvmlockd,
+ * and then this function would not be needed, but this would also reduce
+ * the ability to have helpful error messages.
+ */
+
+static void _forget_vg_name(struct cmd_context *cmd, struct volume_group *vg)
+{
+	daemon_reply reply;
+
+	if (!_use_lvmlockd)
+		return;
+	if (!_lvmlockd_connected)
+		return;
+
+	reply = _lockd_send("forget_vg_name",
+				"pid = %d", getpid(),
+				"vg_name = %s", vg->name,
+				NULL);
+
+	daemon_reply_destroy(reply);
+}
+
 /* vgcreate */
 
 int lockd_init_vg(struct cmd_context *cmd, struct volume_group *vg,
@@ -779,6 +810,8 @@ int lockd_init_vg(struct cmd_context *cmd, struct volume_group *vg,
 {
 	switch (get_lock_type_from_string(lock_type)) {
 	case LOCK_TYPE_NONE:
+		_forget_vg_name(cmd, vg);
+		return 1;
 	case LOCK_TYPE_CLVM:
 		return 1;
 	case LOCK_TYPE_DLM:

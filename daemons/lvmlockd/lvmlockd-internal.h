@@ -50,6 +50,7 @@ enum {
 	LD_OP_RENAME_FINAL,
 	LD_OP_RUNNING_LM,
 	LD_OP_FIND_FREE_LOCK,
+	LD_OP_FORGET_VG_NAME,
 };
 
 /* resource types */

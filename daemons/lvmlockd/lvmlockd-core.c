@@ -278,7 +278,7 @@ static int alloc_new_structs; /* used for initializing in setup_structs */
 
 static int add_lock_action(struct action *act);
 static int str_to_lm(const char *str);
-static void clear_lockspace_inactive(char *name);
+static int clear_lockspace_inactive(char *name);
 
 static int _syslog_name_to_num(const char *name)
 {
@@ -744,6 +744,8 @@ static const char *op_str(int x)
 		return "running_lm";
 	case LD_OP_FIND_FREE_LOCK:
 		return "find_free_lock";
+	case LD_OP_FORGET_VG_NAME:
+		return "forget_vg_name";
 	default:
 		return "op_unknown";
 	};
@@ -2726,7 +2728,7 @@ static struct lockspace *find_lockspace_inactive(char *ls_name)
 }
 
 /* lockspaces_mutex is held */
-static void clear_lockspace_inactive(char *ls_name)
+static int clear_lockspace_inactive(char *ls_name)
 {
 	struct lockspace *ls;
 
@@ -2734,7 +2736,29 @@ static void clear_lockspace_inactive(char *ls_name)
 	if (ls) {
 		list_del(&ls->list);
 		free(ls);
+		return 1;
 	}
+
+	return 0;
+}
+
+static int forget_lockspace_inactive(char *vg_name)
+{
+	char ls_name[MAX_NAME+1];
+	int found;
+
+	memset(ls_name, 0, sizeof(ls_name));
+	vg_ls_name(vg_name, ls_name);
+
+	log_debug("forget_lockspace_inactive %s", ls_name);
+
+	pthread_mutex_lock(&lockspaces_mutex);
+	found = clear_lockspace_inactive(ls_name);
+	pthread_mutex_unlock(&lockspaces_mutex);
+
+	if (found)
+		return 0;
+	return -ENOENT;
 }
 
 static void free_lockspaces_inactive(void)
@@ -3672,6 +3696,11 @@ static int str_to_op_rt(const char *req_name, int *op, int *rt)
 		*rt = LD_RT_VG;
 		return 0;
 	}
+	if (!strcmp(req_name, "forget_vg_name")) {
+		*op = LD_OP_FORGET_VG_NAME;
+		*rt = LD_RT_VG;
+		return 0;
+	}
 out:
 	return -1;
 }
@@ -4223,6 +4252,10 @@ static void client_recv_action(struct client *cl)
 	case LD_OP_RENAME_BEFORE:
 	case LD_OP_FIND_FREE_LOCK:
 		rv = add_lock_action(act);
+		break;
+	case LD_OP_FORGET_VG_NAME:
+		act->result = forget_lockspace_inactive(act->vg_name);
+		add_client_result(act);
 		break;
 	default:
 		rv = -EINVAL;
