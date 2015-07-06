@@ -525,7 +525,7 @@ int lv_layout_and_role(struct dm_pool *mem, const struct logical_volume *lv,
 				 * detection for such role!
 				 */
 				log_warn(INTERNAL_ERROR "WARNING: Failed to properly detect "
-					 "layout and role for LV %s.", dsplay_lvname(lv));
+					 "layout and role for LV %s.", display_lvname(lv));
 			}
 		}
 
@@ -7406,6 +7406,8 @@ static struct logical_volume *_lv_create_an_lv(struct volume_group *vg,
 			first_seg(lv)->min_recovery_rate = lp->min_recovery_rate;
 			first_seg(lv)->max_recovery_rate = lp->max_recovery_rate;
 		}
+
+		first_seg(lv)->stripes = lp->stripes;
 	} else if (seg_is_thin_pool(lp)) {
 		first_seg(lv)->chunk_size = lp->chunk_size;
 		first_seg(lv)->zero_new_blocks = lp->zero ? 1 : 0;
