@@ -42,6 +42,10 @@ struct dm_report {
 	const char *field_prefix;
 	uint32_t flags;
 	const char *separator;
+	/* reporting interval in ms */
+	uint32_t interval;
+	/* duration of last wait in ns */
+	uint64_t last_wait;
 
 	uint32_t keys_count;
 
@@ -1159,6 +1163,7 @@ struct dm_report *dm_report_init(uint32_t *report_types,
 	rh->fields = fields;
 	rh->types = types;
 	rh->private = private_data;
+        rh->interval = 0; /* no interval */
 
 	rh->flags |= output_flags & DM_REPORT_OUTPUT_MASK;
 
@@ -4209,4 +4214,76 @@ int dm_report_output(struct dm_report *rh)
 		return _output_as_rows(rh);
 	else
 		return _output_as_columns(rh);
+}
+
+#define NSEC_PER_USEC   1000L
+#define NSEC_PER_MSEC   1000000L
+#define NSEC_PER_SEC    1000000000L
+
+void dm_report_set_interval(struct dm_report *rh, uint64_t interval)
+{
+	rh->interval = interval;
+}
+
+void dm_report_set_interval_ms(struct dm_report *rh, uint32_t interval_ms)
+{
+	rh->interval = interval_ms * NSEC_PER_MSEC;
+}
+
+uint32_t dm_report_get_interval(struct dm_report *rh)
+{
+	return rh->interval;
+}
+
+uint32_t dm_report_get_interval_ms(struct dm_report *rh)
+{
+	return (uint32_t) (rh->interval / NSEC_PER_MSEC);
+}
+
+uint64_t dm_report_get_last_interval(struct dm_report *rh)
+{
+	if (rh->last_wait)
+		return rh->last_wait;
+	return rh->interval;
+}
+
+int dm_report_wait(struct dm_report *rh)
+{
+	struct dm_timestamp *ts_start, *ts_now;
+	int r = 1;
+
+	if (!rh->interval)
+		return_0;
+
+	if(!(ts_start = dm_timestamp_alloc()))
+		return_0;
+
+	if(!(ts_now = dm_timestamp_alloc()))
+		return_0;
+
+	if (!dm_timestamp_get(ts_start)) {
+		log_error("Could not obtain initial timestamp.");
+		return 0;
+	}
+
+	if (usleep(rh->interval / NSEC_PER_USEC)) {
+		if (errno == EINTR)
+			log_error("Report interval interrupted by signal.");
+		if (errno == EINVAL)
+			log_error("Report interval too short.");
+		r = 0;
+	}
+
+	if (!dm_timestamp_get(ts_now)) {
+		log_error("Could not obtain current timestamp.");
+		return 0;
+	}
+
+	/* store interval duration in nanoseconds */
+	rh->last_wait = dm_timestamp_delta(ts_now, ts_start);
+
+	dm_timestamp_destroy(ts_start);
+	dm_timestamp_destroy(ts_now);
+
+	return r;
 }
