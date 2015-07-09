@@ -1548,7 +1548,7 @@ int lvm_run_command(struct cmd_context *cmd, int argc, char **argv)
 		goto_out;
 	_apply_settings(cmd);
 	if (cmd->degraded_activation)
-		log_debug("DEGRADED MODE. Incomplete RAID LVs will be processed.");
+		log_debug("Processing of incomplete RAID LVs enabled.");
 
 	if (!get_activation_monitoring_mode(cmd, &monitoring))
 		goto_out;
