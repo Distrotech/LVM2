@@ -74,7 +74,7 @@ void init_log_file(const char *log_file, int append)
 	int i = 0;
 
 	_log_file_path[0] = '\0';
-	if ((env = getenv("LVM_LOG_FILE_EPOCH"))) {
+	if ((env = getenv("LVM_LOG_FILE_EPOCH")) && env[0]) {
 		while (isalpha(env[i]) && i < 32) /* Up to 32 alphas */
 			i++;
 		if (env[i]) {

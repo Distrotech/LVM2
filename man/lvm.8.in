@@ -539,8 +539,8 @@ Path to the socket used to communicate with lvmpolld..
 .TP
 .B LVM_LOG_FILE_EPOCH
 A string of up to 32 letters appended to the log filename and
-followed by the process ID and a timestamp.  When set, each process logs to a
-separate file.
+followed by the process ID and a timestamp.  When set and non empty, each
+process logs to a separate file.
 .TP
 .B LVM_EXPECTED_EXIT_STATUS
 The status anticipated when the process exits.  Use ">N" to match any
