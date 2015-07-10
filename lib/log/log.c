@@ -82,7 +82,10 @@ void init_log_file(const char *log_file, int append)
 				log_warn("WARNING: Ignoring invalid LVM_LOG_FILE_EPOCH envvar \"%s\".", env);
 			goto no_epoch;
 		}
-
+		if (!i) {
+			log_debug("Empty LVM_LOG_FILE_EPOCH envvar set.");
+			goto no_epoch;
+		}
 		if (!(st = fopen(statfile, "r")))
 			log_sys_error("fopen", statfile);
 		else if (fscanf(st, "%d %*s %*c %*d %*d %*d %*d " /* tty_nr */
