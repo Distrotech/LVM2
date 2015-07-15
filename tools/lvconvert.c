@@ -19,6 +19,33 @@
 #include "lvconvert_poll.h"
 #include "lvmpolld-client.h"
 
+/*
+ * lvconvert polling
+ *
+ * The main part of lvconvert starts the operation, and creates
+ * an "id" from the VG/LV that can be handed to the polling functions.
+ *
+ * lvconvert:
+ * lock vg
+ * vg_read
+ * process lvs
+ * "single" function uses vg/lv structs to start convert
+ * create_lv_id_to_poll uses vg/lv structs to create lvid_to_poll id
+ * unlock vg
+ * release vg
+ * _poll_logical_volume(): use lvid_to_poll to start polling, do not use lv struct
+ * _lvconvert_poll_lvid(lvid);
+ * poll_daemon(fns, id);
+ *
+ * The polling then independently does:
+ * lock vg
+ * vg_read
+ * find lv from the "id"
+ * check or finish the lv
+ * unlock vg
+ * release vg
+ */
+
 struct lvconvert_params {
 	int cache;
 	int force;
@@ -40,6 +67,9 @@ struct lvconvert_params {
 	const char *vg_name;
 	int wait_completion;
 	int need_polling;
+
+	int is_merging_origin;
+	int is_merging_origin_thin;
 
 	int thin_chunk_size_calc_policy;
 	uint32_t chunk_size;
@@ -69,6 +99,7 @@ struct lvconvert_params {
 	struct dm_list *replace_pvh;
 
 	struct logical_volume *lv_to_poll;
+	struct poll_operation_id *lvid_to_poll;
 
 	uint32_t pool_metadata_extents;
 	int passed_args;
@@ -763,30 +794,82 @@ static struct poll_operation_id *_create_id(struct cmd_context *cmd,
 	return id;
 }
 
+/*
+ * This is called from lvconvert internals with the VG lock held, to
+ * create lp->lvid_to_poll from lp->lv_to_poll.
+ * The lv in lp->lv_to_poll cannot be used after the command when the
+ * VG lock is released, so we need to use the lvid.
+ */
+static void create_lvid_to_poll(struct cmd_context *cmd, struct lvconvert_params *lp)
+{
+	struct lvinfo info;
+	struct logical_volume *lv = lp->lv_to_poll;
+
+	/* Prevent this lv being used in polling. */
+	lp->lv_to_poll = NULL;
+
+	if (!lv_info(cmd, lv, 0, &info, 0, 0) || !info.exists) {
+		log_print_unless_silent("Conversion starts after activation.");
+		return;
+	}
+
+	if (!(lp->lvid_to_poll = _create_id(cmd, lv->vg->name, lv->name, lv->lvid.s))) {
+		/*
+		 * FIXME: print a message indicating that another command
+		 * should be run to do the polling.
+		 */
+		log_error("Failed to allocate poll identifier for lvconvert.");
+		return;
+	}
+
+	/* FIXME: check this in polling instead */
+	if (lv_is_merging_origin(lv)) {
+		lp->is_merging_origin = 1;
+		lp->is_merging_origin_thin = seg_is_thin_volume(find_snapshot(lv));
+	}
+}
+
+static int _lvconvert_poll_lvid(struct cmd_context *cmd, struct poll_operation_id *id,
+				unsigned background,
+				int is_merging_origin,
+				int is_merging_origin_thin)
+{
+	int r;
+
+	if (is_merging_origin) {
+		r = poll_daemon(cmd, background,
+				(MERGING | (is_merging_origin_thin ? THIN_VOLUME : SNAPSHOT)),
+				is_merging_origin_thin ? &_lvconvert_thin_merge_fns : &_lvconvert_merge_fns,
+				"Merged", id);
+	} else {
+		r = poll_daemon(cmd, background, CONVERTING,
+				&_lvconvert_mirror_fns, "Converted", id);
+	}
+
+	_destroy_id(cmd, id);
+
+	return r;
+}
+
 int lvconvert_poll(struct cmd_context *cmd, struct logical_volume *lv,
 		   unsigned background)
 {
-	int is_thin, r;
 	struct poll_operation_id *id = _create_id(cmd, lv->vg->name, lv->name, lv->lvid.s);
+	int is_merging_origin = 0;
+	int is_merging_origin_thin = 0;
 
 	if (!id) {
 		log_error("Failed to allocate poll identifier for lvconvert.");
 		return ECMD_FAILED;
 	}
 
+	/* FIXME: check this in polling instead */
 	if (lv_is_merging_origin(lv)) {
-		is_thin = seg_is_thin_volume(find_snapshot(lv));
-		r = poll_daemon(cmd, background,
-				(MERGING | (is_thin ? THIN_VOLUME : SNAPSHOT)),
-				is_thin ? &_lvconvert_thin_merge_fns : &_lvconvert_merge_fns,
-				"Merged", id);
-	} else
-		r = poll_daemon(cmd, background, CONVERTING,
-				&_lvconvert_mirror_fns, "Converted", id);
+		is_merging_origin = 1;
+		is_merging_origin_thin = seg_is_thin_volume(find_snapshot(lv));
+	}
 
-	_destroy_id(cmd, id);
-
-	return r;
+	return _lvconvert_poll_lvid(cmd, id, background, is_merging_origin, is_merging_origin_thin);
 }
 
 static int _insert_lvconvert_layer(struct cmd_context *cmd,
@@ -3330,17 +3413,19 @@ static int _lvconvert_single(struct cmd_context *cmd, struct logical_volume *lv,
 	return ECMD_PROCESSED;
 }
 
-static int _poll_logical_volume(struct cmd_context *cmd, struct logical_volume *lv,
-			       int wait_completion)
+/*
+ * The VG lock is not held, and VG/LV structs should not be used.
+ * lp->lvid_to_poll was created by create_lvid_to_poll() and identifies
+ * which LV to poll.
+ */
+static int _poll_logical_volume(struct cmd_context *cmd, struct lvconvert_params *lp)
 {
-	struct lvinfo info;
-
-	if (!lv_info(cmd, lv, 0, &info, 0, 0) || !info.exists) {
-		log_print_unless_silent("Conversion starts after activation.");
-		return ECMD_PROCESSED;
-	}
-
-	return lvconvert_poll(cmd, lv, wait_completion ? 0 : 1U);
+	if (lp->lvid_to_poll)
+		return _lvconvert_poll_lvid(cmd, lp->lvid_to_poll,
+					    lp->wait_completion ? 0 : 1U,
+					    lp->is_merging_origin,
+					    lp->is_merging_origin_thin);
+	return 1;
 }
 
 static int lvconvert_single(struct cmd_context *cmd, struct lvconvert_params *lp)
@@ -3402,7 +3487,11 @@ static int lvconvert_single(struct cmd_context *cmd, struct lvconvert_params *lp
 			goto_bad;
 
 	lp->lv_to_poll = lv;
+
 	ret = _lvconvert_single(cmd, lv, lp);
+
+	if (ret == ECMD_PROCESSED && lp->need_polling)
+		create_lvid_to_poll(cmd, lp);
 bad:
 	unlock_vg(cmd, lp->vg_name);
 
@@ -3411,10 +3500,6 @@ bad:
 	 * and we do not need or want the VG lock held during that.
 	 */
 	lockd_vg(cmd, lp->vg_name, "un", 0, &lockd_state);
-
-	if (ret == ECMD_PROCESSED && lp->need_polling)
-		ret = _poll_logical_volume(cmd, lp->lv_to_poll,
-					  lp->wait_completion);
 
 	release_vg(vg);
 out:
@@ -3455,18 +3540,21 @@ static int _lvconvert_merge_single(struct cmd_context *cmd, struct logical_volum
 	}
 
 	lp->lv_to_poll = lv_fresh;
+
 	if ((ret = _lvconvert_single(cmd, lv_fresh, lp)) != ECMD_PROCESSED)
 		stack;
 
 	if (ret == ECMD_PROCESSED && lp->need_polling) {
+		create_lvid_to_poll(cmd, lp);
+
 		/*
 		 * Must drop VG lock, because lvconvert_poll() needs it,
 		 * then reacquire it after polling completes
 		 */
 		unlock_vg(cmd, vg_name);
 
-		if ((ret = _poll_logical_volume(cmd, lp->lv_to_poll,
-						 lp->wait_completion)) != ECMD_PROCESSED)
+		/* FIXME: call this at the end of the command like the other cases. */
+		if ((ret = _poll_logical_volume(cmd, lp)) != ECMD_PROCESSED)
 			stack;
 
 		/* use LCK_VG_WRITE to match lvconvert()'s READ_FOR_UPDATE */
@@ -3495,8 +3583,12 @@ static int _lvconvert_lvmpolld_merge_single(struct cmd_context *cmd, struct logi
 	int ret;
 
 	lp->lv_to_poll = lv;
+
 	if ((ret = _lvconvert_single(cmd, lv, lp)) != ECMD_PROCESSED)
 		stack;
+
+	if (ret == ECMD_PROCESSED && lp->need_polling)
+		create_lvid_to_poll(cmd, lp);
 
 	return ret;
 }
@@ -3528,11 +3620,17 @@ int lvconvert(struct cmd_context * cmd, int argc, char **argv)
 				    		     &_lvconvert_merge_single);
 
 		if (ret == ECMD_PROCESSED && lvmpolld_use() && lp.need_polling) {
-			if ((ret = _poll_logical_volume(cmd, lp.lv_to_poll, lp.wait_completion)) != ECMD_PROCESSED)
+			if ((ret = _poll_logical_volume(cmd, &lp)) != ECMD_PROCESSED)
 				stack;
 		}
-	} else
+	} else {
 		ret = lvconvert_single(cmd, &lp);
+
+		if (ret == ECMD_PROCESSED && lp.need_polling)
+			if ((ret = _poll_logical_volume(cmd, &lp)) != ECMD_PROCESSED)
+				stack;
+	}
+
 out:
 	if (lp.policy_settings)
 		dm_config_destroy(lp.policy_settings);
