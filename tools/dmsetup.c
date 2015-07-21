@@ -158,6 +158,7 @@ enum {
 	TABLE_ARG,
 	TARGET_ARG,
 	TARGETS_ARG,
+	TIME_ARG,
 	TREE_ARG,
 	UID_ARG,
 	UNBUFFERED_ARG,
@@ -202,6 +203,7 @@ static struct dm_report *_report;
 static report_type_t _report_type;
 static dev_name_t _dev_name_type;
 static uint32_t _count = 1; /* count of repeating reports */
+static uint32_t _times = 0; /* display timestamp with each report */
 static int _stats_report_init = 0;
 static uint64_t _disp_factor = 512; /* display sizes in sectors */
 static char _disp_units = 's';
@@ -4599,6 +4601,23 @@ doit:
 	return 1;
 }
 
+static void _timestamp(void)
+{
+	char buf[128];
+	time_t now;
+	struct tm *ltm;
+
+	if (!_times)
+		return;
+
+	time(&now);
+	ltm = localtime(&now);
+	/* FIXME: support S_TIME_FORMAT=ISO ("%FT%T%z") */
+	if (!strftime(buf, sizeof(buf), "%x %X", ltm))
+		log_error("Could not format timestamp string.");
+	printf("%s\n", buf);
+}
+
 static int _process_tree_options(const char *options)
 {
 	const char *s, *end;
@@ -5001,6 +5020,7 @@ static int _process_switches(int *argcp, char ***argvp, const char *dev_dir)
 		{"table", 1, &ind, TABLE_ARG},
 		{"target", 1, &ind, TARGET_ARG},
 		{"targets", 0, &ind, TARGETS_ARG},
+		{"timestamps", 0, &ind, TIME_ARG},
 		{"tree", 0, &ind, TREE_ARG},
 		{"uid", 1, &ind, UID_ARG},
 		{"units", 1, &ind, UNITS_ARG},
@@ -5287,6 +5307,8 @@ static int _process_switches(int *argcp, char ***argvp, const char *dev_dir)
 				return 0;
 			}
 		}
+		if (ind == TIME_ARG)
+			_switches[TIME_ARG]++;
 		if (ind == TREE_ARG)
 			_switches[TREE_ARG]++;
 		if (ind == UNQUOTED_ARG)
@@ -5450,11 +5472,15 @@ unknown:
 		}
 	}
 
+	if (_switches[TIME_ARG])
+		_times = 1;
+
 	#ifdef UDEV_SYNC_SUPPORT
 	if (!_set_up_udev_support(dev_dir))
 		goto out;
 	#endif
 
+repeat:
 	saved_argv = argv;
 	saved_argc = argc;
 
@@ -5491,8 +5517,10 @@ out:
 			/* first interval ? */
 			if (first)
 				dm_report_clear(_report);
-			else if (repeat)
+			else if (repeat) {
+				_timestamp();
 				dm_report_column_headings(_report);
+			}
 
 			if (!first)
 				dm_report_output(_report);
@@ -5502,7 +5530,7 @@ out:
 		}
 	}
 
-	if (repeat) {
+	if (repeat && _count) {
 		argc = saved_argc;
 		dm_free(_argv_copy);
 		argv = _copy_argv(argc, saved_argv);
