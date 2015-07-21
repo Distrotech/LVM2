@@ -3840,9 +3840,6 @@ static int _report_headings(struct dm_report *rh)
 	char *buf = NULL;
 	size_t buf_size = 0;
 
-	if (rh->flags & RH_HEADINGS_PRINTED)
-		return 1;
-
 	rh->flags |= RH_HEADINGS_PRINTED;
 
 	if (!(rh->flags & DM_REPORT_OUTPUT_HEADINGS))
@@ -3909,6 +3906,11 @@ static int _report_headings(struct dm_report *rh)
 	dm_free(buf);
 	dm_pool_abandon_object(rh->mem);
 	return 0;
+}
+
+int dm_report_headings(struct dm_report *rh)
+{
+	return _report_headings(rh);
 }
 
 /*
