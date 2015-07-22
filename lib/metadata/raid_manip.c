@@ -437,8 +437,8 @@ static int _convert_raid_to_linear(struct logical_volume *lv,
 	/* Only one area may result from the check! */
 	if (seg->area_count != 1) {
 		log_error(INTERNAL_ERROR
-				"Unable to remove RAID layer when there"
-				" is more than one sub-lv");
+			  "Unable to remove RAID layer when there"
+			  " is more than one sub-lv");
 		return 0;
 	}
 
@@ -446,7 +446,7 @@ static int _convert_raid_to_linear(struct logical_volume *lv,
 		return_0;
 
 	if (seg->meta_areas &&
-	    !_extract_image_component_list(seg, RAID_META, 0, removal_lvs))
+	    !_extract_image_component_list(seg, RAID_META, 0 /* idx */, removal_lvs))
 		return 0;
 
 	/* Add remaining last image lv to removal_lvs */
@@ -943,7 +943,7 @@ static int _extract_image_component_pair(struct lv_segment *seg, uint32_t idx,
 	return 1;
 }
 
-/* Remove sublvs fo @type from @lv starting at @idx and put them on @removal_lvs */
+/* Remove sublvs of @type from @lv starting at @idx and put them on @removal_lvs */
 static int _extract_image_component_list(struct lv_segment *seg,
 					 uint64_t type, uint32_t idx,
 					 struct dm_list *removal_lvs)
@@ -2620,7 +2620,11 @@ static int _striped_to_raid0_move_segs_to_raid0_lvs(struct logical_volume *lv,
 	return 1;
 }
 
-/* HM Helper: check that @lv has one stripe one, i.e. same stripe count in all of its segements */
+/*
+ * HM Helper: check that @lv has one stripe one, i.e. same stripe count in all of its segments
+ *
+ * Superfluous if different stripe zones will ever be supported
+ */
 static int _lv_has_one_stripe_zone(struct logical_volume *lv)
 {
 	struct lv_segment *seg;
@@ -2632,6 +2636,21 @@ static int _lv_has_one_stripe_zone(struct logical_volume *lv)
 
 	return 1;
 }
+
+/* HM Helper: check that @lv has segments with just one area */
+static int _lv_has_segments_with_one_area(struct logical_volume *lv)
+{
+	struct lv_segment *seg;
+
+	dm_list_iterate_items(seg, &lv->segments)
+		if (seg->area_count != 1) {
+			log_error(INTERNAL_ERROR "Called on %s with segments != 1 area", display_lvname(lv));
+			return 0;
+		}
+
+	return 1;
+}
+
 
 /*
  * HM
@@ -3527,7 +3546,7 @@ TAKEOVER_FN(_error)
 	struct lv_segment *seg = first_seg(lv);
 
 	log_error("Converting the segment type for %s (directly) from %s to %s"
-		  " is not supported.", display_lvname(lv),
+		  " is not supported (yet).", display_lvname(lv),
 		  lvseg_name(seg), new_segtype->name);
 
 	return 0;
@@ -3728,9 +3747,10 @@ TAKEOVER_HELPER_FN(_raid0_linear)
 /* Helper: raid0* with one image -> mirror */
 TAKEOVER_HELPER_FN(_raid0_mirror)
 {
+	struct lv_segment *seg = first_seg(lv);
 	struct segment_type *segtype;
 
-	if (first_seg(lv)->area_count != 1)
+	if (seg->area_count != 1)
 		return _error(lv, yes, force, new_segtype, 0, 0, 0, NULL);
 
 	new_image_count = new_image_count > 1 ? new_image_count : 2;
@@ -3756,9 +3776,10 @@ TAKEOVER_HELPER_FN(_raid0_mirror)
 	if (!(segtype = get_segtype_from_flag(lv->vg->cmd, SEG_RAID1)))
 		return 0;
 
-	log_debug_metadata("Converting %s from %s to %s",
+	log_debug_metadata("Converting %s from %s to %s adding %u image component pairs",
 			   display_lvname(lv),
-			   SEG_TYPE_NAME_LINEAR, segtype->name);
+			   seg->segtype->name, new_segtype->name,
+			   new_image_count - seg->area_count);
 	if (!_linear_raid14510(lv, 0, 0, segtype, new_image_count, 0 /* new_stripes */,
 			       new_stripe_size, allocate_pvs))
 		return 0;
@@ -3776,13 +3797,13 @@ TAKEOVER_HELPER_FN(_raid0_raid1)
 {
 	struct lv_segment *seg = first_seg(lv);
 
-	if (seg->area_count != 1) {
-		log_error(INTERNAL_ERROR "Can't convert non-mirrored segment in lv %s",
-			  display_lvname(lv));
-		return 0;
-	}
+	if (seg->area_count != 1)
+		return _error(lv, yes, force, new_segtype, 0, 0, 0, NULL);
 
 	new_image_count = new_image_count > 1 ? new_image_count : 2;
+
+	if (!_check_max_raid_devices(new_image_count))
+		return 0;
 
 	if (!_yes_no_conversion(lv, new_segtype, yes, force, new_image_count, 0, 0))
 		return 0;
@@ -3905,7 +3926,7 @@ TAKEOVER_HELPER_FN(_raid1_raid0)
 	dm_list_init(&removal_lvs);
 
 	if (!seg_is_raid1(seg)) {
-		log_error(INTERNAL_ERROR "Can't convert non-raid1 segment in lv %s",
+		log_error(INTERNAL_ERROR "Can't convert non-raid1 lv %s",
 			  display_lvname(lv));
 		return 0;
 	}
@@ -4056,30 +4077,10 @@ TAKEOVER_HELPER_FN(_raid145_raid1_raid6)
 	return _lv_update_and_reload_origin_eliminate_lvs(lv, &removal_lvs);
 }
 
-/* Helper: raid1/4/5 with 2 images <-> raid4/5/10 */
+/* Helper: raid1/5 with 2 images <-> raid4/5/10 or raid4 <-> raid5_n with any imaege count */
 TAKEOVER_HELPER_FN(_raid145_raid4510)
 {
 	struct lv_segment *seg = first_seg(lv);
-
-	if ((seg_is_raid1(seg) || seg_is_raid4(seg) || seg_is_any_raid5(seg)) &&
-	    seg->area_count != 2) {
-		log_error("Can't convert %s between %s and %s/%s with != 2 images",
-			  display_lvname(lv), SEG_TYPE_NAME_RAID1,
-			  SEG_TYPE_NAME_RAID4, SEG_TYPE_NAME_RAID5);
-		return 0;
-	}
-
-	/* Conversion to raid4 only possible from raid1 and raid5 with 2 legs or from raid5_n */
-	if (segtype_is_raid4(new_segtype) &&
-	    !seg_is_raid1(seg) &&
-	    !(seg_is_any_raid5(seg) && seg->area_count == 2) &&
-	    !seg_is_raid5_n(seg)) {
-		log_error("Can't convert %s between %s and %s",
-			  display_lvname(lv), lvseg_name(seg), SEG_TYPE_NAME_RAID4);
-		log_error("Convert %s to %s first",
-			  display_lvname(lv), SEG_TYPE_NAME_RAID5_N);
-		return 0;
-	}
 
 	if (!_lv_is_synced(lv))
 		return 0;
@@ -4107,7 +4108,7 @@ TAKEOVER_HELPER_FN(_raid145_raid4510)
 		return 0;
 	}
 
-	if ((!seg_is_raid1(seg) && !seg_is_raid4(seg) && !seg_is_any_raid5(seg)) && segtype_is_any_raid5(new_segtype)) {
+	if ((seg_is_raid1(seg) || seg_is_raid4(seg)) && segtype_is_any_raid5(new_segtype)) {
 		if (!(seg->segtype = get_segtype_from_flag(lv->vg->cmd, SEG_RAID5_N)))
 			return_0;
 	} else
@@ -4230,30 +4231,21 @@ PFL();
 
 /* End takeover helper funtions */
 
-
 /*
  * Begin all takeover functions referenced via the 2-dimensional _takeover_fn[][] matrix
  */
 /* Linear -> raid0 */
 TAKEOVER_FN(_l_r0)
 {
-	if (first_seg(lv)->area_count != 1) {
-		log_error(INTERNAL_ERROR "Called on %s with != 1 areas", display_lvname(lv));
-		return 0;
-	}
-
-	return _linear_raid0(lv, yes, force, new_segtype, 1, 0, 0, allocate_pvs);
+	return _lv_has_segments_with_one_area(lv) &&
+	       _linear_raid0(lv, yes, force, new_segtype, 1, 0, 0, allocate_pvs);
 }
 
 /* Linear -> raid1 */
 TAKEOVER_FN(_l_r1)
 {
-	if (first_seg(lv)->area_count != 1) {
-		log_error(INTERNAL_ERROR "Called on %s with != 1 areas", display_lvname(lv));
-		return 0;
-	}
-
-	return _linear_raid14510(lv, yes, force, new_segtype,
+	return _lv_has_segments_with_one_area(lv) &&
+	       _linear_raid14510(lv, yes, force, new_segtype,
 				 new_image_count, 0 /* new_stripes */,
 				 new_stripe_size, allocate_pvs);
 }
@@ -4261,12 +4253,8 @@ TAKEOVER_FN(_l_r1)
 /* Linear -> raid4/5 */
 TAKEOVER_FN(_l_r45)
 {
-	if (first_seg(lv)->area_count != 1) {
-		log_error(INTERNAL_ERROR "Called on %s with != 1 areas", display_lvname(lv));
-		return 0;
-	}
-
-	return _linear_raid14510(lv, yes, force, new_segtype,
+	return _lv_has_segments_with_one_area(lv) &&
+	       _linear_raid14510(lv, yes, force, new_segtype,
 				 2 /* new_image_count */, 0 /* new_stripes */,
 				 new_stripe_size, allocate_pvs);
 }
@@ -4274,12 +4262,8 @@ TAKEOVER_FN(_l_r45)
 /* Linear -> raid10 */
 TAKEOVER_FN(_l_r10)
 {
-	if (first_seg(lv)->area_count != 1) {
-		log_error(INTERNAL_ERROR "Called on %s with != 1 areas", display_lvname(lv));
-		return 0;
-	}
-
-	return _linear_raid14510(lv, yes, force, new_segtype,
+	return _lv_has_segments_with_one_area(lv) &&
+	       _linear_raid14510(lv, yes, force, new_segtype,
 				 2 /* new_image_count */ , 0 /* new_stripes */,
 				 new_stripe_size, allocate_pvs);
 }
@@ -4287,12 +4271,12 @@ TAKEOVER_FN(_l_r10)
 /* Striped -> raid0 */
 TAKEOVER_FN(_s_r0)
 {
+	if (!_yes_no_conversion(lv, new_segtype, yes, force, 0, 0, 0))
+		return 0;
+
 	/* Archive metadata */
 	if (!archive(lv->vg))
 		return_0;
-
-	if (!_yes_no_conversion(lv, new_segtype, yes, force, 0, 0, 0))
-		return 0;
 
 	return _convert_striped_to_raid0(lv, 0 /* !alloc_metadata_devs */, 1 /* update_and_reload */) ? 1 : 0;
 }
@@ -4300,12 +4284,12 @@ TAKEOVER_FN(_s_r0)
 /* Striped -> raid0_meta */
 TAKEOVER_FN(_s_r0m)
 {
+	if (!_yes_no_conversion(lv, new_segtype, yes, force, 0, 0, 0))
+		return 0;
+
 	/* Archive metadata */
 	if (!archive(lv->vg))
 		return_0;
-
-	if (!_yes_no_conversion(lv, new_segtype, yes, force, 0, 0, 0))
-		return 0;
 
 	return _convert_striped_to_raid0(lv, 1 /* alloc_metadata_devs */, 1 /* update_and_reload */) ? 1 : 0;
 } 
@@ -4346,12 +4330,12 @@ TAKEOVER_FN(_m_r1)
 
 	dm_list_init(&removal_lvs);
 
+	if (!_yes_no_conversion(lv, new_segtype, yes, force, 0, 0, 0))
+		return 0;
+
 	/* Archive metadata */
 	if (!archive(lv->vg))
 		return_0;
-
-	if (!_yes_no_conversion(lv, new_segtype, yes, force, 0, 0, 0))
-		return 0;
 
 	return _convert_mirror_to_raid(lv, new_segtype, new_image_count, allocate_pvs,
 				       1 /* update_and_reaload */, &removal_lvs);
@@ -4575,6 +4559,13 @@ TAKEOVER_FN(_r1_r1)
 /* raid1 with 2 legs -> raid10 */
 TAKEOVER_FN(_r1_r45)
 {
+	if (first_seg(lv)->area_count != 2) {
+		log_error("Can't convert %s from %s to %s with != 2 images",
+			  display_lvname(lv),
+			  SEG_TYPE_NAME_RAID1, new_segtype->name);
+		return 0;
+	}
+
 	return _raid145_raid4510(lv, yes, force, new_segtype, new_image_count, 0, 0, allocate_pvs);
 }
 
@@ -4692,6 +4683,13 @@ TAKEOVER_FN(_r_dup_r6)
 /* raid1 with 2 legs -> raid10 */
 TAKEOVER_FN(_r1_r10)
 {
+	if (first_seg(lv)->area_count != 2) {
+		log_error("Can't convert %s from %s to %s with != 2 images",
+			  display_lvname(lv),
+			  SEG_TYPE_NAME_RAID1, new_segtype->name);
+		return 0;
+	}
+
 	return _raid145_raid4510(lv, yes, force, new_segtype, new_image_count, 0, 0, allocate_pvs);
 }
 
@@ -4732,16 +4730,43 @@ TAKEOVER_FN(_r45_r0m)
 	return _r456_r0_striped(lv, yes, force, new_segtype, first_seg(lv)->area_count - 1, 0, 0, allocate_pvs);
 }
 
-/* raid4/5_n with 2 images -> raid1 */
+/* raid4 with 2 images or raid5_n with 3 images -> raid1 */
 TAKEOVER_FN(_r45_r1)
 {
-PFL();
+	struct lv_segment *seg = first_seg(lv);
+
+	if ((seg_is_raid5_n(seg) && seg->area_count != 3) ||
+	    seg->area_count != 2) {
+		log_error("Can't convert %s from %s to %s with != %u images",
+			  display_lvname(lv), lvseg_name(seg), SEG_TYPE_NAME_RAID1,
+			  seg_is_raid5_n(seg) ? 3 : 2);
+		return 0;
+	}
+
 	return _raid145_raid4510(lv, yes, force, new_segtype, 2, 0, 0, allocate_pvs);
 }
 
 /* raid4/5* <-> raid4/5* */
 TAKEOVER_FN(_r45_r45)
 {
+	struct lv_segment *seg = first_seg(lv);
+
+	if (seg->segtype == new_segtype) {
+		log_warn("%s already is of type %s", display_lvname(lv), lvseg_name(seg));
+		return 0;
+	}
+
+	/* Conversion to raid4 only possible raid5 with 2 legs or from raid5_n with any number of legs */
+	if (segtype_is_raid4(new_segtype) &&
+	    !(seg_is_any_raid5(seg) && seg->area_count == 2) &&
+	    !seg_is_raid5_n(seg)) {
+		log_error("Can't convert %s between %s and %s",
+			  display_lvname(lv), lvseg_name(seg), SEG_TYPE_NAME_RAID4);
+		log_error("Convert %s to %s first",
+			  display_lvname(lv), SEG_TYPE_NAME_RAID5_N);
+		return 0;
+	}
+
 	return _raid145_raid4510(lv, yes, force, new_segtype, first_seg(lv)->area_count, 0, 0, allocate_pvs);
 }
 

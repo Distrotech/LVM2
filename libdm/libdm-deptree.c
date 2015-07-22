@@ -2354,10 +2354,10 @@ static int _raid_emit_segment_line(struct dm_task *dmt, uint32_t major,
 	int pos = 0;
 	unsigned type;
 
+PFLA("seg->area_count=%u", seg->area_count);
 	if (seg->area_count % 2)
 		return 0;
 
-PFLA("seg->area_count=%u", seg->area_count);
 	if ((seg->flags & DM_NOSYNC) || (seg->flags & DM_FORCESYNC))
 		param_count++;
 
@@ -2380,6 +2380,7 @@ PFLA("seg->area_count=%u", seg->area_count);
 	if (type == SEG_RAID0_META)
 		type = SEG_RAID0;
 
+PFLA("param_count=%u", param_count);
 	EMIT_PARAMS(pos, "%s %d %u", _dm_segtypes[type].target,
 		    param_count, seg->stripe_size);
 

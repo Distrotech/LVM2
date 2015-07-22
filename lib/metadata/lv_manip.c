@@ -3398,6 +3398,7 @@ struct alloc_handle *allocate_extents(struct volume_group *vg,
 	if (alloc >= ALLOC_INHERIT)
 		alloc = vg->alloc;
 
+PFLA("log_count=%u", log_count);
 	if (!(ah = _alloc_init(vg->cmd, vg->vgmem, segtype, alloc, approx_alloc, extend,
 			       lv ? lv->le_count : 0, extents, mirrors, stripes, log_count,
 			       vg->extent_size, region_size,
@@ -4050,6 +4051,8 @@ PFLA("extents=%u mirrors=%u stripes=%u log_count=%u", extents, mirrors, stripes,
 	/* FIXME log_count should be 1 for mirrors */
 	if (segtype_is_mirror(segtype))
 		log_count = 1;
+	else if (segtype_is_raid1(segtype))
+		log_count = mirrors;
 #endif
 	if (!(ah = allocate_extents(lv->vg, lv, segtype, stripes, mirrors,
 				    log_count, region_size, extents,
