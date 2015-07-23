@@ -3502,7 +3502,7 @@ static int _process_options(const char *options)
 	return 1;
 }
 
-static int _process_switches(int *argc, char ***argv, const char *dev_dir)
+static int _process_switches(int *argcp, char ***argvp, const char *dev_dir)
 {
 	const char *base;
 	char *namebase, *s;
@@ -3568,7 +3568,7 @@ static int _process_switches(int *argc, char ***argv, const char *dev_dir)
 	memset(&_int_args, 0, sizeof(_int_args));
 	_read_ahead_flags = 0;
 
-	if (!(namebase = strdup((*argv)[0]))) {
+	if (!(namebase = strdup((*argvp)[0]))) {
 		fprintf(stderr, "Failed to duplicate name.\n");
 		return 0;
 	}
@@ -3583,28 +3583,28 @@ static int _process_switches(int *argc, char ***argv, const char *dev_dir)
 		_switches[MINOR_ARG]++;
 		_string_args[OPTIONS_ARG] = (char *) "name";
 
-		if (*argc == 3) {
-			_int_args[MAJOR_ARG] = atoi((*argv)[1]);
-			_int_args[MINOR_ARG] = atoi((*argv)[2]);
-			*argc -= 2;
-			*argv += 2;
-		} else if ((*argc == 2) &&
-			   (2 == sscanf((*argv)[1], "%i:%i",
+		if (*argcp == 3) {
+			_int_args[MAJOR_ARG] = atoi((*argvp)[1]);
+			_int_args[MINOR_ARG] = atoi((*argvp)[2]);
+			*argcp -= 2;
+			*argvp += 2;
+		} else if ((*argcp == 2) &&
+			   (2 == sscanf((*argvp)[1], "%i:%i",
 					&_int_args[MAJOR_ARG],
 					&_int_args[MINOR_ARG]))) {
-			*argc -= 1;
-			*argv += 1;
+			*argcp -= 1;
+			*argvp += 1;
 		} else {
 			fprintf(stderr, "Usage: devmap_name <major> <minor>\n");
 			return 0;
 		}
 
-		(*argv)[0] = (char *) "info";
+		(*argvp)[0] = (char *) "info";
 		return 1;
 	}
 
 	if (!strcmp(base, "losetup") || !strcmp(base, "dmlosetup")){
-		r = _process_losetup_switches(base, argc, argv, dev_dir);
+		r = _process_losetup_switches(base, argcp, argvp, dev_dir);
 		free(namebase);
 		return r;
 	}
@@ -3613,7 +3613,7 @@ static int _process_switches(int *argc, char ***argv, const char *dev_dir)
 
 	optarg = 0;
 	optind = OPTIND_INIT;
-	while ((ind = -1, c = GETOPTLONG_FN(*argc, *argv, "cCfG:hj:m:M:no:O:rS:u:U:vy",
+	while ((ind = -1, c = GETOPTLONG_FN(*argcp, *argvp, "cCfG:hj:m:M:no:O:rS:u:U:vy",
 					    long_options, NULL)) != -1) {
 		if (c == ':' || c == '?')
 			return 0;
@@ -3787,8 +3787,8 @@ static int _process_switches(int *argc, char ***argv, const char *dev_dir)
 		return 0;
 	}
 
-	*argv += optind;
-	*argc -= optind;
+	*argvp += optind;
+	*argcp -= optind;
 	return 1;
 }
 
