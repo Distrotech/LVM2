@@ -27,6 +27,15 @@
 #include <time.h>
 #include <sys/utsname.h>
 
+/* HM FIXME: REMOVEME: devel output */
+#ifdef USE_PFL
+#define PFL() printf("%s %u\n", __func__, __LINE__);
+#define PFLA(format, arg...) printf("%s %u " format "\n", __func__, __LINE__, arg);
+#else
+#define PFL()
+#define PFLA(format, arg...)
+#endif
+
 struct formatter;
 __attribute__((format(printf, 3, 0)))
 typedef int (*out_with_comment_fn) (struct formatter * f, const char *comment,
@@ -591,9 +600,11 @@ int out_areas(struct formatter *f, const struct lv_segment *seg,
 				continue;
 			}
 
-			/* RAID devices are laid-out in metadata/data pairs */
+			/* RAID devices are laid-out in metadata/data pairs (unless raid0 which is w/o metadata) */
+PFLA("seg_lv(seg, %u)->name=%s", s, seg_lv(seg, s)->name);
 			if (!lv_is_raid_image(seg_lv(seg, s)) ||
 			    (seg->meta_areas && seg_metalv(seg, s) && !lv_is_raid_metadata(seg_metalv(seg, s)))) {
+PFLA("image=%u, meta=%u", lv_is_raid_image(seg_lv(seg, s)), (seg->meta_areas && seg_metalv(seg, s) && lv_is_raid_metadata(seg_metalv(seg, s))) ? 1 : 0);
 				log_error("RAID segment has non-RAID areas");
 				return 0;
 			}

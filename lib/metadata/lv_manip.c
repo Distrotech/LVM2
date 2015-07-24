@@ -854,7 +854,7 @@ struct lv_segment *get_only_segment_using_this_lv(const struct logical_volume *l
 	}
 
 	dm_list_iterate_items(sl, &lv->segs_using_this_lv) {
-		/* Needs to be he only item in list */
+		/* Needs to be the only item in list */
 		if (!dm_list_end(&lv->segs_using_this_lv, &sl->list))
 			break;
 
@@ -1363,7 +1363,7 @@ PFL();
 		if (area_count <= segtype->parity_devs)
 			return 1;
 
-PFLA("r=%u", area_count - segtype->parity_devs);
+PFLA("area_count=%u, parity_devs=%u, r=%u", area_count, segtype->parity_devs, area_count - segtype->parity_devs);
 		return area_count - segtype->parity_devs;
 	}
 
@@ -6434,6 +6434,7 @@ PFL();
 	 * Before removal, the layer should be cleaned up,
 	 * i.e. additional segments and areas should have been removed.
 	 */
+PFLA("segments=%u area_count=%u layer_lv!=%u pareant_lv->le_count=%u layer_lv->le_count=%u", dm_list_size(&parent_lv->segments), parent_seg->area_count, layer_lv != seg_lv(parent_seg, 0), parent_lv->le_count, layer_lv->le_count)
 	if (dm_list_size(&parent_lv->segments) != 1 ||
 	    parent_seg->area_count != 1 ||
 	    seg_type(parent_seg, 0) != AREA_LV ||
@@ -6484,7 +6485,7 @@ struct logical_volume *insert_layer_for_lv(struct cmd_context *cmd,
 					   uint64_t status,
 					   const char *layer_suffix)
 {
-	static const char _suffixes[][8] = { "_tdata", "_cdata", "_corig" };
+	static const char _suffixes[][8] = { "_tdata", "_cdata", "_corig", "_0", "_1" };
 	int r;
 	char name[NAME_LEN];
 	struct dm_str_list *sl;
@@ -6513,7 +6514,7 @@ struct logical_volume *insert_layer_for_lv(struct cmd_context *cmd,
 
 PFLA("lv_is_active()=%d", lv_is_active(lv_where));
 	if (lv_is_active(lv_where) &&
-	    (strstr(name, "_mimagetmp") || strstr(layer_suffix, "_csrc_") || strstr(layer_suffix, "_cdst_"))) {
+	    (strstr(name, "_mimagetmp") || strstr(layer_suffix, "_0") || strstr(layer_suffix, "_1"))) {
 		log_very_verbose("Creating transient LV %s for mirror conversion in VG %s.", name, lv_where->vg->name);
 
 		segtype = get_segtype_from_string(cmd, "error");
