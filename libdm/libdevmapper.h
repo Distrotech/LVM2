@@ -1893,6 +1893,11 @@ int dm_report_compact_fields(struct dm_report *rh);
 int dm_report_output(struct dm_report *rh);
 
 /**
+ * Clear the current report's data without reporting it.
+ */
+int dm_report_clear(struct dm_report *rh);
+
+/**
  * Output the report headings for a columns-based report, even if they
  * have already been shown. Useful for repeating reports that wish to
  * issue a periodic reminder of the column headings.

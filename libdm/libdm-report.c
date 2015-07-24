@@ -4204,6 +4204,28 @@ static int _output_as_columns(struct dm_report *rh)
 	return 0;
 }
 
+int dm_report_clear(struct dm_report *rh)
+{
+	struct dm_list *fh, *rowh, *ftmp, *rtmp;
+	struct row *row = NULL;
+	struct dm_report_field *field;
+
+	/* clear buffer */
+	dm_list_iterate_safe(rowh, rtmp, &rh->rows) {
+		row = dm_list_item(rowh, struct row);
+		dm_list_iterate_safe(fh, ftmp, &row->fields) {
+			field = dm_list_item(fh, struct dm_report_field);
+			dm_list_del(&field->list);
+		}
+		dm_list_del(&row->list);
+	}
+
+	if (row)
+		dm_pool_free(rh->mem, row);
+
+	return 1;
+}
+
 int dm_report_output(struct dm_report *rh)
 {
 	if (dm_list_empty(&rh->rows))
