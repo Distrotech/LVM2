@@ -62,7 +62,9 @@ static lvm_t _lvm_init(const char *system_dir)
 
 	/* FIXME: locking_type config option needed? */
 	/* initialize locking */
-	if (!init_locking(-1, cmd, 0)) {
+	if (!init_locking(-1, cmd, 0) ||
+	    !init_connections(cmd) ||
+	    !init_filters(cmd, 1)) {
 		/* FIXME: use EAGAIN as error code here */
 		lvm_quit((lvm_t) cmd);
 		return NULL;

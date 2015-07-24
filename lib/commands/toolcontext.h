@@ -177,4 +177,7 @@ struct format_type *get_format_by_name(struct cmd_context *cmd, const char *form
 
 const char *system_id_from_string(struct cmd_context *cmd, const char *str);
 
+int init_filters(struct cmd_context *cmd, unsigned load_persistent_cache);
+int init_connections(struct cmd_context *cmd);
+
 #endif

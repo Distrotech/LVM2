@@ -532,8 +532,6 @@ static int _process_config(struct cmd_context *cmd)
 	const struct dm_config_node *cn;
 	const struct dm_config_value *cv;
 	int64_t pv_min_kb;
-	const char *lvmetad_socket;
-	const char *lvmpolld_socket;
 	int udev_disabled = 0;
 	char sysfs_dir[PATH_MAX];
 
@@ -676,40 +674,8 @@ static int _process_config(struct cmd_context *cmd)
 	init_detect_internal_vg_cache_corruption
 		(find_config_tree_bool(cmd, global_detect_internal_vg_cache_corruption_CFG, NULL));
 
-	lvmetad_disconnect();
-	lvmpolld_disconnect();
-
-	lvmetad_socket = getenv("LVM_LVMETAD_SOCKET");
-	if (!lvmetad_socket)
-		lvmetad_socket = DEFAULT_RUN_DIR "/lvmetad.socket";
-
-	/* TODO?
-		lvmetad_socket = find_config_tree_str(cmd, "lvmetad/socket_path",
-						      DEFAULT_RUN_DIR "/lvmetad.socket");
-	*/
-	lvmetad_set_socket(lvmetad_socket);
-	cn = find_config_tree_array(cmd, devices_global_filter_CFG, NULL);
-	lvmetad_set_token(cn ? cn->v : NULL);
-
-	if (find_config_tree_int(cmd, global_locking_type_CFG, NULL) == 3 &&
-	    find_config_tree_bool(cmd, global_use_lvmetad_CFG, NULL)) {
-		log_warn("WARNING: configuration setting use_lvmetad overridden to 0 due to locking_type 3. "
-			 "Clustered environment not supported by lvmetad yet.");
-		lvmetad_set_active(NULL, 0);
-	} else
-		lvmetad_set_active(NULL, find_config_tree_bool(cmd, global_use_lvmetad_CFG, NULL));
-
-	lvmetad_init(cmd);
-
 	if (!_init_system_id(cmd))
 		return_0;
-
-	lvmpolld_socket = getenv("LVM_LVMPOLLD_SOCKET");
-	if (!lvmpolld_socket)
-		lvmpolld_socket = DEFAULT_RUN_DIR "/lvmpolld.socket";
-	lvmpolld_set_socket(lvmpolld_socket);
-
-	lvmpolld_set_active(find_config_tree_bool(cmd, global_use_lvmpolld_CFG, NULL));
 
 	return 1;
 }
@@ -1195,7 +1161,7 @@ bad:
  *     md component filter -> fw raid filter
  *
  */
-static int _init_filters(struct cmd_context *cmd, unsigned load_persistent_cache)
+int init_filters(struct cmd_context *cmd, unsigned load_persistent_cache)
 {
 	const char *dev_cache;
 	struct dev_filter *filter = NULL, *filter_components[2] = {0};
@@ -1679,6 +1645,68 @@ static int _reopen_stream(FILE *stream, int fd, const char *mode, const char *na
 	return 1;
 }
 
+static int _init_lvmetad(struct cmd_context *cmd)
+{
+	const struct dm_config_node *cn;
+	const char *lvmetad_socket;
+
+	lvmetad_disconnect();
+
+	lvmetad_socket = getenv("LVM_LVMETAD_SOCKET");
+	if (!lvmetad_socket)
+		lvmetad_socket = DEFAULT_RUN_DIR "/lvmetad.socket";
+
+	/* TODO?
+		lvmetad_socket = find_config_tree_str(cmd, "lvmetad/socket_path",
+						      DEFAULT_RUN_DIR "/lvmetad.socket");
+	*/
+
+	lvmetad_set_socket(lvmetad_socket);
+	cn = find_config_tree_array(cmd, devices_global_filter_CFG, NULL);
+	lvmetad_set_token(cn ? cn->v : NULL);
+
+	if (find_config_tree_int(cmd, global_locking_type_CFG, NULL) == 3 &&
+	    find_config_tree_bool(cmd, global_use_lvmetad_CFG, NULL)) {
+		log_warn("WARNING: configuration setting use_lvmetad overridden to 0 due to locking_type 3. "
+			 "Clustered environment not supported by lvmetad yet.");
+		lvmetad_set_active(NULL, 0);
+	} else
+		lvmetad_set_active(NULL, find_config_tree_bool(cmd, global_use_lvmetad_CFG, NULL));
+
+	lvmetad_init(cmd);
+	return 1;
+}
+
+static int _init_lvmpolld(struct cmd_context *cmd)
+{
+	const char *lvmpolld_socket;
+
+	lvmpolld_disconnect();
+
+	lvmpolld_socket = getenv("LVM_LVMPOLLD_SOCKET");
+	if (!lvmpolld_socket)
+		lvmpolld_socket = DEFAULT_RUN_DIR "/lvmpolld.socket";
+	lvmpolld_set_socket(lvmpolld_socket);
+
+	lvmpolld_set_active(find_config_tree_bool(cmd, global_use_lvmpolld_CFG, NULL));
+	return 1;
+}
+
+int init_connections(struct cmd_context *cmd)
+{
+	if (!_init_lvmetad(cmd)) {
+		log_error("Failed to initialize lvmetad connection.");
+		return 0;
+	}
+
+	if (!_init_lvmpolld(cmd)) {
+		log_error("Failed to initialize lvmpolld connection.");
+		return 0;
+	}
+
+	return 1;
+}
+
 /* Entry point */
 struct cmd_context *create_toolcontext(unsigned is_long_lived,
 				       const char *system_dir,
@@ -1827,9 +1855,6 @@ struct cmd_context *create_toolcontext(unsigned is_long_lived,
 	if (!_init_dev_cache(cmd))
 		goto_out;
 
-	if (!_init_filters(cmd, 1))
-		goto_out;
-
 	memlock_init(cmd);
 
 	if (!_init_formats(cmd))
@@ -1931,8 +1956,11 @@ int refresh_filters(struct cmd_context *cmd)
 {
 	int r, saved_ignore_suspended_devices = ignore_suspended_devices();
 
+	if (!cmd->full_filter)
+		return 1;
+
 	_destroy_filters(cmd);
-	if (!(r = _init_filters(cmd, 0)))
+	if (!(r = init_filters(cmd, 0)))
                 stack;
 
 	/*
@@ -2042,7 +2070,7 @@ int refresh_toolcontext(struct cmd_context *cmd)
 	if (!_init_dev_cache(cmd))
 		return_0;
 
-	if (!_init_filters(cmd, 0))
+	if (!refresh_filters(cmd))
 		return_0;
 
 	if (!_init_formats(cmd))

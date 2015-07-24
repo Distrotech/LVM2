@@ -904,10 +904,14 @@ int init_clvm(struct dm_hash_table *excl_uuid)
 		return 0;
 	}
 
-	if (stored_errno()) {
-		destroy_toolcontext(cmd);
-		return 0;
-	}
+	if (!init_connections(cmd))
+		goto_bad;
+
+	if (!init_filters(cmd, 1))
+		goto_bad;
+
+	if (stored_errno())
+		goto_bad;
 
 	cmd->cmd_line = "clvmd";
 
@@ -920,6 +924,9 @@ int init_clvm(struct dm_hash_table *excl_uuid)
 	memlock_inc_daemon(cmd);
 
 	return 1;
+bad:
+	destroy_toolcontext(cmd);
+	return 0;
 }
 
 void destroy_lvm(void)

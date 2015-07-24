@@ -1541,6 +1541,16 @@ int lvm_run_command(struct cmd_context *cmd, int argc, char **argv)
 	if (!_prepare_profiles(cmd))
 		return_ECMD_FAILED;
 
+	if (!init_connections(cmd)) {
+		ret = ECMD_FAILED;
+		goto_out;
+	}
+
+	if (!cmd->full_filter && !init_filters(cmd, 1)) {
+		ret = ECMD_FAILED;
+		goto_out;
+	}
+
 	if (arg_count(cmd, readonly_ARG))
 		cmd->metadata_read_only = 1;
 
@@ -1874,20 +1884,24 @@ struct cmd_context *init_lvm(void)
 	 */
 	dm_set_name_mangling_mode(DM_STRING_MANGLING_NONE);
 
-	if (!(cmd = create_toolcontext(0, NULL, 1, 0))) {
-		udev_fin_library_context();
-		return_NULL;
-	}
+	if (!(cmd = create_toolcontext(0, NULL, 1, 0)))
+		goto_bad;
+
+	if (!init_connections(cmd) ||
+	    !init_filters(cmd, 1))
+		goto_bad;
 
 	_cmdline.arg_props = &_arg_props[0];
 
-	if (stored_errno()) {
-		destroy_toolcontext(cmd);
-		udev_fin_library_context();
-		return_NULL;
-	}
+	if (stored_errno())
+		goto_bad;
 
 	return cmd;
+bad:
+	if (cmd)
+		destroy_toolcontext(cmd);
+	udev_fin_library_context();
+	return NULL;
 }
 
 static void _fin_commands(void)
