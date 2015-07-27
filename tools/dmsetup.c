@@ -5444,6 +5444,16 @@ static int _process_switches(int *argcp, char ***argvp, const char *dev_dir)
 		return 0;
 	}
 
+	if (_switches[TIME_ARG] && _switches[HEADERS_ARG]) {
+		fprintf(stderr, "Use one of --timestamps and --headers.");
+		return 0;
+	}
+
+	if (_switches[TIME_ARG]) {
+		_switches[HEADERS_ARG]++;
+		_string_args[HEADERS_ARG] = (char *) "time";
+	}
+
 	/* everything has a count of at least 1 */
 	if (!_int_args[COUNT_ARG])
 		_int_args[COUNT_ARG]++;
