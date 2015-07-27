@@ -85,6 +85,8 @@ dmstats \(em device-mapper statistics management
 .RB [ \-\-allprograms ]
 .RB [ \-\-programid
 .IR id ]
+.RB [ \-\-headers
+.IR headers ]
 .RB [ \-\-regionid
 .IR id ]
 .RB [ \-O | \-\-sort
@@ -146,6 +148,9 @@ When printing statistics counters also atomically reset them to zero.
 .B \-\-count \fIcount
 Specify the iteration count for repeating reports. If the count
 argument is zero reports will continue to repeat until interrupted.
+.TP
+.B \-\-headers \fIheader_list
+Specify which headers to display.
 .TP
 .B \-\-interval \fIinterval
 Specify the interval, in seconds, between successive iterations for
@@ -329,6 +334,8 @@ present regions.
 .RB [ \-\-allprograms ]
 .RB [ \-\-interval
 .IR seconds ]
+.RB [ \-\-headers
+.IR headers ]
 .RB [ \-\-count
 .IR count ]
 .RB [ \-\-timestamps ]
@@ -353,9 +360,9 @@ one second.
 If the \fB\-\-allprograms\fP switch is given, all regions will be
 listed, regardless of region program ID values.
 
-A timestamp is optionally printed before each statistics report is
-displayed. The current format gives the date and local time using the
-same format as the iostat program.
+A header row is optionally printed before each statistics report is
+displayed. The list of headers to include is specified using the
+\fB\-\-headers\fP option.
 .br
 .SH REGIONS AND AREAS
 The device-mapper statistics facility allows separate performance
