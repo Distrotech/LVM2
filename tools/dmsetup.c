@@ -129,6 +129,7 @@ enum {
 	HELP_ARG,
 	INACTIVE_ARG,
 	INTERVAL_ARG,
+	HEADERS_ARG,
 	LENGTH_ARG,
 	MANGLENAME_ARG,
 	MAJOR_ARG,
@@ -178,7 +179,8 @@ typedef enum {
 	DR_DEPS = 4,
 	DR_TREE = 8,	/* Complete dependency tree required */
 	DR_NAME = 16,
-	DR_STATS = 32
+	DR_STATS = 32,
+	DR_HEADER = 64
 } report_type_t;
 
 typedef enum {
@@ -203,7 +205,6 @@ static struct dm_report *_report;
 static report_type_t _report_type;
 static dev_name_t _dev_name_type;
 static uint32_t _count = 1; /* count of repeating reports */
-static uint32_t _times = 0; /* display timestamp with each report */
 static int _stats_report_init = 0;
 static uint64_t _disp_factor = 512; /* display sizes in sectors */
 static char _disp_units = 's';
@@ -326,6 +327,14 @@ struct dm_split_name {
         char *lv_layer;
 };
 
+struct header_data {
+	uint64_t count;
+	uint64_t seconds;
+	time_t now;
+};
+
+struct header_data _hdr_data;
+
 struct dmsetup_report_obj {
 	struct dm_task *task;
 	struct dm_info *info;
@@ -333,6 +342,7 @@ struct dmsetup_report_obj {
 	struct dm_tree_node *tree_node;
 	struct dm_split_name *split_name;
 	struct dm_stats *stats;
+	struct header_data *header;
 };
 
 static struct dm_task *_get_deps_task(int major, int minor)
@@ -3452,6 +3462,67 @@ static int _dm_stats_util_disp(struct dm_report *rh,
 	return 1;
 }
 
+static int _dm_time_disp(struct dm_report *rh,
+			 struct dm_pool *mem __attribute__((unused)),
+			 struct dm_report_header *header, const void *data,
+			 void *private __attribute__((unused)))
+{
+	char buf[128];
+	char *hdrstr;
+	struct tm *ltm;
+
+	ltm = localtime(&_hdr_data.now);
+
+	/* FIXME: support S_TIME_FORMAT=ISO ("%FT%T%z") */
+	if (!strftime(buf, sizeof(buf), "%x %X", ltm)) {
+		log_error("Could not format timestamp string.");
+		return 0;
+	}
+
+	if (!(hdrstr = dm_pool_strdup(mem, buf)))
+		return_0;
+
+	dm_report_header_set_content(header, hdrstr);
+	return 1;
+
+}
+
+static int _dm_report_count_disp(struct dm_report *rh,
+			  struct dm_pool *mem __attribute__((unused)),
+			  struct dm_report_header *header, const void *data,
+			  void *private __attribute__((unused)))
+{
+	char buf[64];
+	char *hdrstr;
+
+	if (!dm_snprintf(buf, sizeof(buf), "%"PRIu64, _hdr_data.count))
+		return_0;
+
+	if (!(hdrstr = dm_pool_strdup(mem, buf)))
+		return_0;
+
+	dm_report_header_set_content(header, hdrstr);
+	return 1;
+}
+
+static int _dm_seconds_count_disp(struct dm_report *rh,
+				  struct dm_pool *mem __attribute__((unused)),
+				  struct dm_report_header *header, const void *data,
+				  void *private __attribute__((unused)))
+{
+	char buf[64];
+	char *hdrstr;
+
+	if (!dm_snprintf(buf, sizeof(buf), "%"PRIu64, _hdr_data.seconds))
+		return_0;
+
+	if (!(hdrstr = dm_pool_strdup(mem, buf)))
+		return_0;
+
+	dm_report_header_set_content(header, hdrstr);
+	return 1;
+}
+
 static void *_task_get_obj(void *obj)
 {
 	return ((struct dmsetup_report_obj *)obj)->task;
@@ -3482,6 +3553,11 @@ static void *_stats_get_obj(void *obj)
 	return ((struct dmsetup_report_obj *)obj)->stats;
 }
 
+static void *_header_get_obj(void *obj)
+{
+	return ((struct dmsetup_report_obj *)obj)->header;
+}
+
 static const struct dm_report_object_type _report_types[] = {
 	{ DR_TASK, "Mapped Device Name", "", _task_get_obj },
 	{ DR_INFO, "Mapped Device Information", "", _info_get_obj },
@@ -3489,6 +3565,7 @@ static const struct dm_report_object_type _report_types[] = {
 	{ DR_TREE, "Mapped Device Relationship Information", "", _tree_get_obj },
 	{ DR_NAME, "Mapped Device Name Components", "", _split_name_get_obj },
 	{ DR_STATS, "Mapped Device Statistics","", _stats_get_obj },
+	{ DR_HEADER, "Header information","", _header_get_obj },
 	{ 0, "", "", NULL }
 };
 
@@ -3497,6 +3574,7 @@ static const struct dm_report_object_type _report_types[] = {
 #define STR (DM_REPORT_FIELD_TYPE_STRING)
 #define NUM (DM_REPORT_FIELD_TYPE_NUMBER)
 #define SIZ (DM_REPORT_FIELD_TYPE_SIZE)
+#define TIM (DM_REPORT_FIELD_TYPE_TIME)
 #define FIELD_O(type, strct, sorttype, head, field, width, func, id, desc) {DR_ ## type, sorttype, OFFSET_OF(strct, field), width, id, head, &_ ## func ## _disp, desc},
 #define FIELD_F(type, sorttype, head, width, func, id, desc) {DR_ ## type, sorttype, 0, width, id, head, &_ ## func ## _disp, desc},
 
@@ -3584,11 +3662,26 @@ FIELD_F(STATS, NUM, "Util%", 10, dm_stats_util, "util", "Utilization.")
 /* *INDENT-ON* */
 };
 
+#undef FIELD_O
+#undef FIELD_F
+
+#define HEADER_O(type, strct, sorttype, field, width, func, id, label, desc) {DR_ ## type, sorttype, OFFSET_OF(strct, field), width, id, label, &_ ## func ## _disp, desc},
+#define HEADER_F(type, sorttype, width, func, id, label, desc) {DR_ ## type, sorttype, 0, width, id, label, &_ ## func ## _disp, desc},
+static const struct dm_report_header_type _report_headers[] = {
+/* *INDENT-OFF* */
+HEADER_F(HEADER, TIM, 32, dm_time, "time", "Time:", "Current date and time.")
+HEADER_F(HEADER, NUM, 20, dm_report_count, "report_count", "Count:", "Report number.")
+HEADER_F(HEADER, NUM, 20, dm_seconds_count, "seconds", "Seconds:", "Seconds since program start.")
+{0, 0, 0, 0, "", "", NULL, NULL},
+/* *INDENT-ON* */
+};
+
+
+#undef HEADER_O
+#undef HEADER_F
 #undef STR
 #undef NUM
 #undef SIZ
-#undef FIELD_O
-#undef FIELD_F
 
 static const char *default_report_options = "name,major,minor,attr,open,segments,events,uuid";
 static const char *splitname_report_options = "vg_name,lv_name,lv_layer";
@@ -3610,7 +3703,7 @@ static int _report_init(const struct command *cmd)
 	const char *separator = " ";
 	const char *selection = NULL;
 	int aligned = 1, headings = 1, buffered = 1, field_prefixes = 0;
-	int quoted = 1, columns_as_rows = 0;
+	int quoted = 1, columns_as_rows = 0, headers = 0;
 	uint32_t flags = 0;
 	size_t len = 0;
 	int r = 0;
@@ -3630,6 +3723,9 @@ static int _report_init(const struct command *cmd)
 		aligned = 0;
 		headings = 0;
 	}
+
+	if (_switches[HEADERS_ARG])
+		headers = 1;
 
 	if (_switches[UNBUFFERED_ARG])
 		buffered = 0;
@@ -3694,6 +3790,12 @@ static int _report_init(const struct command *cmd)
 	if (field_prefixes)
 		flags |= DM_REPORT_OUTPUT_FIELD_NAME_PREFIX;
 
+	if (headers) {
+		flags |= DM_REPORT_OUTPUT_HEADERS;
+		if (headings)
+			flags |= DM_REPORT_OUTPUT_HEADER_LABELS;
+	}
+
 	if (!quoted)
 		flags |= DM_REPORT_OUTPUT_FIELD_UNQUOTED;
 
@@ -3708,6 +3810,14 @@ static int _report_init(const struct command *cmd)
 	if ((_report_type & DR_TREE) && !_build_whole_deptree(cmd)) {
 		err("Internal device dependency tree creation failed.");
 		goto out;
+	}
+
+	if (headers) {
+		if (!dm_report_set_headers(_report, _report_headers))
+			goto out;
+		if (!dm_report_add_header_row(_report,
+					      _string_args[HEADERS_ARG]))
+			goto out;
 	}
 
 	if (!_switches[INTERVAL_ARG])
@@ -4601,23 +4711,6 @@ doit:
 	return 1;
 }
 
-static void _timestamp(void)
-{
-	char buf[128];
-	time_t now;
-	struct tm *ltm;
-
-	if (!_times)
-		return;
-
-	time(&now);
-	ltm = localtime(&now);
-	/* FIXME: support S_TIME_FORMAT=ISO ("%FT%T%z") */
-	if (!strftime(buf, sizeof(buf), "%x %X", ltm))
-		log_error("Could not format timestamp string.");
-	printf("%s\n", buf);
-}
-
 static int _process_tree_options(const char *options)
 {
 	const char *s, *end;
@@ -4918,6 +5011,15 @@ static int _process_losetup_switches(const char *base, int *argc, char ***argv,
 	return 1;
 }
 
+static void _update_header_info(void)
+{
+	time_t now;
+	time(&now);
+	_hdr_data.count = _int_args[COUNT_ARG] - _count;
+	_hdr_data.seconds = _int_args[INTERVAL_ARG] * (_int_args[COUNT_ARG] - _count);
+	_hdr_data.now = now;
+}
+
 static int _process_options(const char *options)
 {
 	const char *s, *end;
@@ -4988,6 +5090,7 @@ static int _process_switches(int *argcp, char ***argvp, const char *dev_dir)
 		{"exec", 1, &ind, EXEC_ARG},
 		{"force", 0, &ind, FORCE_ARG},
 		{"gid", 1, &ind, GID_ARG},
+		{"headers", 1, &ind, HEADERS_ARG},
 		{"help", 0, &ind, HELP_ARG},
 		{"inactive", 0, &ind, INACTIVE_ARG},
 		{"interval", 1, &ind, INTERVAL_ARG},
@@ -5246,6 +5349,10 @@ static int _process_switches(int *argcp, char ***argvp, const char *dev_dir)
 		}
                 if (ind == TARGETS_ARG)
 			_switches[TARGETS_ARG]++;
+		if (ind == HEADERS_ARG) {
+			_switches[HEADERS_ARG]++;
+			_string_args[HEADERS_ARG] = optarg;
+		}
 		if (ind == INACTIVE_ARG)
 		       _switches[INACTIVE_ARG]++;
 		if (ind == MANGLENAME_ARG) {
@@ -5371,6 +5478,7 @@ static char **_copy_argv(int argc, char **argv)
 
 int main(int argc, char **argv)
 {
+	struct dmsetup_report_obj hdr_obj;
 	int r = 1, saved_argc;
 	const char *dev_dir;
 	char **saved_argv;
@@ -5472,9 +5580,6 @@ unknown:
 		}
 	}
 
-	if (_switches[TIME_ARG])
-		_times = 1;
-
 	#ifdef UDEV_SYNC_SUPPORT
 	if (!_set_up_udev_support(dev_dir))
 		goto out;
@@ -5518,9 +5623,14 @@ out:
 			if (first)
 				dm_report_clear(_report);
 			else if (repeat) {
-				_timestamp();
+				_update_header_info();
+				dm_report_header(_report, &hdr_obj);
+				dm_report_output_headers(_report);
 				dm_report_column_headings(_report);
+				dm_report_output(_report);
 			}
+			if (_count && repeat)
+				dm_report_wait(_report);
 
 			if (!first)
 				dm_report_output(_report);
