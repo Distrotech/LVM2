@@ -3921,7 +3921,7 @@ static int _report_headings(struct dm_report *rh)
 	return 0;
 }
 
-int dm_report_headings(struct dm_report *rh)
+int dm_report_column_headings(struct dm_report *rh)
 {
 	return _report_headings(rh);
 }

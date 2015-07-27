@@ -1752,7 +1752,7 @@ struct dm_report_field_type {
 	int32_t width;		/* default width */
 	/* string used to specify the field */
 	const char id[DM_REPORT_FIELD_TYPE_ID_LEN];
-	/* string printed in header */
+	/* string printed in heading */
 	const char heading[DM_REPORT_FIELD_TYPE_HEADING_LEN];
 	int (*report_fn)(struct dm_report *rh, struct dm_pool *mem,
 			 struct dm_report_field *field, const void *data,
@@ -1902,7 +1902,7 @@ int dm_report_clear(struct dm_report *rh);
  * have already been shown. Useful for repeating reports that wish to
  * issue a periodic reminder of the column headings.
  */
-int dm_report_headings(struct dm_report *rh);
+int dm_report_column_headings(struct dm_report *rh);
 
 void dm_report_free(struct dm_report *rh);
 
