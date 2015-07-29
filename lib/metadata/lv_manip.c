@@ -6485,7 +6485,7 @@ struct logical_volume *insert_layer_for_lv(struct cmd_context *cmd,
 					   uint64_t status,
 					   const char *layer_suffix)
 {
-	static const char _suffixes[][8] = { "_tdata", "_cdata", "_corig", "_0", "_1" };
+	static const char _suffixes[][8] = { "_tdata", "_cdata", "_corig", "_dsrc", "_ddst" };
 	int r;
 	char name[NAME_LEN];
 	struct dm_str_list *sl;
@@ -6514,7 +6514,7 @@ struct logical_volume *insert_layer_for_lv(struct cmd_context *cmd,
 
 PFLA("lv_is_active()=%d", lv_is_active(lv_where));
 	if (lv_is_active(lv_where) &&
-	    (strstr(name, "_mimagetmp") || strstr(layer_suffix, "_0") || strstr(layer_suffix, "_1"))) {
+	    (strstr(name, "_mimagetmp"))) {
 		log_very_verbose("Creating transient LV %s for mirror conversion in VG %s.", name, lv_where->vg->name);
 
 		segtype = get_segtype_from_string(cmd, "error");
@@ -6575,7 +6575,7 @@ PFLA("%s", "vg_commit");
 					0, 0, 0, NULL)))
 		return_NULL;
 
-	/* map the new segment to the original underlying are */
+	/* map the new segment to the original underlying area */
 	if (!set_lv_segment_area_lv(mapseg, 0, layer_lv, 0, 0))
 		return_NULL;
 
@@ -6590,7 +6590,7 @@ PFLA("%s", "vg_commit");
 	 *   FIXME: without strcmp it breaks mirrors....
 	 */
 	for (r = 0; r < DM_ARRAY_SIZE(_suffixes); ++r)
-		if (strcmp(layer_suffix, _suffixes[r]) == 0) {
+		if (strstr(layer_suffix, _suffixes[r])) {
 			lv_names.old = lv_where->name;
 			lv_names.new = layer_lv->name;
 			if (!for_each_sub_lv(layer_lv, _rename_cb, (void *) &lv_names))
