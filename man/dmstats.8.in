@@ -79,6 +79,7 @@ dmstats \(em device-mapper statistics management
 .IR seconds ]
 .RB [ \-\-count
 .IR count ]
+.RB [ \-\-timestamps ]
 .RB [ \-\-units
 .IR units ]
 .RB [ \-\-allprograms ]
@@ -202,6 +203,9 @@ instead of 1024.
 Create a new statistics region for each target contained in the target
 device. This causes a separate region to be allocated for each segment
 of the device.
+.TP
+.B \-\-timestamps
+Output a timestamp before each statistics report.
 .TP
 .BR \-\-units \ hHbBsSkKmMgGtTpPeE
 Set the display units for report output. All sizes are output in these
@@ -327,6 +331,7 @@ present regions.
 .IR seconds ]
 .RB [ \-\-count
 .IR count ]
+.RB [ \-\-timestamps ]
 .RB [ \-\-units
 .IR unit ]
 .RB [ \-\-regionid
@@ -347,6 +352,10 @@ one second.
 
 If the \fB\-\-allprograms\fP switch is given, all regions will be
 listed, regardless of region program ID values.
+
+A timestamp is optionally printed before each statistics report is
+displayed. The current format gives the date and local time using the
+same format as the iostat program.
 .br
 .SH REGIONS AND AREAS
 The device-mapper statistics facility allows separate performance
