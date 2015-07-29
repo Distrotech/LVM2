@@ -475,9 +475,8 @@ static int _read_raid_params(struct cmd_context *cmd,
 		return 0;
 	}
 
-	if (arg_count(cmd, mirrors_ARG) && segtype_is_raid(lp->segtype) &&
-	    strcmp(lp->segtype->name, SEG_TYPE_NAME_RAID1) &&
-	    strcmp(lp->segtype->name, SEG_TYPE_NAME_RAID10)) {
+	if (arg_count(cmd, mirrors_ARG) && 
+	    !(segtype_is_raid1(lp->segtype) || segtype_is_raid10(lp->segtype))) {
 		log_error("Mirror argument cannot be used with segment type, %s",
 			  lp->segtype->name);
 		return 0;
@@ -565,26 +564,6 @@ static int _read_mirror_and_raid_params(struct cmd_context *cmd,
 	if (lp->region_size & (lp->region_size - 1)) {
 		log_error("Region size (%" PRIu32 ") must be a power of 2",
 			  lp->region_size);
-		return 0;
-	}
-
-	/*
-	 * RAID1 does not take a stripe arg
-	 */
-	if ((lp->stripes > 1) &&
-	    (seg_is_mirrored(lp) || segtype_is_raid1(lp->segtype)) &&
-	    !segtype_is_any_raid0(lp->segtype) &&
-	    !segtype_is_raid10(lp->segtype)) {
-		log_error("Stripe argument cannot be used with segment type, %s",
-			  lp->segtype->name);
-		return 0;
-	}
-
-	if (arg_count(cmd, mirrors_ARG) && segtype_is_raid(lp->segtype) &&
-	    !segtype_is_raid1(lp->segtype) &&
-	    !segtype_is_raid10(lp->segtype)) {
-		log_error("Mirror argument cannot be used with segment type, %s",
-			  lp->segtype->name);
 		return 0;
 	}
 
