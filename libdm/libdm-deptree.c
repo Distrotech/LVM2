@@ -2298,16 +2298,13 @@ static int _2_if_value(unsigned p)
 	return p ? 2 : 0;
 }
 
-/* Return number of bits passed in @bits assuming 2 * 64 bit size */
-static int _get_params_count(uint64_t *bits)
+/* Return number of bits passed in @bits assuming 4 * 64 bit size */
+static int _get_params_count(uint64_t bits)
 {
 	int r = 0;
-	int i = 4;
 
-	while (i--) {
-		r += 2 * hweight32(bits[i] & 0xFFFFFFFF);
-		r += 2 * hweight32(bits[i] >> 32);
-	}
+	r += 2 * hweight32(bits & 0xFFFFFFFF);
+	r += 2 * hweight32(bits >> 32);
 
 	return r;
 }
@@ -2333,9 +2330,9 @@ static int _raid_emit_segment_line(struct dm_task *dmt, uint32_t major,
 		       _2_if_value(seg->min_recovery_rate) +
 		       _2_if_value(seg->max_recovery_rate);
 
-	/* rebuilds and writemostly are 4 * 64 bits */
-	param_count += _get_params_count(&seg->rebuilds);
-	param_count += _get_params_count(&seg->writemostly);
+	/* rebuilds and writemostly are 64 bits */
+	param_count += _get_params_count(seg->rebuilds);
+	param_count += _get_params_count(seg->writemostly);
 
 	if ((seg->type == SEG_RAID1) && seg->stripe_size)
 		log_error("WARNING: Ignoring RAID1 stripe size");
