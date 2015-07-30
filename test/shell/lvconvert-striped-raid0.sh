@@ -14,7 +14,7 @@
 ########################################################
 # MAIN
 ########################################################
-aux have_raid 1 3 0 || skip
+aux have_raid 1 7 0 || skip
 
 aux prepare_pvs 6 20  # 6 devices for striped test
 vgcreate -s 128k $vg $(cat DEVICES)
