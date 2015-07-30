@@ -2418,13 +2418,13 @@ PFLA("param_count=%u", param_count);
 	if (seg->writebehind)
 		EMIT_PARAMS(pos, " writebehind %u", seg->writebehind);
 
-	if (seg->min_recovery_rate)
-		EMIT_PARAMS(pos, " min_recovery_rate %u",
-			    seg->min_recovery_rate);
-
 	if (seg->max_recovery_rate)
 		EMIT_PARAMS(pos, " max_recovery_rate %u",
 			    seg->max_recovery_rate);
+
+	if (seg->min_recovery_rate)
+		EMIT_PARAMS(pos, " min_recovery_rate %u",
+			    seg->min_recovery_rate);
 
 	/* Print number of metadata/data device pairs */
 	EMIT_PARAMS(pos, " %u", area_count);

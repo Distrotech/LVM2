@@ -4051,8 +4051,8 @@ PFLA("extents=%u mirrors=%u stripes=%u log_count=%u", extents, mirrors, stripes,
 	/* FIXME log_count should be 1 for mirrors */
 	if (segtype_is_mirror(segtype))
 		log_count = 1;
-	else if (segtype_is_raid1(segtype))
-		log_count = mirrors;
+	else if (segtype_is_raid(segtype) && !segtype_is_raid0(segtype))
+		log_count = (stripes + segtype->parity_devs) * mirrors;
 #endif
 	if (!(ah = allocate_extents(lv->vg, lv, segtype, stripes, mirrors,
 				    log_count, region_size, extents,
