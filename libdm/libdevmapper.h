@@ -2158,6 +2158,7 @@ struct dm_report_field;
 
 #define DM_REPORT_FIELD_TYPE_ID_LEN 32
 #define DM_REPORT_FIELD_TYPE_HEADING_LEN 32
+#define DM_REPORT_FIELD_TYPE_LABEL_LEN 32
 
 struct dm_report;
 struct dm_report_field_type {
@@ -2248,6 +2249,22 @@ typedef int (*dm_report_reserved_handler) (struct dm_report *rh,
 					   const void *data_in,
 					   const void **data_out);
 
+struct dm_report_header;
+struct dm_report_header_type {
+	uint32_t type;		/* object type id */
+	uint32_t flags;		/* DM_REPORT_FIELD */
+	uint32_t offset;
+	int32_t	width;
+	/* string used to specify the header */
+	const char id[DM_REPORT_FIELD_TYPE_ID_LEN];
+	/* string printed in label*/
+	const char label[DM_REPORT_FIELD_TYPE_LABEL_LEN];
+	int (*report_fn)(struct dm_report *rh, struct dm_pool *mem,
+			 struct dm_report_header *header, const void *data,
+			 void *private_data);
+	const char *desc;	/* description of the header */
+};
+
 /*
  * The dm_report_value_cache_{set,get} are helper functions to store and retrieve
  * various values used during reporting (dm_report_field_type.report_fn) and/or
@@ -2266,6 +2283,8 @@ const void *dm_report_value_cache_get(struct dm_report *rh, const char *name);
 #define DM_REPORT_OUTPUT_FIELD_NAME_PREFIX	0x00000008
 #define DM_REPORT_OUTPUT_FIELD_UNQUOTED		0x00000010
 #define DM_REPORT_OUTPUT_COLUMNS_AS_ROWS	0x00000020
+#define DM_REPORT_OUTPUT_HEADERS		0x00000040
+#define DM_REPORT_OUTPUT_HEADER_LABELS		0x00000040
 
 struct dm_report *dm_report_init(uint32_t *report_types,
 				 const struct dm_report_object_type *types,
@@ -2298,6 +2317,23 @@ int dm_report_object(struct dm_report *rh, void *object);
 int dm_report_object_is_selected(struct dm_report *rh, void *object, int do_output, int *selected);
 
 /*
+ * Update header fields printed before each report.
+ */
+int dm_report_header(struct dm_report *rh, void *object);
+
+/*
+ * Add a row of headers to be output before each report. Currently only
+ * a single row of header data is supported.
+ */
+int dm_report_add_header_row(struct dm_report *rh, const char *output_headers);
+
+/*
+ * Set the list of available header fields for this report.
+ */
+int dm_report_set_headers(struct dm_report *rh,
+			  const struct dm_report_header_type *headers);
+
+/*
  * Compact report output so that if field value is empty for all rows in
  * the report, drop the field from output completely (including headers).
  * Compact output is applicable only if report is buffered, otherwise
@@ -2306,6 +2342,8 @@ int dm_report_object_is_selected(struct dm_report *rh, void *object, int do_outp
 int dm_report_compact_fields(struct dm_report *rh);
 
 int dm_report_output(struct dm_report *rh);
+
+int dm_report_output_headers(struct dm_report *rh);
 
 /**
  * Clear the current report's data without reporting it.
@@ -2357,7 +2395,14 @@ void dm_report_field_set_value(struct dm_report_field *field, const void *value,
 			       const void *sortvalue);
 
 /*
- * Set an interval in nanoseconds for this dm_report object that will
+ * For custom header content, allocate the data in 'mem' and use
+ * dm_report_header_set_content().
+ */
+void dm_report_header_set_content(struct dm_report_header *hdr,
+				  const void *content);
+
+/*
+ * Set an interval (in miliseconds) for this dm_report object that will
  * be used by any subsequent call to dm_report_wait_interval. This is
  * only useful for repeating reports (e.g. statistics).
  *

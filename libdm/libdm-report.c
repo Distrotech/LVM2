@@ -55,11 +55,20 @@ struct dm_report {
 
 	uint32_t keys_count;
 
+	/* Ordered list of headers to be output before the report. */
+	struct dm_list header_props;
+
+	/* Rows of headers */
+	struct dm_list header_rows;
+
 	/* Ordered list of fields needed for this report */
 	struct dm_list field_props;
 
 	/* Rows of report data */
 	struct dm_list rows;
+
+	/* Array of header definitions */
+	const struct dm_report_header_type *headers;
 
 	/* Array of field definitions */
 	const struct dm_report_field_type *fields;
@@ -93,6 +102,14 @@ struct field_properties {
 	const struct dm_report_object_type *type;
 	uint32_t flags;
 	int implicit;
+};
+
+struct header_properties {
+	struct dm_list list;
+	uint32_t hdr_num;
+	int32_t width;
+	const struct dm_report_object_type *type;
+	uint32_t flags;
 };
 
 /*
@@ -230,6 +247,18 @@ struct row {
 	struct dm_list fields;			  /* Fields in display order */
 	struct dm_report_field *(*sort_fields)[]; /* Fields in sort order */
 	int selected;
+};
+
+struct dm_report_header {
+	struct dm_list list;
+	struct header_properties *props;
+	const char *header_string;
+};
+
+struct header_row {
+	struct dm_list list;
+	struct dm_report *rh;
+	struct dm_list headers;
 };
 
 /*
@@ -674,6 +703,11 @@ void dm_report_field_set_value(struct dm_report_field *field, const void *value,
 		log_warn(INTERNAL_ERROR "Using string as sort value for numerical field.");
 }
 
+void dm_report_header_set_content(struct dm_report_header *hdr, const void *content)
+{
+	hdr->header_string = (const char *) content;
+}
+
 static const char *_get_field_type_name(unsigned field_type)
 {
 	switch (field_type) {
@@ -698,6 +732,18 @@ static size_t _get_longest_field_id_len(const struct dm_report_field_type *field
 	for (f = 0; fields[f].report_fn; f++)
 		if (strlen(fields[f].id) > id_len)
 			id_len = strlen(fields[f].id);
+
+	return id_len;
+}
+
+static size_t _get_longest_header_id_len(const struct dm_report_header_type *headers)
+{
+	uint32_t f;
+	size_t id_len = 0;
+
+	for (f = 0; headers[f].report_fn; f++)
+		if (strlen(headers[f].id) > id_len)
+			id_len = strlen(headers[f].id);
 
 	return id_len;
 }
@@ -746,6 +792,45 @@ static void _display_fields_more(struct dm_report *rh,
 	}
 }
 
+static void _display_headers_more(struct dm_report *rh,
+				 const struct dm_report_header_type *headers,
+				 size_t id_len, int display_all_headers_item)
+{
+	uint32_t h;
+	const struct dm_report_object_type *type;
+	const char *desc, *last_desc = "";
+
+	for (h = 0; headers[h].report_fn; h++)
+		if (strlen(headers[h].id) > id_len)
+			id_len = strlen(headers[h].id);
+
+	for (type = rh->types; type->data_fn; type++)
+		if (strlen(type->prefix) + 3 > id_len)
+			id_len = strlen(type->prefix) + 3;
+
+	for (h = 0; headers[h].report_fn; h++) {
+		if ((type = _find_type(rh, headers[h].type)) && type->desc)
+			desc = type->desc;
+		else
+			desc = " ";
+		if (desc != last_desc) {
+			if (*last_desc)
+				log_warn(" ");
+			log_warn("%s Fields", desc);
+			log_warn("%*.*s", (int) strlen(desc) + 7,
+				 (int) strlen(desc) + 7,
+				 "-------------------------------------------------------------------------------");
+			if (display_all_headers_item && type->id != SPECIAL_REPORT_TYPE)
+				log_warn("  %sall%-*s - %s", type->prefix,
+					 (int) (id_len - 3 - strlen(type->prefix)), "",
+					 "All headers in this section.");
+		}
+		/* FIXME Add line-wrapping at terminal width (or 80 cols) */
+		log_warn("  %-*s - %s", (int) id_len, headers[h].id, headers[h].desc);
+		last_desc = desc;
+	}
+}
+
 /*
  * show help message
  */
@@ -765,6 +850,20 @@ static void _display_fields(struct dm_report *rh, int display_all_fields_item,
 	_display_fields_more(rh, _implicit_report_fields, id_len,
 			     display_all_fields_item, display_field_types);
 
+}
+
+/*
+ * show help message
+ */
+static void _display_headers(struct dm_report *rh, int display_all_headers_item,
+			    int display_header_types)
+{
+	size_t tmp, id_len = 0;
+
+	if ((tmp = _get_longest_header_id_len(rh->headers)) > id_len)
+		id_len = tmp;
+
+	_display_headers_more(rh, rh->headers, id_len, display_all_headers_item);
 }
 
 /*
@@ -798,7 +897,7 @@ static struct field_properties * _add_field(struct dm_report *rh,
 {
 	struct field_properties *fp;
 
-	if (!(fp = dm_pool_zalloc(rh->mem, sizeof(struct field_properties)))) {
+	if (!(fp = dm_pool_zalloc(rh->mem, sizeof(*fp)))) {
 		log_error("dm_report: struct field_properties allocation "
 			  "failed");
 		return NULL;
@@ -824,12 +923,55 @@ static struct field_properties * _add_field(struct dm_report *rh,
 	return fp;
 }
 
+static int _copy_header(struct dm_report *rh, struct header_properties *dest,
+		       uint32_t hdr_num)
+{
+	const struct dm_report_header_type *headers = rh->headers;
+
+	dest->hdr_num = hdr_num;
+	dest->width = headers[hdr_num].width;
+	dest->flags = headers[hdr_num].flags & DM_REPORT_FIELD_MASK;
+
+	/* set object type method */
+	dest->type = _find_type(rh, headers[hdr_num].type);
+	if (!dest->type) {
+		log_error("dm_report: no matching header: %s",
+			  headers[hdr_num].id);
+		return 0;
+	}
+
+	return 1;
+}
+
+static struct header_properties * _add_header(struct dm_report *rh,
+					      uint32_t hdr_num, uint32_t flags)
+{
+	struct header_properties *hp;
+
+	if (!(hp = dm_pool_zalloc(rh->mem, sizeof(*hp)))) {
+		log_error("dm_report: struct header_properties allocation "
+			  "failed");
+		return NULL;
+	}
+
+	if (!_copy_header(rh, hp, hdr_num)) {
+		stack;
+		dm_pool_free(rh->mem, hp);
+		return NULL;
+	}
+
+	hp->flags |= flags;
+	dm_list_add(&rh->header_props, &hp->list);
+
+	return hp;
+}
+
 /*
  * Compare name1 against name2 or prefix plus name2
  * name2 is not necessarily null-terminated.
  * len2 is the length of name2.
  */
-static int _is_same_field(const char *name1, const char *name2,
+static int _is_same_name(const char *name1, const char *name2,
 			  size_t len2, const char *prefix)
 {
 	size_t prefix_len;
@@ -915,7 +1057,7 @@ static int _get_field(struct dm_report *rh, const char *field, size_t flen,
 		return 0;
 
 	for (f = 0; _implicit_report_fields[f].report_fn; f++) {
-		if (_is_same_field(_implicit_report_fields[f].id, field, flen, rh->field_prefix)) {
+		if (_is_same_name(_implicit_report_fields[f].id, field, flen, rh->field_prefix)) {
 			*f_ret = f;
 			*implicit = 1;
 			return 1;
@@ -923,7 +1065,7 @@ static int _get_field(struct dm_report *rh, const char *field, size_t flen,
 	}
 
 	for (f = 0; rh->fields[f].report_fn; f++) {
-		if (_is_same_field(rh->fields[f].id, field, flen, rh->field_prefix)) {
+		if (_is_same_name(rh->fields[f].id, field, flen, rh->field_prefix)) {
 			*f_ret = f;
 			*implicit = 0;
 			return 1;
@@ -958,6 +1100,51 @@ static int _field_match(struct dm_report *rh, const char *field, size_t flen,
 		} else
 			return  _add_all_fields(rh, type);
 	}
+
+	return 0;
+}
+
+/*
+ * Add all headers with a matching type.
+ */
+static int _add_all_headers(struct dm_report *rh, uint32_t type)
+{
+	uint32_t h;
+
+	for (h = 0; rh->headers[h].report_fn; h++)
+		if ((rh->headers[h].type & type) && !_add_header(rh, h, 0))
+			return 0;
+
+	return 1;
+}
+
+static int _get_header(struct dm_report *rh, const char *header,
+		      size_t hlen, uint32_t *h_ret)
+{
+	uint32_t h;
+
+	if (!hlen)
+		return 0;
+
+	for (h = 0; rh->headers[h].report_fn; h++) {
+		if (_is_same_name(rh->headers[h].id, header, hlen, "")) {
+			*h_ret = h;
+			return 1;
+		}
+	}
+
+	return 0;
+}
+
+static int _header_match(struct dm_report *rh, const char *header, size_t hlen)
+{
+	uint32_t h /*, type*/;
+
+	if (!hlen)
+		return 0;
+
+	if ((_get_header(rh, header, hlen, &h)))
+		return _add_header(rh, h, 0) ? 1 : 0;
 
 	return 0;
 }
@@ -1025,11 +1212,11 @@ static int _key_match(struct dm_report *rh, const char *key, size_t len,
 	}
 
 	for (f = 0; _implicit_report_fields[f].report_fn; f++)
-		if (_is_same_field(_implicit_report_fields[f].id, key, len, rh->field_prefix))
+		if (_is_same_name(_implicit_report_fields[f].id, key, len, rh->field_prefix))
 			return _add_sort_key(rh, f, 1, flags, report_type_only);
 
 	for (f = 0; rh->fields[f].report_fn; f++)
-		if (_is_same_field(rh->fields[f].id, key, len, rh->field_prefix))
+		if (_is_same_name(rh->fields[f].id, key, len, rh->field_prefix))
 			return _add_sort_key(rh, f, 0, flags, report_type_only);
 
 	return 0;
@@ -1082,6 +1269,32 @@ static int _parse_keys(struct dm_report *rh, const char *keys,
 			_display_fields(rh, 1, 0);
 			log_warn(" ");
 			log_error("dm_report: Unrecognised field: %.*s", (int) (we - ws), ws);
+			return 0;
+		}
+	}
+
+	return 1;
+}
+
+static int _parse_headers(struct dm_report *rh, const char *format)
+{
+	const char *ws;		/* Word start */
+	const char *we = format;	/* Word end */
+
+	while (*we) {
+		/* Allow consecutive commas */
+		while (*we && *we == ',')
+			we++;
+
+		/* start of the header name */
+		ws = we;
+		while (*we && *we != ',')
+			we++;
+
+		if (!_header_match(rh, ws, (size_t) (we - ws))) {
+			_display_headers(rh, 1, 0);
+			log_warn(" ");
+			log_error("Unrecognised header: %.*s", (int) (we - ws), ws);
 			return 0;
 		}
 	}
@@ -1185,6 +1398,8 @@ struct dm_report *dm_report_init(uint32_t *report_types,
 		rh->flags |= RH_SORT_REQUIRED;
 
 	dm_list_init(&rh->field_props);
+	dm_list_init(&rh->header_props);
+	dm_list_init(&rh->header_rows);
 	dm_list_init(&rh->rows);
 
 	if ((type = _find_type(rh, rh->report_types)) && type->prefix)
@@ -1251,6 +1466,21 @@ static char *_toupperstr(char *str)
 	return str;
 }
 
+int dm_report_set_headers(struct dm_report *rh,
+			  const struct dm_report_header_type *headers)
+{
+	if (headers)
+		rh->headers = headers;
+	else
+		return 0;
+	return 1;
+}
+
+int dm_report_add_header_row(struct dm_report *rh, const char *output_headers)
+{
+	return _parse_headers(rh, output_headers);
+}
+
 int dm_report_set_output_field_name_prefix(struct dm_report *rh, const char *output_field_name_prefix)
 {
 	char *prefix;
@@ -1289,6 +1519,21 @@ static void *_report_get_implicit_field_data(struct dm_report *rh __attribute__(
 		return row;
 
 	return NULL;
+}
+
+/*
+ * Create part of a line of header data
+ */
+static void *_report_get_header_data(struct dm_report *rh, struct
+				     header_properties *hp, void *object)
+{
+	const struct dm_report_header_type *headers = rh->headers;
+	char *ret = hp->type->data_fn(object);
+
+	if (!ret)
+		return NULL;
+
+	return (void *)(ret + headers[hp->hdr_num].offset);
 }
 
 static int _dbl_equal(double d1, double d2)
@@ -1979,6 +2224,82 @@ int dm_report_object(struct dm_report *rh, void *object)
 int dm_report_object_is_selected(struct dm_report *rh, void *object, int do_output, int *selected)
 {
 	return _do_report_object(rh, object, do_output, selected);
+}
+
+int dm_report_header(struct dm_report *rh, void *object)
+{
+	const struct dm_report_header_type *headers;
+	struct header_properties *hp;
+	struct header_row *row = NULL;
+	struct dm_report_header *header;
+	void *data = NULL;
+	int len;
+	int r = 0;
+
+	if (!rh) {
+		log_error(INTERNAL_ERROR "dm_report_header: dm_report handler is NULL.");
+		return 0;
+	}
+
+	if (rh->flags & RH_ALREADY_REPORTED)
+		return 1;
+
+	if (!(row = dm_pool_zalloc(rh->mem, sizeof(*row)))) {
+		log_error("dm_report_header: struct header_row allocation failed");
+		return 0;
+	}
+
+	row->rh = rh;
+	headers = rh->headers;
+	dm_list_init(&row->headers);
+
+	/* For each field to be displayed, call its report_fn */
+	dm_list_iterate_items(hp, &rh->header_props) {
+		if (!(header = dm_pool_zalloc(rh->mem, sizeof(*header)))) {
+			log_error("do_report_header: "
+				  "struct dm_report_header allocation failed");
+			goto out;
+		}
+
+		header->props = hp;
+
+		data = _report_get_header_data(rh, hp, object);
+		if (!data) {
+			log_error("do_report_header:"
+				  "no data assigned to header %s",
+				  headers[hp->hdr_num].id);
+			goto out;
+		}
+
+		if (!headers[hp->hdr_num].report_fn(rh, rh->mem,
+						       header, data,
+						       rh->private)) {
+			log_error("do_report_header:"
+				  "report function failed for header %s",
+				  headers[hp->hdr_num].id);
+			goto out;
+		}
+
+		dm_list_add(&row->headers, &header->list);
+	}
+
+	r = 1;
+
+	dm_list_add(&rh->header_rows, &row->list);
+
+	dm_list_iterate_items(header, &row->headers) {
+		len = (int) strlen(header->header_string);
+		if ((len > header->props->width))
+			header->props->width = len;
+	}
+
+	if (!(rh->flags & DM_REPORT_OUTPUT_BUFFERED))
+		return dm_report_output_headers(rh);
+
+out:
+	if (!r)
+		dm_pool_free(rh->mem, row);
+	return r;
 }
 
 /*
@@ -4104,6 +4425,77 @@ bad:
 	return 0;
 }
 
+/*
+ * Produce header output
+ */
+static int _output_header(struct dm_report *rh, struct dm_report_header *header)
+{
+	int32_t width, labelwidth;
+	uint32_t align;
+	const char *hdrstr, *labelstr;
+	char *buf = NULL;
+	size_t buf_size = 0;
+
+	if (rh->flags & DM_REPORT_OUTPUT_HEADER_LABELS)
+		labelstr = rh->headers[header->props->hdr_num].label;
+	else
+		labelstr = "";
+
+	labelwidth = strlen(labelstr) + 1;
+	hdrstr = header->header_string;
+	width = header->props->width - labelwidth;
+
+	if (!(rh->flags & DM_REPORT_OUTPUT_ALIGNED)) {
+		if (!dm_pool_grow_object(rh->mem, hdrstr, 0)) {
+			log_error("dm_report: Unable to extend output line");
+			return 0;
+		}
+	} else {
+		if (!(align = header->props->flags & DM_REPORT_FIELD_ALIGN_MASK))
+			align = ((header->props->flags & DM_REPORT_FIELD_TYPE_NUMBER) ||
+				 (header->props->flags & DM_REPORT_FIELD_TYPE_SIZE)) ?
+				DM_REPORT_FIELD_ALIGN_RIGHT : DM_REPORT_FIELD_ALIGN_LEFT;
+
+		/* Including trailing '\0'! */
+		buf_size = labelwidth + width + 1;
+		if (!(buf = dm_malloc(buf_size))) {
+			log_error("dm_report: Could not allocate memory for output line buffer.");
+			return 0;
+		}
+
+		if (align & DM_REPORT_FIELD_ALIGN_LEFT) {
+			if (dm_snprintf(buf, buf_size, "%-*.*s%-*.*s",
+					/* FIXME: handle label width better */
+					 labelwidth, labelwidth, labelstr, width, width, hdrstr) < 0) {
+				log_error("dm_report: left-aligned snprintf() failed");
+				goto bad;
+			}
+			if (!dm_pool_grow_object(rh->mem, buf, labelwidth + width)) {
+				log_error("dm_report: Unable to extend output line");
+				goto bad;
+			}
+		} else if (align & DM_REPORT_FIELD_ALIGN_RIGHT) {
+			if (dm_snprintf(buf, buf_size, "%*.*s%*.*s",
+					/* FIXME: handle label width better */
+					 labelwidth, labelwidth, labelstr, width, width, hdrstr) < 0) {
+				log_error("dm_report: right-aligned snprintf() failed");
+				goto bad;
+			}
+			if (!dm_pool_grow_object(rh->mem, buf, labelwidth + width)) {
+				log_error("dm_report: Unable to extend output line");
+				goto bad;
+			}
+		}
+	}
+
+	dm_free(buf);
+	return 1;
+
+bad:
+	dm_free(buf);
+	return 0;
+}
+
 static void _destroy_rows(struct dm_report *rh)
 {
 	/* free the first row allocated to this report */
@@ -4260,6 +4652,59 @@ int dm_report_output(struct dm_report *rh)
 		return _output_as_rows(rh);
 	else
 		return _output_as_columns(rh);
+}
+
+int dm_report_output_headers(struct dm_report *rh)
+{
+	struct dm_list *hh, *rowh, *htmp;
+	struct header_row *row = NULL;
+	struct dm_report_header *header;
+
+	/* Print and clear buffer */
+	dm_list_iterate_safe(rowh, htmp, &rh->header_rows) {
+		if (!dm_pool_begin_object(rh->mem, 512)) {
+			log_error("dm_report: Unable to allocate output line");
+			return 0;
+		}
+		row = dm_list_item(rowh, struct header_row);
+
+		/* don't attempt to print an empty header row. */
+		if (dm_list_empty(&row->headers)) {
+			dm_pool_abandon_object(rh->mem);
+			dm_list_del(&row->list);
+			continue;
+		}
+
+		dm_list_iterate_safe(hh, htmp, &row->headers) {
+			header = dm_list_item(hh, struct dm_report_header);
+
+			if (!_output_header(rh, header))
+				goto bad;
+
+			dm_list_del(&header->list);
+			if (!dm_list_end(&row->headers, hh))
+				if (!dm_pool_grow_object(rh->mem, rh->separator, 0)) {
+					log_error("dm_report: Unable to extend header output line");
+					goto bad;
+				}
+		}
+		if (!dm_pool_grow_object(rh->mem, "\0", 1)) {
+			log_error("dm_report: Unable to terminate header output line");
+			goto bad;
+		}
+		log_print("%s", (char *) dm_pool_end_object(rh->mem));
+		dm_list_del(&row->list);
+		if (dm_list_end(&rh->header_rows, rowh))
+			break;
+	}
+
+	dm_pool_free(rh->mem, row);
+
+	return 1;
+
+      bad:
+	dm_pool_abandon_object(rh->mem);
+	return 0;
 }
 
 #define NSEC_PER_USEC   1000L

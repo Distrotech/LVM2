@@ -1,7 +1,13 @@
+dm_report_add_header_row
 dm_report_clear
+dm_report_column_headings
 dm_report_get_interval
 dm_report_get_interval_ms
 dm_report_get_last_interval
+dm_report_header
+dm_report_header_set_content
+dm_report_output_headers
+dm_report_set_headers
 dm_report_set_interval
 dm_report_set_interval_ms
 dm_report_wait
