@@ -3902,7 +3902,7 @@ static int _lv_extend_layered_lv(struct alloc_handle *ah,
 	 * The MD bitmap is limited to being able to track 2^21 regions.
 	 * The region_size must be adjusted to meet that criteria.
 	 */
-	if (seg_is_striped_raid(seg) && !seg_is_any_raid0(seg)) {
+	if (seg_is_raid(seg) && !seg_is_any_raid0(seg)) {
 		int adjusted = 0;
 
 		/* HM FIXME: make it larger than just to suit the LV size */
