@@ -2362,7 +2362,7 @@ static int _raid_emit_segment_line(struct dm_task *dmt, uint32_t major,
 			EMIT_PARAMS(pos, " write_mostly %u", i);
 
 	if (seg->writebehind)
-		EMIT_PARAMS(pos, " writebehind %u", seg->writebehind);
+		EMIT_PARAMS(pos, " max_write_behind %u", seg->writebehind);
 
 	if (seg->max_recovery_rate)
 		EMIT_PARAMS(pos, " max_recovery_rate %u",
