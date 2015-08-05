@@ -310,8 +310,10 @@ static int _raid_target_percent(void **target_state,
 		else
 			break;
 	}
-	if (!pos || (sscanf(pos, "%" PRIu64 "/%" PRIu64 "%n",
-			    &numerator, &denominator, &i) != 2)) {
+	if (!pos ||
+	    (sscanf(pos, "%" PRIu64 "/%" PRIu64 "%n",
+		    &numerator, &denominator, &i) != 2) ||
+	    !denominator) {
 		log_error("Failed to parse %s status fraction: %s",
 			  (seg) ? seg->segtype->name : "segment", params);
 		return 0;

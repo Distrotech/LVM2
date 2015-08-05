@@ -549,14 +549,14 @@ static int _add_image_component_list(struct lv_segment *seg, int delete_from_lis
 	return 1;
 }
 
-/* Calculate absolute amount of metadata device extens based on @rimage_extents, @region_size and @extens_size */
+/* Calculate absolute amount of metadata device extents based on @rimage_extents, @region_size and @extent_size */
 static uint32_t _raid_rmeta_extents(struct cmd_context *cmd,
 		uint32_t rimage_extents, uint32_t region_size, uint32_t extent_size)
 {
 	uint64_t bytes, regions, sectors;
 
 	region_size = region_size ?: get_default_region_size(cmd);
-	regions = rimage_extents * extent_size / region_size;
+	regions = (uint64_t) rimage_extents * extent_size / region_size;
 
 	/* raid and bitmap superblocks + region bytes */
 	bytes = 2 * 4096 + dm_div_up(regions, 8);
