@@ -1115,7 +1115,7 @@ static uint32_t _raid_rmeta_extents(struct cmd_context *cmd, uint32_t rimage_ext
 	uint64_t bytes, regions, sectors;
 
 	region_size = region_size ?: get_default_region_size(cmd);
-	regions = rimage_extents * extent_size / region_size;
+	regions = (uint64_t) rimage_extents * extent_size / region_size;
 
 	/* raid and bitmap superblocks + region bytes */
 	bytes = 2 * 4096 + dm_div_up(regions, 8);

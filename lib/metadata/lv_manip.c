@@ -3887,6 +3887,58 @@ static int _clear_metadata(struct logical_volume *lv)
 	return 1;
 }
 
+/*
+ * The MD bitmap is limited to being able to track 2^21 regions.
+ * The region_size must be adjusted to meet that criteria.
+ *
+ * the "raid0" personality does not utilize a bitmap.
+ */
+static uint64_t max_raid_bitmap_entries = 1 << 21;
+static uint64_t _max_lv_size_for_region_size(uint32_t region_size)
+{
+	return max_raid_bitmap_entries * region_size;
+}
+
+static void _adjust_region_size(struct logical_volume *lv,
+				const struct segment_type *segtype,
+				uint64_t lv_size,
+				uint32_t *region_size)
+{
+	/*
+	 * The MD bitmap is limited to being able to track 2^21 regions.
+	 * The region_size must be adjusted to meet that criteria.
+	 */
+	if (segtype_is_raid(segtype) && !segtype_is_any_raid0(segtype)) {
+		int adjusted = 0;
+		uint32_t prev_region_size;
+		uint64_t min_region_size = lv_size / max_raid_bitmap_entries;
+
+		if (!*region_size)
+			*region_size = get_default_region_size(lv->vg->cmd);
+
+		prev_region_size = *region_size;
+
+		/* HM FIXME: make it larger than just to suit the LV size? */
+		while (*region_size < min_region_size) {
+			*region_size *= 2;
+			adjusted = 1;
+		}
+
+		if (adjusted) {
+			log_print_unless_silent("Adjusting RAID region_size from %uS to %uS"
+					        " to support requested LV size of %s.",
+				 	        prev_region_size, *region_size,
+					        display_size(lv->vg->cmd, lv_size));
+			if (!lv->size) {
+				log_print_unless_silent("If you want to grow your LV past the"
+							" possible maximum of %s later,",
+						        display_size(lv->vg->cmd, _max_lv_size_for_region_size(*region_size)));
+				log_print_unless_silent("please request an even larger region size (lvcreate -R ...)");
+			}
+		}
+	}
+}
+
 static int _lv_extend_layered_lv(struct alloc_handle *ah,
 				 struct logical_volume *lv,
 				 uint32_t extents, uint32_t first_area,
@@ -3975,27 +4027,6 @@ PFLA("lv->le_count=%u", lv->le_count);
 	// lv->le_count += extents;
 	// lv->size += (uint64_t) extents * lv->vg->extent_size;
 
-	/*
-	 * The MD bitmap is limited to being able to track 2^21 regions.
-	 * The region_size must be adjusted to meet that criteria.
-	 *
-	 * the "raid0" personality does not utilize a bitmap.
-	 */
-	if (seg_is_striped_raid(seg) && !seg_is_any_raid0(seg)) {
-		int adjusted = 0;
-
-		/* HM FIXME: make it larger than just to suit the LV size */
-		while (seg->region_size < (lv->size / (1 << 21))) {
-			seg->region_size *= 2;
-			adjusted = 1;
-		}
-
-		if (adjusted)
-			log_very_verbose("Adjusting RAID region_size from %uS to %uS"
-				 	" to support large LV size",
-				 	seg->region_size/2, seg->region_size);
-	}
-
 	return 1;
 }
 
@@ -4021,6 +4052,8 @@ int lv_extend(struct logical_volume *lv,
 	struct alloc_handle *ah;
 	uint32_t sub_lv_count;
 	uint32_t old_extents;
+	uint32_t prev_region_size;
+	uint64_t lv_size;
 
 	log_very_verbose("Adding segment of type %s to LV %s.", segtype->name, lv->name);
 
@@ -4035,7 +4068,6 @@ PFLA("extents=%u", extents);
 		 */
 		/* FIXME Support striped metadata pool */
 		log_count = 1;
-	// } else if (segtype_is_striped(segtype) || (segtype_is_raid(segtype) && !segtype_is_raid1(segtype))) {
 	} else if (segtype_is_striped(segtype) || segtype_is_striped_raid(segtype)) {
 		extents = _round_to_stripe_boundary(lv, extents, stripes, 1);
 
@@ -4054,6 +4086,20 @@ PFLA("extents=%u mirrors=%u stripes=%u log_count=%u", extents, mirrors, stripes,
 	else if (segtype_is_raid(segtype) && !segtype_is_raid0(segtype))
 		log_count = (stripes + segtype->parity_devs) * mirrors;
 #endif
+
+	prev_region_size = region_size;
+	lv_size = lv->size + (uint64_t) extents * lv->vg->extent_size;
+	_adjust_region_size(lv, segtype, lv_size, &region_size);
+
+	if (lv->le_count && (region_size != prev_region_size)) {
+		log_error("Can't extend LV %s past maximum of %s; maximum"
+			  " of raid bitmap entries exceeded for region size %s",
+			  display_lvname(lv),
+			  display_size(lv->vg->cmd, _max_lv_size_for_region_size(prev_region_size)),
+			  display_size(lv->vg->cmd, region_size));
+		return 0;
+	}
+
 	if (!(ah = allocate_extents(lv->vg, lv, segtype, stripes, mirrors,
 				    log_count, region_size, extents,
 				    allocatable_pvs, alloc, approx_alloc, NULL)))
@@ -4079,6 +4125,8 @@ PFLA("extents=%u mirrors=%u stripes=%u log_count=%u", extents, mirrors, stripes,
 			sub_lv_count = mirrors;
 
 		old_extents = lv->le_count;
+
+
 
 		if (!lv->le_count &&
 		    !(r = _lv_insert_empty_sublvs(lv, segtype, stripe_size,

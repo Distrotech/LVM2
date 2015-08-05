@@ -2416,8 +2416,9 @@ PFLA("param_count=%u", param_count);
 			EMIT_PARAMS(pos, " write_mostly %u", i);
 
 	if (seg->writebehind)
-		EMIT_PARAMS(pos, " writebehind %u", seg->writebehind);
+		EMIT_PARAMS(pos, " max_write_behind %u", seg->writebehind);
 
+	/* Has to be before "min_recovery_rate" or the kernels check will fail when both set */
 	if (seg->max_recovery_rate)
 		EMIT_PARAMS(pos, " max_recovery_rate %u",
 			    seg->max_recovery_rate);
