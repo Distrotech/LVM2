@@ -3782,7 +3782,10 @@ static int _lv_insert_empty_sublvs(struct logical_volume *lv,
 }
 
 /*
- * Helper to adjust @region_size for @seg of @lv in case of large LV sizes
+ * The MD bitmap is limited to being able to track 2^21 regions.
+ * The region_size must be adjusted to meet that criteria.
+ *
+ * the "raid0" personality does not utilize a bitmap.
  */
 static uint64_t max_raid_bitmap_entries = 1 << 21;
 static uint64_t _max_lv_size_for_region_size(uint32_t region_size)
