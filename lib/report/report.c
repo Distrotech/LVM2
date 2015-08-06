@@ -3070,6 +3070,7 @@ static struct volume_group _dummy_vg = {
 	.lvm1_system_id = (char *) "",
 	.pvs = DM_LIST_HEAD_INIT(_dummy_vg.pvs),
 	.lvs = DM_LIST_HEAD_INIT(_dummy_vg.lvs),
+	.dead_lvs = DM_LIST_HEAD_INIT(_dummy_vg.dead_lvs),
 	.tags = DM_LIST_HEAD_INIT(_dummy_vg.tags),
 };
 

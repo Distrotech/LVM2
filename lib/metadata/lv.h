@@ -49,11 +49,35 @@ struct logical_volume {
 	struct dm_list segments;
 	struct dm_list tags;
 	struct dm_list segs_using_this_lv;
+	struct dm_list indirect_users;
+
+	struct generic_logical_volume *this_glv;
 
 	uint64_t timestamp;
 	unsigned new_lock_args:1;
 	const char *hostname;
 	const char *lock_args;
+};
+
+struct generic_logical_volume;
+
+struct dead_logical_volume {
+	const char *dname;
+	union lvid lvid;
+	const char *name;
+	struct volume_group *vg;
+	uint64_t timestamp;
+	uint64_t timestamp_removed;
+	struct generic_logical_volume *indirect_origin;
+	struct dm_list indirect_users; /* list of struct generic_logical_volume */
+};
+
+struct generic_logical_volume {
+	int is_dead;
+	union {
+		struct logical_volume *live;		/* is_dead=0 */
+		struct dead_logical_volume *dead;	/* is_dead=1 */
+	};
 };
 
 struct lv_with_info_and_seg_status;

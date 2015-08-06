@@ -125,6 +125,7 @@ struct volume_group {
 	 * - one for the user-visible mirror LV
 	 */
 	struct dm_list lvs;
+	struct dm_list dead_lvs;
 
 	struct dm_list tags;
 
