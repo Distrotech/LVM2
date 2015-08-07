@@ -1239,6 +1239,7 @@ else {
 PFLA("NO meta_areas!!! metadata LV = %s", lv->name);
 }
 	} else {
+PFLA("data LV = %s", lv->name);
 		seg->areas[area_num].type = AREA_LV;
 		seg_lv(seg, area_num) = lv;
 		seg_le(seg, area_num) = le;
@@ -3894,7 +3895,7 @@ static int _clear_metadata(struct logical_volume *lv)
  * the "raid0" personality does not utilize a bitmap.
  */
 static uint64_t max_raid_bitmap_entries = 1 << 21;
-static uint64_t _max_lv_size_for_region_size(uint32_t region_size)
+inline uint64_t _max_lv_size_for_region_size(uint32_t region_size)
 {
 	return max_raid_bitmap_entries * region_size;
 }
@@ -3925,9 +3926,10 @@ static void _adjust_region_size(struct logical_volume *lv,
 		}
 
 		if (adjusted) {
-			log_print_unless_silent("Adjusting RAID region_size from %uS to %uS"
+			log_print_unless_silent("Adjusting RAID region_size from %s to %s"
 					        " to support requested LV size of %s.",
-				 	        prev_region_size, *region_size,
+					        display_size(lv->vg->cmd, prev_region_size),
+					        display_size(lv->vg->cmd, *region_size),
 					        display_size(lv->vg->cmd, lv_size));
 			if (!lv->size) {
 				log_print_unless_silent("If you want to grow your LV past the"

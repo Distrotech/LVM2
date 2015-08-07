@@ -382,7 +382,7 @@ PFLA("yes=%d cur_redundancy=%u new_redundancy=%u", yes, cur_redundancy, new_redu
 		}
 
 		if (stripes_change &&
-		    yes_no_prompt("Do you really want to convert %s from %u dtripes to %u stripes? [y/n]: ",
+		    yes_no_prompt("Do you really want to convert %s from %u stripes to %u stripes? [y/n]: ",
 				display_lvname(lv), _data_rimages_count(seg, seg->area_count), new_stripes) == 'n') {
 			log_error("Logical volume %s NOT converted", display_lvname(lv));
 			return 0;
@@ -1099,8 +1099,6 @@ static struct logical_volume *_alloc_image_component(struct logical_volume *lv, 
 			log_error("Failed to add segment to LV, %s", img_name);
 			return 0;
 		}
-
-		first_seg(tmp_lv)->status |= SEG_RAID;
 	}
 
 	lv_set_visible(tmp_lv);
@@ -1336,10 +1334,13 @@ PFL();
 			return_0;
 
 		/* Amount of extents for the rimage device(s) */
-		if (segtype_is_striped_raid(seg->segtype)) {
+		if (seg_is_striped_raid(seg)) {
 			stripes = count;
 			mirrors = 1;
 			extents = count * (lv->le_count / _data_rimages_count(seg, seg->area_count));
+
+			if (seg_is_raid10(seg))
+				extents *= 2;
 
 PFLA("stripes=%u lv->le_count=%u data_rimages_count=%u", stripes, lv->le_count, _data_rimages_count(seg, seg->area_count));
 		} else {
@@ -3185,18 +3186,18 @@ PFL();
 				  (seg->len / _data_rimages_count(seg, old_dev_count));
 PFLA("new_dev_count=%u _data_rimages_count(seg, new_dev_count)=%u new_len=%u", new_dev_count, _data_rimages_count(seg, new_dev_count), new_len);
 			log_warn("WARNING: Removing stripes from active%s logical volume %s will shrink "
-				 "it from %u to %u extents!",
+				 "it from %s to %s!",
 				 info.open_count ? " and open" : "", display_lvname(lv),
-				 seg->len, new_len);
+				 display_size(lv->vg->cmd, seg->len * lv->vg->extent_size), 
+				 display_size(lv->vg->cmd, new_len * lv->vg->extent_size));
 			log_warn("THIS MAY DESTROY (PARTS OF) YOUR DATA!");
-			log_warn("You may want to interrupt the conversion and run \"lvresize -y -l%u %s\" "
-				 "to keep the current size if you haven't done it already!",
-				 lv->le_count * _data_rimages_count(seg, old_dev_count) /
-				 		_data_rimages_count(seg, new_dev_count), display_lvname(lv));
+			log_warn("You may want to interrupt the conversion and run \"lvresize -y -l%u %s\" ",
+				 (uint32_t) ((uint64_t) seg->len * seg->len / new_len), display_lvname(lv));
+			log_warn("to keep the current size if you haven't done it already");
 			log_warn("If that leaves the logical volume larger than %u extents due to stripe rounding,",
 				 new_len);
 			log_warn("you may want to grow the content afterwards (filesystem etc.)");
-			log_warn("WARNING: You have to run \"lvconvert --stripes %u %s\" again after the reshapa has finished",
+			log_warn("WARNING: You have to run \"lvconvert --stripes %u %s\" again after the reshape has finished",
 				 new_stripes, display_lvname(lv));
 			log_warn("in order to remove the freed up stripes from the raid set");
 
@@ -5520,6 +5521,7 @@ static int _generate_name_and_set_segment(struct logical_volume *lv,
 	struct lv_list *lvl = dm_list_item(dm_list_first(lvs), struct lv_list);
 
 	dm_list_del(&lvl->list);
+
 	if (!(tmp_names[sd] = _generate_raid_name(lv, s == sd ? "rmeta" : "rimage", s)))
 		return_0;
 	if (!set_lv_segment_area_lv(raid_seg, s, lvl->lv, 0, lvl->lv->status)) {
@@ -5545,11 +5547,11 @@ int lv_raid_replace(struct logical_volume *lv,
 {
 	int partial_segment_removed = 0;
 	uint32_t s, sd, match_count = 0;
+	char **tmp_names;
 	struct dm_list old_lvs;
 	struct dm_list new_meta_lvs, new_data_lvs;
 	struct lv_segment *raid_seg = first_seg(lv);
 	struct lv_list *lvl;
-	char *tmp_names[raid_seg->area_count * 2];
 
 	dm_list_init(&old_lvs);
 	dm_list_init(&new_meta_lvs);
@@ -5577,6 +5579,9 @@ int lv_raid_replace(struct logical_volume *lv,
 			  " not in-sync.", display_lvname(lv));
 		return 0;
 	}
+
+	if (!(tmp_names = dm_pool_zalloc(lv->vg->vgmem, 2 * raid_seg->area_count * sizeof(*tmp_names))))
+		return_0;
 
 	if (!archive(lv->vg))
 		return_0;
@@ -5646,7 +5651,7 @@ int lv_raid_replace(struct logical_volume *lv,
 	}
 #else
 	} else if (seg_is_raid10_far(raid_seg)) {
-		/* HM FIXME: do the raid10_faar thing */
+		/* HM FIXME: do the raid10_far thing */
 	} else if (seg_is_raid10_offset(raid_seg)) {
 		/* HM FIXME: do the raid10_offset thing */
 	}
@@ -5668,17 +5673,22 @@ int lv_raid_replace(struct logical_volume *lv,
 	 * - We need to change the LV names when we insert them.
 	 */
 	while (!_alloc_image_components(lv, allocate_pvs, match_count,
-					&new_meta_lvs, &new_data_lvs)) {
+				        &new_meta_lvs, &new_data_lvs)) {
+		if (!(lv->status & PARTIAL_LV)) {
+			log_error("LV %s in not partial.", display_lvname(lv));
+			return 0;
+		}
+
 		/*
 		 * We failed allocating all required devices so
-		 * we'll try 
-		 * devices, we must set partial_activation
+		 * we'll try less devices; we must set partial_activation
 		 */
 		lv->vg->cmd->partial_activation = 1;
 
 		/* This is a repair, so try to do better than all-or-nothing */
-		if (--match_count > 0) {
-			log_error("Failed to replace %u devices.", match_count + 1);
+		if (match_count > 0 && !partial_segment_removed) {
+			log_error("Failed to replace %u devices.", match_count);
+			match_count--;
 			log_error("Attempting to replace %u instead.", match_count);
 
 		} else if (!partial_segment_removed) {
@@ -5696,21 +5706,14 @@ int lv_raid_replace(struct logical_volume *lv,
 
 			match_count = 1;
 			partial_segment_removed = 1;
-			lv->vg->cmd->partial_activation = 1;
 
 		} else {
 
 			log_error("Failed to allocate replacement images for %s",
 				  display_lvname(lv));
-
 			return 0;
 		}
 	}
-
-	/* The new metadata LV(s) must be cleared before being added to the array */
-	log_debug_metadata("Clearing newly allocated replacement metadata LV");
-	if (!_clear_lvs(&new_meta_lvs))
-		return 0;
 
 	/*
 	 * Remove the old images
@@ -5747,8 +5750,9 @@ int lv_raid_replace(struct logical_volume *lv,
 	 *
 	 * The LV_REBUILD flag is set on the new sub-LVs,
 	 * so they will be rebuilt and we don't need to clear the metadata dev.
+	 *
+	 * Insert new allocated image component pairs into now empty area slots.
 	 */
-
 	for (s = 0; s < raid_seg->area_count; s++) {
 		sd = s + raid_seg->area_count;
 
@@ -5757,33 +5761,27 @@ int lv_raid_replace(struct logical_volume *lv,
 			if (!_generate_name_and_set_segment(lv, s, s,  &new_meta_lvs, tmp_names) ||
 			    !_generate_name_and_set_segment(lv, s, sd, &new_data_lvs, tmp_names))
 				return 0;
-		} else
-			tmp_names[s] = tmp_names[sd] = NULL;
+		} 
 	}
 
-	if (!lv_update_and_reload_origin(lv))
+	/* This'll reset the rebuild flags passed to the kernel as well */
+	if (!_lv_update_and_reload_origin_eliminate_lvs(lv, &old_lvs))
 		return_0;
 
-	if (!_deactivate_and_remove_lvs(lv->vg, &old_lvs))
-		return 0;
-
-	/* Update new sub-LVs to correct name and clear REBUILD flag */
+	/* Update new sub-LVs to correct name and clear REBUILD flag in-kernel and in metadata */
 	for (s = 0; s < raid_seg->area_count; s++) {
 		sd = s + raid_seg->area_count;
-		if (tmp_names[s] && tmp_names[sd]) {
+		if (tmp_names[s]) {
 			seg_metalv(raid_seg, s)->name = tmp_names[s];
 			seg_lv(raid_seg, s)->name = tmp_names[sd];
-			seg_metalv(raid_seg, s)->status &= ~LV_REBUILD;
-			seg_lv(raid_seg, s)->status &= ~LV_REBUILD;
 		}
 	}
 
-	/* FIXME: will this discontinue a running rebuild of the replaced legs? */
-	/* HM: no, because md will restart based on the recovery_cp offset in the superblock */
+	/* HM FIXME: doesn't start repair */
 	if (!lv_update_and_reload_origin(lv))
 		return_0;
 
-	return 1;
+	return lv_raid_message(lv, "repair");
 }
 
 /* Replace any partial data and metadata LVs with error segments */

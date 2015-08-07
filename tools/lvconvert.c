@@ -1753,15 +1753,15 @@ PFLA("lp->segtype=%s\n", lp->segtype->name);
 		unsigned stripe_size = arg_count(cmd, stripesize_ARG) ? lp->stripe_size  : 0;
 
 		/* Check for raid0 support if requested */
-		if (segtype_is_any_raid0(lp->segtype) &&
+		if ((segtype_is_any_raid0(seg->segtype) || segtype_is_any_raid0(lp->segtype)) &&
 		    !(lp->target_attr & RAID_FEATURE_RAID0)) {
 			log_error("RAID module does not support RAID0.");
 			return 0;
 		}
 
 		/* Check for reshaping support if requested */
-		if (((seg->segtype != lp->segtype && !strncmp(seg->segtype->name, lp->segtype->name, 5)) ||
-		     (stripes && stripes != seg->area_count - seg->segtype->parity_devs) ||
+		if (seg->segtype == lp->segtype &&
+		     ((stripes && stripes != seg->area_count - seg->segtype->parity_devs) ||
 		     (stripe_size && stripe_size != seg->stripe_size)) &&
 		     !(lp->target_attr & RAID_FEATURE_RESHAPING)) {
 			log_error("RAID module does not support reshaping.");

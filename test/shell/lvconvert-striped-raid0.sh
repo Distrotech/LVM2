@@ -24,30 +24,30 @@ vgcreate -s 128k $vg $(cat DEVICES)
 ############################################
 # Create striped 6-way and cycle conversions
 lvcreate -y -i 6 -l 50%FREE -n $lv1 $vg
-lvconvert --type raid0 $vg/$lv1
-lvconvert --type raid0_meta $vg/$lv1
-lvconvert --type striped $vg/$lv1
+lvconvert -y --type raid0 $vg/$lv1
+lvconvert -y --type raid0_meta $vg/$lv1
+lvconvert -y --type striped $vg/$lv1
 lvremove -ff $vg
 
 # Create raid0 5-way and cycle conversions
 lvcreate -y --type raid0 -i 5 -l 50%FREE -n $lv1 $vg
-lvconvert --type raid0_meta $vg/$lv1
-lvconvert --type striped $vg/$lv1
-lvconvert --type raid0 $vg/$lv1
+lvconvert -y --type raid0_meta $vg/$lv1
+lvconvert -y --type striped $vg/$lv1
+lvconvert -y --type raid0 $vg/$lv1
 lvremove -ff $vg
 
 # Create raid0_meta 4-way and cycle conversions
 lvcreate -y --type raid0_meta -i 4 -l 50%FREE -n $lv1 $vg
-lvconvert --type raid0 $vg/$lv1
-lvconvert --type striped $vg/$lv1
-lvconvert --type raid0_meta $vg/$lv1
+lvconvert -y --type raid0 $vg/$lv1
+lvconvert -y --type striped $vg/$lv1
+lvconvert -y --type raid0_meta $vg/$lv1
 lvremove -ff $vg
 
 # Create striped 3-way cosuming all vg space
 lvcreate -y -i 3 -l 100%FREE -n $lv1 $vg
-lvconvert --type raid0 $vg/$lv1
-not lvconvert --type raid0_meta $vg/$lv1
-lvconvert --type striped $vg/$lv1
+lvconvert -y --type raid0 $vg/$lv1
+not lvconvert -y --type raid0_meta $vg/$lv1
+lvconvert -y --type striped $vg/$lv1
 lvremove -ff $vg
 
 # Not enough drives
@@ -59,11 +59,11 @@ not lvcreate -y --type raid0_meta -i4 -l1 $vg "$dev1" "$dev2" "$dev3"
 for s in $(seq 2..6)
 do
 	lvcreate -y --type raid0 -l 95%FREE -i $s -n $lv1 $vg
-	lvconvert --type raid0_meta $vg/$lv1
-	lvconvert --type raid0 $vg/$lv1
-	lvconvert --type striped $vg/$lv1
-	lvconvert --type raid0 $vg/$lv1
-	lvconvert --type raid0_meta $vg/$lv1
+	lvconvert -y --type raid0_meta $vg/$lv1
+	lvconvert -y --type raid0 $vg/$lv1
+	lvconvert -y --type striped $vg/$lv1
+	lvconvert -y --type raid0 $vg/$lv1
+	lvconvert -y --type raid0_meta $vg/$lv1
 	lvremove -ff $vg
 done
 
@@ -71,3 +71,5 @@ done
 not lvcreate -y --type raid0 -l 7 -i 7 -n $lv1 $vg
 
 vgremove -ff $vg
+
+exit 0

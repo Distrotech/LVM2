@@ -1096,7 +1096,8 @@ int lv_raid_message(const struct logical_volume *lv, const char *msg)
 		log_error("\"%s\" is not a supported sync operation.", msg);
 		goto out;
 	}
-	if (strcmp(status->sync_action, "idle")) {
+	if (strcmp(status->sync_action, "idle") &&
+	    strcmp(status->sync_action, "frozen")) {
 		log_error("%s/%s state is currently \"%s\".  Unable to switch to \"%s\".",
 			  lv->vg->name, lv->name, status->sync_action, msg);
 		goto out;
