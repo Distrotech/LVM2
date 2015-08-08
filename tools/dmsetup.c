@@ -208,7 +208,7 @@ static uint64_t _disp_factor = 512; /* display sizes in sectors */
 static char _disp_units = 's';
 
 /* report timekeeping */
-static struct dm_timestamp *_ts_start = NULL, *_ts_end = NULL;
+static struct dm_timestamp *_ts_stats_start = NULL, *_ts_stats_end = NULL;
 static uint64_t _last_interval = 0; /* approx. measured interval in nsecs */
 static uint64_t _interval = 0; /* configured interval in nsecs */
 
@@ -459,6 +459,7 @@ static void _destroy_split_name(struct dm_split_name *split_name)
 static int _display_info_cols(struct dm_task *dmt, struct dm_info *info)
 {
 	struct dmsetup_report_obj obj;
+	uint64_t delta_t;
 	int r = 0;
 
 	if (!info->exists) {
@@ -493,13 +494,52 @@ static int _display_info_cols(struct dm_task *dmt, struct dm_info *info)
 		if (!(obj.stats = dm_stats_create(DM_STATS_PROGRAM_ID)))
 			goto_out;
 
-		/* use measured approximation for calculations */
-		dm_stats_set_sampling_interval_ns(obj.stats, _last_interval);
-
 		dm_stats_bind_devno(obj.stats, info->major, info->minor);
+
+		if (!_ts_stats_end)
+			_ts_stats_end = dm_timestamp_alloc();
+		if (!_ts_stats_end) {
+			log_error("Could not allocate timestamp object.");
+			goto out;
+		}
+
+		/* end-of-interval: as close as possible to @stats_print{_clear} */
+		if (!dm_timestamp_get(_ts_stats_end))
+			goto_out;
+
 		if (!(dm_stats_populate(obj.stats, DM_STATS_PROGRAM_ID, DM_STATS_REGIONS_ALL))) {
 			goto out;
 		}
+
+		/*
+		 * Stats clock: maintain a pair of timestamps taken just before
+		 * and just after the dm_stats_populate() call and use the delta
+		 * to estimate the duration of the interval for counter sampling.
+		 *
+		 * FIXME: currently the measured interval of the first region to
+		 * be processed is taken as an estimate for all other regions.
+		 */
+		if (!_ts_stats_start) {
+			_ts_stats_start = dm_timestamp_alloc();
+			if (!_ts_stats_start) {
+				log_error("Could not allocate timestamp object.");
+				goto out;
+			}
+			/* start the first interval */
+			if (!dm_timestamp_get(_ts_stats_start))
+				goto_out;
+			/* Pretend we have the configured interval for the first iteration. */
+			_last_interval = _interval;
+		} else if ((delta_t = dm_timestamp_delta(_ts_stats_end, _ts_stats_start)) > _interval) {
+			/* Only update interval at start of cycle */
+			_last_interval = delta_t;
+			/* start-of-interval: as close as possible to ioctl return */
+			if (!dm_timestamp_get(_ts_stats_start))
+				goto_out;
+		}
+
+		/* use measured approximation for calculations */
+		dm_stats_set_sampling_interval_ns(obj.stats, _last_interval);
 	}
 
 	dm_stats_walk_start(obj.stats);
@@ -5390,21 +5430,40 @@ static int _perform_command_for_all_repeatable_args(CMD_ARGS)
 
 static int _do_report_wait(void)
 {
-	if (!dm_timestamp_get(_ts_start))
-		goto_out;
+	static struct dm_timestamp *_last_wake, *_now = NULL;
+	uint64_t this_interval;
 
-	if (usleep(_interval / NSEC_PER_USEC)) {
+	/*
+	 * Report clock: compensate for time spent in userspace and stats
+	 * message ioctls by keeping track of the last wake time and
+	 * adjusting the sleep interval accordingly.
+	 */
+	if (!_last_wake && !_now) {
+		if (!(_last_wake = dm_timestamp_alloc()))
+			goto_out;
+		if (!(_now = dm_timestamp_alloc()))
+			goto_out;
+		dm_timestamp_get(_last_wake);
+	}
+
+	dm_timestamp_get(_now);
+
+	/* adjust for time spent populating and reporting */
+	this_interval = _interval - dm_timestamp_delta(_now, _last_wake);
+
+	if (usleep(this_interval / NSEC_PER_USEC)) {
 		if (errno == EINTR)
 			log_error("Report interval interrupted by signal.");
 		if (errno == EINVAL)
 			log_error("Report interval too short.");
 		goto out;
 	}
+	dm_timestamp_get(_last_wake);
 
-	if (!dm_timestamp_get(_ts_end))
-		goto_out;
-
-	_last_interval = dm_timestamp_delta(_ts_end, _ts_start);
+	if(_count == 2) {
+		dm_timestamp_destroy(_last_wake);
+		dm_timestamp_destroy(_now);
+	}
 
 	return 1;
 out:
@@ -5526,14 +5585,6 @@ unknown:
 		argc--, argv++;
 	}
 
-	_ts_start = dm_timestamp_alloc();
-	_ts_end = dm_timestamp_alloc();
-	if (!_ts_start || !_ts_end) {
-		log_error("Could not allocate timestamp objects.");
-		goto out;
-	}
-	/* Pretend we have the configured interval for the first iteration. */
-	_last_interval = _interval;
 doit:
 	multiple_devices = (cmd->repeatable_cmd && argc != 2 &&
 			    (argc != 1 || (!_switches[UUID_ARG] && !_switches[MAJOR_ARG])));
@@ -5561,8 +5612,8 @@ out:
 	if (_dtree)
 		dm_tree_free(_dtree);
 
-	dm_timestamp_destroy(_ts_start);
-	dm_timestamp_destroy(_ts_end);
+	dm_timestamp_destroy(_ts_stats_start);
+	dm_timestamp_destroy(_ts_stats_end);
 
 	dm_free(_table);
 
