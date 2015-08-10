@@ -32,6 +32,7 @@
 #include "archiver.h"
 #include "defaults.h"
 #include "lvmlockd.h"
+#include "time.h"
 
 #include <math.h>
 #include <sys/param.h>
@@ -3014,7 +3015,9 @@ int vg_write(struct volume_group *vg)
         struct pv_to_create *pv_to_create;
 	struct metadata_area *mda;
 	struct lv_list *lvl;
+	struct glv_list *glvl;
 	int revert = 0, wrote = 0;
+	time_t current_timestamp = 0;
 
 	dm_list_iterate_items(lvl, &vg->lvs) {
 		if (lvl->lv->lock_args && !strcmp(lvl->lv->lock_args, "pending")) {
@@ -3023,6 +3026,14 @@ int vg_write(struct volume_group *vg)
 				return 0;
 			}
 			lvl->lv->new_lock_args = 1;
+		}
+	}
+
+	dm_list_iterate_items(glvl, &vg->dead_lvs) {
+		if (!glvl->glv->dead->timestamp_removed) {
+			if (!current_timestamp)
+				current_timestamp = time(NULL);
+			glvl->glv->dead->timestamp_removed = (uint64_t) current_timestamp;
 		}
 	}
 
