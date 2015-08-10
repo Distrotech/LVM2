@@ -524,6 +524,13 @@ static int _thin_text_export(const struct lv_segment *seg, struct formatter *f)
 		outf(f, "external_origin = \"%s\"", seg->external_lv->name);
 	if (seg->origin)
 		outf(f, "origin = \"%s\"", seg->origin->name);
+	if (seg->indirect_origin) {
+		if (seg->indirect_origin->is_dead) {
+			outf(f, "indirect_origin = \"%s%s\"", DEAD_LV_PREFIX, seg->indirect_origin->dead->dname);
+		} else
+			outf(f, "indirect_origin = \"%s\"", seg->indirect_origin->live->name);
+	}
+
 	if (seg->merge_lv)
 		outf(f, "merge = \"%s\"", seg->merge_lv->name);
 

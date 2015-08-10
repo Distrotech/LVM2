@@ -655,6 +655,25 @@ int out_areas(struct formatter *f, const struct lv_segment *seg,
 	return 1;
 }
 
+static int _print_timestamp(struct formatter *f,
+			     const char *name, time_t ts,
+			     char *buf, size_t buf_size)
+{
+	struct tm *local_tm;
+
+	if (ts) {
+		strncpy(buf, "# ", buf_size);
+		if (!(local_tm = localtime(&ts)) ||
+		    !strftime(buf + 2, buf_size - 2,
+			      "%Y-%m-%d %T %z", local_tm))
+			buf[0] = 0;
+
+		outfc(f, buf, "%s = %" PRIu64, name, ts);
+	}
+
+	return 1;
+}
+
 static int _print_lv(struct formatter *f, struct logical_volume *lv)
 {
 	struct lv_segment *seg;
@@ -778,6 +797,60 @@ static int _print_lvs(struct formatter *f, struct volume_group *vg)
 	return 1;
 }
 
+static int _print_dead_lv(struct formatter *f, struct dead_logical_volume *dlv)
+{
+	char buffer[40];
+
+	if (!id_write_format(&dlv->lvid.id[1], buffer, sizeof(buffer)))
+		return_0;
+
+	outnl(f);
+	outf(f, "%s {", dlv->dname);
+	_inc_indent(f);
+
+	outf(f, "id = \"%s\"", buffer);
+	outf(f, "name = \"%s\"", dlv->name);
+
+	if (!_print_timestamp(f, "creation_time", dlv->timestamp, buffer, sizeof(buffer)))
+		return_0;
+
+	if (!_print_timestamp(f, "removal_time", dlv->timestamp_removed, buffer, sizeof(buffer)))
+		return_0;
+
+	if (dlv->indirect_origin) {
+		if (dlv->indirect_origin->is_dead)
+			outf(f, "indirect_origin = \"%s%s\"", DEAD_LV_PREFIX, dlv->indirect_origin->dead->dname);
+		else
+			outf(f, "indirect_origin = \"%s\"", dlv->indirect_origin->live->name);
+	}
+
+	_dec_indent(f);
+	outf(f, "}");
+
+	return 1;
+}
+
+static int _print_dead_lvs(struct formatter *f, struct volume_group *vg)
+{
+	struct glv_list *glvl;
+
+	if (dm_list_empty(&vg->dead_lvs))
+		return 1;
+
+	outf(f, "removed_logical_volumes {");
+	_inc_indent(f);
+
+	dm_list_iterate_items(glvl, &vg->dead_lvs) {
+		if (!_print_dead_lv(f, glvl->glv->dead))
+			return_0;
+	}
+
+	_dec_indent(f);
+	outf(f, "}");
+
+	return 1;
+}
+
 /*
  * In the text format we refer to pv's as 'pv1',
  * 'pv2' etc.  This function builds a hash table
@@ -842,6 +915,10 @@ static int _text_vg_export(struct formatter *f,
 
 	outnl(f);
 	if (!_print_lvs(f, vg))
+		goto_out;
+
+	outnl(f);
+	if (!_print_dead_lvs(f, vg))
 		goto_out;
 
 	_dec_indent(f);
