@@ -6636,8 +6636,8 @@ PFLA("%s", "vg_commit");
 
 	/*
 	 * recuresively rename sub LVs
-	 *   currently supported only for thin data layer
-	 *   FIXME: without strcmp it breaks mirrors....
+	 *   currently supported for thin data layer and copy conversions
+	 *   FIXME: without strstr it breaks mirrors....
 	 */
 	for (r = 0; r < DM_ARRAY_SIZE(_suffixes); ++r)
 		if (strstr(layer_suffix, _suffixes[r])) {

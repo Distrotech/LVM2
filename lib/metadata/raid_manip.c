@@ -125,26 +125,6 @@ static int is_same_level(const struct segment_type *t1, const struct segment_typ
 #endif
 }
 
-#if 0
-/*
- * HM
- *
- * Check for raid level by segtype going up from @t1 to @t2
- *
- * Return 1 if same, else != 1
- */
-static int is_level_up(const struct segment_type *t1, const struct segment_type *t2)
-{
-	if (segtype_is_raid(t1) && segtype_is_striped(t2))
-		return 0;
-
-	if (segtype_is_striped(t1) && segtype_is_raid(t2))
-		return 1;
-
-	return _cmp_level(t1, t2) < 0;
-}
-#endif
-
 static int _lv_is_raid_with_tracking(const struct logical_volume *lv,
 				     struct logical_volume **tracking)
 {
@@ -860,39 +840,6 @@ static int _realloc_meta_and_data_seg_areas(struct logical_volume *lv, uint32_t 
 		_realloc_seg_areas(lv, areas, RAID_IMAGE)) ? 1 : 0;
 }
 
-#if 0
-/*
- * HM
- *
- * Move the end of a partial segment area from @seg_from to @seg_to
- */
-static int _raid_move_partial_lv_segment_area(struct lv_segment *seg_to, uint32_t area_to,
-		struct lv_segment *seg_from, uint32_t area_from, uint32_t area_reduction)
-{
-	uint32_t pe;
-	struct physical_volume *pv;
-
-	if (seg_type(seg_from, area_from) != AREA_PV)
-		return 0;
-
-	pv = seg_pv(seg_from, area_from);
-	pe = seg_pe(seg_from, area_from) + seg_from->area_len - area_reduction;;
-
-	if (!release_lv_segment_area(seg_from, area_from, area_reduction))
-		return_0;
-
-	if (!release_lv_segment_area(seg_to, area_to, area_reduction))
-		return_0;
-
-	if (!set_lv_segment_area_pv(seg_to, area_to, pv, pe))
-		return_0;
-
-	seg_from->area_len -= area_reduction;
-
-	return 1;
-}
-#endif
-
 /*
  * _extract_image_component
  * @seg
@@ -1176,7 +1123,6 @@ static int _alloc_rmeta_for_lv(struct logical_volume *data_lv,
 		return 0;
 	}
 #endif
-
 	_check_and_init_region_size(data_lv);
 
 	if ((p = strstr(data_lv->name, "_mimage_")) ||
@@ -1897,40 +1843,6 @@ static struct lv_segment *_convert_lv_to_raid1(struct logical_volume *lv, const 
 
 	return seg;
 }
-
-#if 0
-/*
- * Convert linear @lv to raid by making the linear lv
- * the one data sub lv of a new top-level lv
- */
-static struct lv_segment *_convert_linear_to_raid1(struct logical_volume *lv)
-{
-	struct lv_segment *seg = first_seg(lv);
-	uint64_t flags = RAID | (lv->status & (LVM_READ | LVM_WRITE));
-
-	if (!seg_is_linear(seg)) {
-		log_error(INTERNAL_ERROR " Called with non-linear lv %s", display_lvname(lv));
-		return NULL;
-	}
-
-	log_debug_metadata("Inserting layer lv on top of %s", display_lvname(lv));
-	if (!insert_layer_for_lv(lv->vg->cmd, lv, flags, "_rimage_0"))
-		return NULL;
-
-	/* First segment has changed because of layer insertion */
-	seg = first_seg(lv);
-	seg_lv(seg, 0)->status |= RAID_IMAGE | flags;
-	seg_lv(seg, 0)->status &= ~LV_REBUILD;
-
-	/* Set raid1 segtype, so that the following image allocation works */
-	if (!(seg->segtype = get_segtype_from_flag(lv->vg->cmd, SEG_RAID1)))
-		return NULL;
-
-	_check_and_init_region_size(lv);
-
-	return seg;
-}
-#endif
 
 /* Reset any rebuild or reshape disk flags on @lv, first segment already passed to the kernel */
 static int _reset_flags_passed_to_kernel(struct logical_volume *lv, int *flag_cleared)
@@ -3649,7 +3561,8 @@ static struct logical_volume *_create_lv(struct volume_group *vg, const char *lv
 {
 	uint64_t flags = RAID | RAID_IMAGE | LVM_READ | LVM_WRITE;
 	struct logical_volume *r;
-	
+
+PFL();
 	if (segtype_is_striped_raid(segtype) &&
 	    stripes < 2 + segtype->parity_devs) {
 		log_error("Can't create %s LV %s/%s with less than %u stripes",
@@ -3657,6 +3570,7 @@ static struct logical_volume *_create_lv(struct volume_group *vg, const char *lv
 		return_NULL;
 	}
 
+PFL();
 	if (!(r = lv_create_empty(lv_name, NULL, flags, ALLOC_INHERIT, vg))) {
 		log_error("Failed to create new LV %s/%s.", vg->name, lv_name);
 		return_NULL;
@@ -3665,12 +3579,14 @@ static struct logical_volume *_create_lv(struct volume_group *vg, const char *lv
 	/* Hide the lv, it's going to be a raid1 slave sub lv */
 	lv_set_hidden(r);
 
+PFL();
 	if (!lv_extend(r, segtype, stripes - segtype->parity_devs, stripe_size,
 		       mirrors, region_size, extents, pvs, vg->alloc, 0)) {
 		log_error("Failed to extend new LV %s", display_lvname(r));
 		return_NULL;
 	}
 
+PFL();
 	return r;
 }
 
@@ -3696,6 +3612,7 @@ static char *_unique_lv_name(struct logical_volume *lv, const char *suffix)
 	char *name;
 	uint32_t count = 0;
 
+	/* Loop until we found an available one */
 	while (!(name = _generate_raid_name(lv, suffix + 1, count)))
 		count++;
 
@@ -3767,19 +3684,18 @@ static int _insert_layer_and_add_sub_lv(struct logical_volume *lv,
  * Helper: raid to raid conversion by duplication
  *
  * Inserts a layer on top of the given @lv,
- * creates a destination lv of the same size with
- * the requested @new_segtype
+ * creates and aallocates a destination lv of the
+ * same size with the requested @new_segtype
  */
 TAKEOVER_HELPER_FN(_raid_conv_duplicate)
 {
 	int i;
-	uint32_t extents, mirrors;
+	uint32_t extents, mirrors, s;
 	char *lv_name[2], *src_suffix;
 	static const char *suffixes[] = { "_dsrc", "_ddst" };
 	struct logical_volume *dst_lv;
-	struct lv_segment *seg = first_seg(lv);
+	struct lv_segment *seg = first_seg(lv), *seg1;
 
-PFL();
 	if (!_yes_no_conversion(lv, new_segtype, yes, force, new_image_count, 0, 0))
 		return 0;
 
@@ -3879,6 +3795,7 @@ PFL();
 	else
 		mirrors = 1;
 
+
 	/* Create unique lv names for source and destination sub-lvs */
 	for (i = 0; i < 2; i++)
 		if (!(lv_name[i] = _unique_lv_name(lv, suffixes[i])))
@@ -3889,7 +3806,10 @@ PFL();
 		return 0;
 	}
 
-	/* Insert layer on top of source lv */
+if (!vg_validate(lv->vg))
+	return 0;
+PFL();
+	/* Insert src layer on top of source lv and set it to striped */
 	log_debug_metadata("Inserting layer lv on top of %s", display_lvname(lv));
 	if (!(seg = _convert_lv_to_raid1(lv, src_suffix)))
 		return 0;
@@ -3898,20 +3818,31 @@ PFL();
 		return_0;
 
 	seg->region_size = 0;
+if (!vg_validate(lv->vg))
+	return 0;
+PFL();
+
+#if 0
+	seg1 = first_seg(seg_lv(seg, 0));
+	for (s = 0; s < seg1->area_count; s++)
+		if (!activate_lv_excl_local(lv->vg->cmd, seg_lv(seg1, s)))
+			return_0;
+#endif
 
 PFLA("lv->name=%s", lv->name);
 
-	/* Insert layer on top of the source LV to use as a new top-levels raid1 master leg */
+	/* Insert another layer on top of the source LV to use as a new top-levels raid1 master leg */
 	log_debug_metadata("Inserting logical volume %s as raid1 master leg", display_lvname(lv));
 	if (!(seg = _convert_lv_to_raid1(lv, "_rimage_0")))
 		return 0;
-#if 0
+if (!vg_validate(lv->vg))
+	return 0;
 PFL();
+#if 0
 	if (!lv_update_and_reload_origin(lv))
 		return_0;
 #endif
 PFL();
-
 	/* seg now is the first segment of the new raid1 top-level lv */
 	/* Got tlv(raid1) -> tlv_rimage_0(linear) -> tlv_dsrc_N -> tlv_dsrc_N_* now */
 
@@ -3922,6 +3853,9 @@ PFL();
 		return 0;
 	}
 PFLA("dst_lv->name=%s", dst_lv->name);
+if (!vg_validate(lv->vg))
+	return 0;
+PFL();
 
 	/* Grow areas arrays for metadata and data devs for adding destination lv */
 	log_debug_metadata("Realocating areas array of %s", display_lvname(lv));
