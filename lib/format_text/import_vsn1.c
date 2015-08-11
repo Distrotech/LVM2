@@ -769,6 +769,69 @@ bad:
 	return 0;
 }
 
+static int _read_removed_lvnames_interconnections(struct format_instance *fid __attribute__((unused)),
+						  struct volume_group *vg, const struct dm_config_node *rlvn,
+						  const struct dm_config_node *vgn __attribute__((unused)),
+						  struct dm_hash_table *pv_hash __attribute__((unused)),
+						  struct dm_hash_table *lv_hash __attribute__((unused)),
+						  unsigned *scan_done_once __attribute__((unused)),
+						  unsigned report_missing_devices __attribute__((unused)))
+{
+	struct dm_pool *mem = vg->vgmem;
+	const char *dead_lv_name, *origin_name;
+	struct generic_logical_volume *glv, *origin_glv;
+	struct logical_volume *tmp_lv;
+	struct glv_list *glvl = NULL;
+
+	dead_lv_name = rlvn->key;
+	rlvn = rlvn->child;
+
+	if (!dm_config_get_str(rlvn, "indirect_origin", &origin_name))
+		return 1;
+
+	if (!(glv = find_dead_glv(vg, dead_lv_name, NULL))) {
+		log_error("Unknown removed logical volume %s in volume group %s",
+			  dead_lv_name, vg->name);
+		goto bad;
+	}
+
+	if (!(glvl = dm_pool_zalloc(mem, sizeof(struct glv_list)))) {
+		log_error("Failed to allocate list item for removed logical "
+			  "volume %s/%s", vg->name, dead_lv_name);
+		goto bad;
+	}
+	glvl->glv = glv;
+
+	if (!strncmp(origin_name, DEAD_LV_PREFIX, strlen(DEAD_LV_PREFIX))) {
+		if (!(origin_glv = find_dead_glv(vg, origin_name + strlen(DEAD_LV_PREFIX), NULL))) {
+			log_error("Unknown indirect origin %s for removed logical volume %s/%s",
+				  origin_name, vg->name, dead_lv_name);
+			goto bad;
+		}
+	} else {
+		if (!(tmp_lv = find_lv(vg, origin_name))) {
+			log_error("Unknown indirect origin %s for removed logical volume %s/%s",
+				  origin_name, vg->name, dead_lv_name);
+			goto bad;
+		}
+
+		if (!(origin_glv = get_or_create_glv(mem, tmp_lv, NULL)))
+			goto bad;
+	}
+
+	glv->dead->indirect_origin = origin_glv;
+	if (origin_glv->is_dead)
+		dm_list_add(&origin_glv->dead->indirect_users, &glvl->list);
+	else
+		dm_list_add(&origin_glv->live->indirect_users, &glvl->list);
+
+	return 1;
+bad:
+	if (glvl)
+		dm_pool_free(mem, glvl);
+	return 0;
+}
+
 static int _read_lvsegs(struct format_instance *fid,
 			struct volume_group *vg, const struct dm_config_node *lvn,
 			const struct dm_config_node *vgn __attribute__((unused)),
@@ -1056,6 +1119,13 @@ static struct volume_group *_read_vg(struct format_instance *fid,
 			    vgn, pv_hash, lv_hash, 1, NULL)) {
 		log_error("Couldn't read all removed logical volumes for volume "
 			  "group %s.", vg->name);
+		goto bad;
+	}
+
+	if (!_read_sections(fid, "removed_logical_volumes", _read_removed_lvnames_interconnections,
+			    vg, vgn, pv_hash, lv_hash, 1, NULL)) {
+		log_error("Couldn't read all removed logical volume interconnections "
+			  "for volume group %s.", vg->name);
 		goto bad;
 	}
 
