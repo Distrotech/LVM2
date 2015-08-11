@@ -441,7 +441,8 @@ int text_import_areas(struct lv_segment *seg, const struct dm_config_node *sn,
 		}
 
 		if (cv->next->type != DM_CFG_INT) {
-			log_error("Bad offset in areas array for segment %s.", seg_name);
+			log_error("Bad offset in areas array for segment %s, seg->lv %s.",
+				  seg_name, display_lvname(seg->lv));
 			return 0;
 		}
 

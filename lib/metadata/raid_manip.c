@@ -23,20 +23,6 @@
 #include "lvm-string.h"
 #include "lvm-signal.h"
 
-/* HM FIXME: REMOVEME: devel output */
-#if 0
-#include "dump.h"
-#endif
-
-/* HM FIXME: REMOVEME: devel output */
-#ifdef USE_PFL
-#define PFL() printf("%s %u\n", __func__, __LINE__);
-#define PFLA(format, arg...) printf("%s %u " format "\n", __func__, __LINE__, arg);
-#else
-#define PFL()
-#define PFLA(format, arg...)
-#endif
-
 #define	ARRAY_SIZE(a) (sizeof(a) / sizeof(*a))
 
 /* Ensure minimum region size on @lv */
@@ -3559,10 +3545,14 @@ static struct logical_volume *_create_lv(struct volume_group *vg, const char *lv
 					 uint32_t region_size, uint32_t stripe_size,
 					 uint32_t extents, struct dm_list *pvs)
 {
-	uint64_t flags = RAID | RAID_IMAGE | LVM_READ | LVM_WRITE;
+	uint64_t status = RAID | RAID_IMAGE | LVM_READ | LVM_WRITE;
 	struct logical_volume *r;
 
-PFL();
+	/* HM FIXME: prevent for the time being */
+	if (!segtype_is_raid(segtype))
+		return 0;
+
+PFLA("lv_name=%s", lv_name);
 	if (segtype_is_striped_raid(segtype) &&
 	    stripes < 2 + segtype->parity_devs) {
 		log_error("Can't create %s LV %s/%s with less than %u stripes",
@@ -3571,21 +3561,19 @@ PFL();
 	}
 
 PFL();
-	if (!(r = lv_create_empty(lv_name, NULL, flags, ALLOC_INHERIT, vg))) {
+	if (!(r = lv_create_empty(lv_name, NULL, status, ALLOC_INHERIT, vg))) {
 		log_error("Failed to create new LV %s/%s.", vg->name, lv_name);
 		return_NULL;
 	}
 
 	/* Hide the lv, it's going to be a raid1 slave sub lv */
 	lv_set_hidden(r);
-
 PFL();
 	if (!lv_extend(r, segtype, stripes - segtype->parity_devs, stripe_size,
 		       mirrors, region_size, extents, pvs, vg->alloc, 0)) {
 		log_error("Failed to extend new LV %s", display_lvname(r));
 		return_NULL;
 	}
-
 PFL();
 	return r;
 }
@@ -3622,6 +3610,7 @@ static char *_unique_lv_name(struct logical_volume *lv, const char *suffix)
 	return name;
 }
 
+#if 0
 /* Insert layer on top of @areal_lv and add it to @lvs first segment at @area */
 static int _insert_layer_and_add_sub_lv(struct logical_volume *lv, 
 					struct logical_volume *area_lv, uint32_t area,
@@ -3687,14 +3676,58 @@ static int _insert_layer_and_add_sub_lv(struct logical_volume *lv,
  * creates and aallocates a destination lv of the
  * same size with the requested @new_segtype
  */
+	seg1 = first_seg(seg_lv(seg, 0));
+	for (s = 0; s < seg1->area_count; s++)
+		if (!activate_lv_excl_local(lv->vg->cmd, seg_lv(seg1, s)))
+			return_0;
+
+	/* Make new names of source LV known */
+	if (!activate_lv_excl_local(lv->vg->cmd, seg_lv(seg, 0)))
+		return_0;
+
+#endif
+
+static void _rename_lv(struct logical_volume *lv, const char *from, const char *to)
+{
+	size_t sz;
+	char *name = lv->name, *p;
+
+	if (!(p = strstr(lv->name, from)))
+		return;
+
+	sz = p - lv->name + strlen(to) + (strlen(p) - strlen(from)) + 1;
+	if (!(name = dm_pool_alloc(lv->vg->vgmem, sz)))
+		return;
+		
+	sz = p - lv->name;
+	strncpy(name, lv->name, sz);
+	strncpy(name + sz, to, strlen(to));
+	strcpy(name + sz + strlen(to), p + strlen(from));
+	lv->name = name;
+}
+
+/* Helper to rename image/meta name suffixes */
+static void _rename_sub_lvs(struct logical_volume *lv,
+			    const char *from_image, const char *to_image,
+			    const char *from_meta , const char *to_meta)
+{
+	uint32_t s;
+	struct lv_segment *seg = first_seg(lv);
+
+	for (s = 0; s < seg->area_count; s++) {
+		_rename_lv(seg_lv(seg, s), from_image, to_image);
+
+		if (seg->meta_areas)
+			_rename_lv(seg_metalv(seg, s), from_meta, to_meta);
+	}
+}
 TAKEOVER_HELPER_FN(_raid_conv_duplicate)
 {
 	int i;
 	uint32_t extents, mirrors, s;
-	char *lv_name[2], *src_suffix;
-	static const char *suffixes[] = { "_dsrc", "_ddst" };
+	char *lv_name, *suffix;
 	struct logical_volume *dst_lv;
-	struct lv_segment *seg = first_seg(lv), *seg1;
+	struct lv_segment *seg = first_seg(lv);
 
 	if (!_yes_no_conversion(lv, new_segtype, yes, force, new_image_count, 0, 0))
 		return 0;
@@ -3707,22 +3740,20 @@ PFL();
 	 * if not (i.e. cancel copy conversion)
 	 */
 	if (_lv_is_duplicating(lv)) {
+		/*
+		 * If we get here once possible and the top-level raid1 is still synchronozing ->
+		 * withdraw the destination LV, else withdraw the source LV
+		 */
 		uint32_t idx = _raid_in_sync(lv) ? 0 : 1;
 		struct lv_list *lvl_array;
 		struct logical_volume *lv_tmp;
 		struct dm_list removal_lvs;
 
-		/* Destination LV needs to be in-sync before withdrawing source LV */
-		if (!_raid_in_sync(seg_lv(seg, 1))) {
-			log_error(INTERNAL_ERROR "Can't remove source lv %s whilst destination lv %s is not in-sync",
-				  display_lvname(seg_lv(seg, 0)), display_lvname(seg_lv(seg, 1)));
-			return 0;
-		}
-
 		dm_list_init(&removal_lvs);
 
 		if (!(lvl_array = dm_pool_alloc(lv->vg->vgmem, 4 * sizeof(*lvl_array))))
 			return_0;
+
 PFL();
 		/* Extract image component pair of the source/destination raid1 LV */
 		if (!_extract_image_component_pair(seg, idx, lvl_array, &removal_lvs, &removal_lvs)) {
@@ -3734,23 +3765,27 @@ PFL();
 		if (!_extract_image_component(seg, RAID_META, idx ? 0 : 1, &lvl_array[2].lv))
 			return 0;
 
-		dm_list_add(&removal_lvs, &lvl_array[2].list);
-PFL();
-		/* Add source/destination last image lv to removal_lvs */
-		lv_tmp = seg_lv(seg, idx ? 0 : 1);
-		lv_tmp->status &= ~RAID_IMAGE;
-		lvl_array[3].lv = lv_tmp;
-		dm_list_add(&removal_lvs, &lvl_array[3].list);
-PFL();
-		/* Remove the raid1 layer from the LV */
 		if (!idx)
 			seg->areas[0] = seg->areas[1];
 
-		seg->area_count = 1;
+		dm_list_add(&removal_lvs, &lvl_array[2].list);
+PFL();
+		/* Add source/destination last image lv to removal_lvs */
+		lv_tmp = lvl_array[3].lv = seg_lv(seg, 0);
+		lv_tmp->status &= ~(RAID | RAID_IMAGE);
+		dm_list_add(&removal_lvs, &lvl_array[3].list);
+PFL();
 		lv_tmp->le_count = lv->le_count = max(lv->le_count, lv_tmp->le_count);
 		lv_tmp->size = lv->size = lv->le_count * lv->vg->extent_size;
+		lv_set_visible(lv_tmp);
+
+		seg->area_count = 1;
+PFL();
+		/* Remove the raid1 layer from the LV */
 		if (!remove_layer_from_lv(lv, lv_tmp))
 			return_0;
+
+		_rename_sub_lvs(lv, "_imgimg", "_rimage", "_metmd", "_rmeta");
 PFL();
 		return _lv_update_and_reload_origin_eliminate_lvs(lv, &removal_lvs);
 	}
@@ -3796,85 +3831,63 @@ PFL();
 		mirrors = 1;
 
 
-	/* Create unique lv names for source and destination sub-lvs */
-	for (i = 0; i < 2; i++)
-		if (!(lv_name[i] = _unique_lv_name(lv, suffixes[i])))
-			return 0;
+	if (!(lv_name = _unique_lv_name(lv, "_src")))
+		return 0;
 
-	if (!(src_suffix = strstr(lv_name[0], suffixes[0]))) {
-		log_error(INTERNAL_ERROR "Failed to find source prefix in source lv name %s", lv_name[0]);
+	if (!(suffix = strstr(lv_name, "_src"))) {
+		log_error(INTERNAL_ERROR "Failed to find source prefix in source lv name %s", lv_name);
 		return 0;
 	}
 
-if (!vg_validate(lv->vg))
-	return 0;
-PFL();
+PFLA("lv_name=%s, suffix=%s", lv_name, suffix);
 	/* Insert src layer on top of source lv and set it to striped */
-	log_debug_metadata("Inserting layer lv on top of %s", display_lvname(lv));
-	if (!(seg = _convert_lv_to_raid1(lv, src_suffix)))
+	log_debug_metadata("Inserting layer lv on top of source LV %s", display_lvname(lv));
+	if (!(seg = _convert_lv_to_raid1(lv, suffix)))
 		return 0;
-
-	if (!(seg->segtype = get_segtype_from_string(lv->vg->cmd, SEG_TYPE_NAME_STRIPED)))
-		return_0;
-
-	seg->region_size = 0;
-if (!vg_validate(lv->vg))
-	return 0;
-PFL();
-
-#if 0
-	seg1 = first_seg(seg_lv(seg, 0));
-	for (s = 0; s < seg1->area_count; s++)
-		if (!activate_lv_excl_local(lv->vg->cmd, seg_lv(seg1, s)))
-			return_0;
-#endif
-
-PFLA("lv->name=%s", lv->name);
-
-	/* Insert another layer on top of the source LV to use as a new top-levels raid1 master leg */
-	log_debug_metadata("Inserting logical volume %s as raid1 master leg", display_lvname(lv));
-	if (!(seg = _convert_lv_to_raid1(lv, "_rimage_0")))
-		return 0;
-if (!vg_validate(lv->vg))
-	return 0;
-PFL();
-#if 0
-	if (!lv_update_and_reload_origin(lv))
-		return_0;
-#endif
-PFL();
 	/* seg now is the first segment of the new raid1 top-level lv */
-	/* Got tlv(raid1) -> tlv_rimage_0(linear) -> tlv_dsrc_N -> tlv_dsrc_N_* now */
+PFL();
+	_rename_sub_lvs(seg_lv(seg, 0), "_rimage", "_imgimg", "_rmeta", "_metmd");
+
+PFLA("seg->area_count=%u", seg->area_count);
+PFLA("lv->name=%s seg_lv(seg, 0)=%s", lv->name, seg_lv(seg, 0)->name);
+
+if (!vg_validate(lv->vg))
+	return 0;
+PFL();
+	if (!(lv_name = _unique_lv_name(lv, "_dst")))
+		return 0;
 
 	/* Create the destination lv */
-	if (!(dst_lv = _create_lv(lv->vg, lv_name[1], new_segtype, mirrors, new_image_count,
+	if (!(dst_lv = _create_lv(lv->vg, lv_name, new_segtype, mirrors, new_image_count,
 				  1024 /* region size */, new_stripe_size, extents, allocate_pvs))) {
-		log_error("Failed to create destination lv %s/%s", lv->vg->name, lv_name[1]);
+		log_error("Failed to create destination lv %s/%s", lv->vg->name, lv_name);
 		return 0;
 	}
-PFLA("dst_lv->name=%s", dst_lv->name);
-if (!vg_validate(lv->vg))
-	return 0;
-PFL();
 
-	/* Grow areas arrays for metadata and data devs for adding destination lv */
+PFL();
+	_rename_sub_lvs(dst_lv, "_rimage", "_imgimg", "_rmeta", "_metmd");
+
+PFL();
+	/* Grow areas arrays for data devs to add destination lv */
 	log_debug_metadata("Realocating areas array of %s", display_lvname(lv));
 	if (!_realloc_seg_areas(lv, 2, RAID_IMAGE)) {
 		log_error("Relocation of areas array for %s failed", display_lvname(lv));
 		return_0;
 	}
 
-	seg = first_seg(lv);
 	seg->area_count = 2;
-PFL();
-	log_debug_metadata("Inserting layer lv on top of %s and add it to %s",
+
+	log_debug_metadata("Add detination LV %s to top-level LV %s as second raid1 leg",
 			   display_lvname(dst_lv), display_lvname(lv));
-	if (!_insert_layer_and_add_sub_lv(lv, dst_lv, 1, "_rimage_1")) {
-		log_error("Failed to add %s as 2nd image to %s",
+	/* Set @layer_lv as the lv of @area of @lv */
+	if (!set_lv_segment_area_lv(seg, 1, dst_lv, dst_lv->le_count, dst_lv->status)) {
+		log_error("Failed to add destination sublv %s to %s",
 			  display_lvname(dst_lv), display_lvname(lv));
-		return_0;
+		return 0;
 	}
 
+if (!vg_validate(lv->vg))
+	return 0;
 PFLA("lv->name=%s meta_areas=%p", lv->name, seg->meta_areas);
 	log_debug_metadata("Adding raid metadata device to %s", display_lvname(lv));
 	if (!_alloc_and_add_rmeta_devs_for_lv(lv))
@@ -3884,7 +3897,12 @@ PFLA("lv->name=%s meta_areas=%p", lv->name, seg->meta_areas);
 	seg_lv(seg, 0)->status &= ~LV_REBUILD;
 	seg_lv(seg, 1)->status |= LV_REBUILD;
 PFL();
-	return _lv_update_and_reload_origin_eliminate_lvs(lv, NULL);
+	/* Prevent dst_lv from syncing, because the top-level raid1 willl resync it anyway */
+	init_mirror_in_sync(9);
+	if (!_lv_update_and_reload_origin_eliminate_lvs(lv, NULL))
+		return_0;
+
+	return lv_raid_message(lv, "repair");
 }
 
 /*

@@ -31,15 +31,6 @@
 #include "lvm-signal.h"
 #include "memlock.h"
 
-/* HM FIXME: REMOVEME: devel output */
-#ifdef USE_PFL
-#define PFL() printf("%s %u\n", __func__, __LINE__);
-#define PFLA(format, arg...) printf("%s %u " format "\n", __func__, __LINE__, arg);
-#else
-#define PFL()
-#define PFLA(format, arg...)
-#endif
-
 typedef enum {
 	PREFERRED,
 	USE_AREA,
@@ -984,7 +975,7 @@ struct lv_segment *alloc_lv_segment(const struct segment_type *segtype,
 		dm_pool_free(mem, seg); /* frees everything alloced since seg */
 		return_NULL;
 	}
-PFLA("lv=%s seg->meta_areas=%p", lv->name, seg->meta_areas);
+PFLA("lv=%s le=%u len=%u area_len=%u area_count=%u seg->meta_areas=%p", lv->name, le, len, area_len, area_count, seg->meta_areas);
 
 	seg->segtype = segtype;
 	seg->lv = lv;
@@ -1011,6 +1002,7 @@ PFLA("lv=%s seg->meta_areas=%p", lv->name, seg->meta_areas);
 	if (segtype_is_mirrored(segtype))
 		lv->status |= MIRRORED;
 
+PFL();
 	return seg;
 }
 
