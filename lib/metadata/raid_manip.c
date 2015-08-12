@@ -3588,7 +3588,8 @@ static int _lv_is_duplicating(struct logical_volume *lv)
 	    !seg_is_raid1(seg))
 		return 0;
 
-	if (first_seg(seg_lv(seg, 0))->segtype == first_seg(seg_lv(seg, 1))->segtype)
+	if ((first_seg(seg_lv(seg, 0))->segtype == first_seg(seg_lv(seg, 1))->segtype) &&
+	    first_seg(seg_lv(seg, 0))->area_count == first_seg(seg_lv(seg, 1))->area_count)
 		return 0;
 
 	return 1;
@@ -3790,12 +3791,18 @@ PFL();
 		return _lv_update_and_reload_origin_eliminate_lvs(lv, &removal_lvs);
 	}
 
+#if 0
+	if (!_raid_in_sync(lv)) {
+		log_error("Can't convert by duplication when source LV %s is not in sync", display_lvname(lv));
+		return 0;
+	}
 
+#endif
 	/* Creation of destination LV with intended layout and insertion of raid1 top-layer from here on */
 	new_image_count = new_image_count <= new_segtype->parity_devs ? 2 + new_segtype->parity_devs : new_image_count;
 	new_stripe_size = new_stripe_size ?: 64 * 2;
 	extents = lv->le_count;
-PFLA("new)_image_count=%u", new_image_count);
+PFLA("new_image_count=%u", new_image_count);
 
 #if 0
 	/* HM FIXME: support removing stacked duplicating LV with different sub LV sizes */
@@ -3825,10 +3832,12 @@ PFL();
 	if (segtype_is_raid1(new_segtype)) {
 		mirrors = new_image_count = 2;
 		new_image_count = 1;
-	} else if (segtype_is_raid10(new_segtype))
+	} else if (segtype_is_raid10(new_segtype)) {
 		mirrors = 2;
-	else
+		new_image_count /= 2;
+	} else
 		mirrors = 1;
+PFLA("new_image_count=%u mirrors=%u", new_image_count, mirrors);
 
 
 	if (!(lv_name = _unique_lv_name(lv, "_src")))
@@ -3846,7 +3855,7 @@ PFLA("lv_name=%s, suffix=%s", lv_name, suffix);
 		return 0;
 	/* seg now is the first segment of the new raid1 top-level lv */
 PFL();
-	_rename_sub_lvs(seg_lv(seg, 0), "_rimage", "_imgimg", "_rmeta", "_metmd");
+	_rename_sub_lvs(seg_lv(seg, 0), "_rimage", "_src_imgimg", "_rmeta", "_src_metmd");
 
 PFLA("seg->area_count=%u", seg->area_count);
 PFLA("lv->name=%s seg_lv(seg, 0)=%s", lv->name, seg_lv(seg, 0)->name);
@@ -4067,8 +4076,7 @@ TAKEOVER_HELPER_FN(_striped_raid0_raid45610)
 
 	seg->segtype = new_segtype;
 
-	/* HM FIXME: force overloaded! */
-	return force ? 1 : _lv_update_and_reload_origin_eliminate_lvs(lv, NULL);
+	return _lv_update_and_reload_origin_eliminate_lvs(lv, NULL);
 }
 
 /* raid0 -> linear */
@@ -5200,7 +5208,7 @@ static takeover_fn_t _takeover_fn[][9] = {
 	/* raid4/5     */ { _r45_l,  _r45_s,  _r45_m,  _r45_r0, _r45_r0m,   _r45_r1, _r45_r45,  _r45_r6, _error   },
 //	/* raid6       */ { _error,  _r6_s,   _error,  _r6_r0,  _r6_r0m,    _error,  _r6_r45,   _r6_r6,  _error   },
 	/* raid6       */ { _error,  _r6_s,   _error,  _r6_r0,  _r6_r0m,    _dupe,   _r6_r45,   _r6_r6,  _dupe    },
-	/* raid10 near */ { _r10_l,  _r10_s,  _r10_m,  _r10_r0, _r10_r0m,   _r10_r1, _error,    _dupe,   _noop    },
+	/* raid10 near */ { _r10_l,  _r10_s,  _r10_m,  _r10_r0, _r10_r0m,   _r10_r1, _error,    _dupe,   _dupe    },
 };
 
 /* End: various conversions between layers (aka MD takeover) */
@@ -5268,10 +5276,11 @@ int lv_raid_convert(struct logical_volume *lv,
 		    struct dm_list *allocate_pvs)
 {
 	uint32_t stripes, stripe_size;
-	struct lv_segment *seg = first_seg(lv);
+	struct lv_segment *seg = first_seg(lv), *seg1;
 	struct segment_type *new_segtype_tmp = (struct segment_type *) new_segtype;
 	struct segment_type *striped_segtype;
 	struct dm_list removal_lvs;
+	takeover_fn_t tfn;
 
 	dm_list_init(&removal_lvs);
 
@@ -5335,12 +5344,14 @@ PFLA("new_segtype=%s new_image_count=%u stripes=%u", new_segtype->name, new_imag
 		return 0;
 	}
 
+#if 0
 	/* Can't perfom any raid conversions on out of sync LVs */
 	if (!_raid_in_sync(lv)) {
 		log_error("Unable to convert %s while it is not in-sync",
 			  display_lvname(lv));
 		return 0;
 	}
+#endif
 
 	/*
 	 * Reshape of capable raid type requested
@@ -5349,6 +5360,12 @@ PFLA("new_segtype=%s new_image_count=%u stripes=%u", new_segtype->name, new_imag
 	case 0:
 		break;
 	case 1:
+		if (!_raid_in_sync(lv)) {
+			log_error("Unable to convert %s while it is not in-sync",
+				  display_lvname(lv));
+			return 0;
+		}
+
 		if (new_stripes && seg->segtype != new_segtype) {
 			log_error("Can't reshape and takeover %s at the same time",
 				  display_lvname(lv));
@@ -5370,8 +5387,22 @@ new_image_count = stripes;
 
 PFLA("new_image_count=%u", new_image_count);
 
-	if (!_takeover_fn[_takeover_fn_idx(seg->segtype, seg->area_count)][_takeover_fn_idx(new_segtype, new_image_count)]
-	    (lv, yes, force, new_segtype, new_image_count, stripes, stripe_size, allocate_pvs)) {
+	if (_lv_is_duplicating(lv))
+		seg1 = first_seg(seg_lv(seg, 0));
+	else
+		seg1 = seg;
+
+	tfn = _takeover_fn[_takeover_fn_idx(seg1->segtype, seg->area_count)][_takeover_fn_idx(new_segtype, new_image_count)];
+
+	/* Check 100% sync for any takeover != dupe here */
+	if (tfn != _dupe &&
+	    !_raid_in_sync(lv)) {
+		log_error("Unable to convert %s while it is not in-sync",
+			  display_lvname(lv));
+		return 0;
+	}
+
+	if (!tfn(lv, yes, force, new_segtype, new_image_count, stripes, stripe_size, allocate_pvs)) {
 		_log_possible_conversion_types(lv);
 		return 0;
 	}
