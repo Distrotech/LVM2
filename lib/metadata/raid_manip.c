@@ -122,8 +122,7 @@ static int _lv_is_raid_with_tracking(const struct logical_volume *lv,
 	if (!lv_is_raid(lv))
 		return 0;
 
-	for (s = 0; s < seg->area_count; s++)
-		if (lv_is_visible(seg_lv(seg, s)) &&
+	for (s = 0; s < seg->area_count; s++) if (lv_is_visible(seg_lv(seg, s)) &&
 		    !(seg_lv(seg, s)->status & LVM_WRITE)) {
 			*tracking = seg_lv(seg, s);
 			return 1;
@@ -176,10 +175,10 @@ static int _deactivate_and_remove_lvs(struct volume_group *vg, struct dm_list *r
 PFLA("lvl->lv->name=%s", lvl->lv->name);
 		if (!deactivate_lv(vg->cmd, lvl->lv))
 			return_0;
-
-PFLA("lvl->lv->name=%s", lvl->lv->name);
+PFL();
 		if (!lv_remove(lvl->lv))
 			return_0;
+PFL();
 	}
 
 	return 1;
@@ -833,9 +832,10 @@ static int _realloc_meta_and_data_seg_areas(struct logical_volume *lv, uint32_t 
  * @data: != 0 to extract data dev / 0 extract metadata_dev
  * @extracted_lv:  The displaced metadata/data LV
  */
-static int _extract_image_component(struct lv_segment *seg,
+static int _extract_image_component_error_seg(struct lv_segment *seg,
 		uint64_t type, uint32_t idx,
-		struct logical_volume **extracted_lv)
+		struct logical_volume **extracted_lv,
+		int error_seg)
 {
 	struct logical_volume *lv;
 
@@ -869,12 +869,20 @@ static int _extract_image_component(struct lv_segment *seg,
 	if (!(lv->name = _generate_raid_name(lv, "extracted", -1)))
 		return_0;
 
-	if (!replace_lv_with_error_segment(lv))
+	if (error_seg &&
+	    !replace_lv_with_error_segment(lv))
 		return_0;
 
 	*extracted_lv = lv;
 
 	return 1;
+}
+
+static int _extract_image_component(struct lv_segment *seg,
+		uint64_t type, uint32_t idx,
+		struct logical_volume **extracted_lv)
+{
+	return _extract_image_component_error_seg(seg, type, idx, extracted_lv, 1);
 }
 
 /*
@@ -921,31 +929,33 @@ static int _extract_image_component_pair(struct lv_segment *seg, uint32_t idx,
 }
 
 /* Remove sublvs of @type from @lv starting at @idx and put them on @removal_lvs */
-static int _extract_image_component_list(struct lv_segment *seg,
-					 uint64_t type, uint32_t idx,
-					 struct dm_list *removal_lvs)
+static int _extract_image_component_sublist(struct lv_segment *seg,
+					    uint64_t type, uint32_t idx, uint32_t end,
+					    struct dm_list *removal_lvs,
+					    int error_seg)
 {
 	uint32_t s;
-	unsigned i;
-	struct lv_list *lvl_array;
+	struct lv_list *lvl;
 
-	if (idx >= seg->area_count) {
-		log_error(INTERNAL_ERROR "area index too large for segment");
+	if (idx >= seg->area_count ||
+	    end > seg->area_count ||
+	    end < idx) {
+		log_error(INTERNAL_ERROR "area index wrong for segment");
 		return 0;
 	}
 
-	if (!(lvl_array = dm_pool_alloc(seg_lv(seg, 0)->vg->vgmem, sizeof(*lvl_array) * (seg->area_count - idx))))
+	if (!(lvl = dm_pool_alloc(seg_lv(seg, 0)->vg->vgmem, sizeof(*lvl) * (end - idx))))
 		return_0;
 
-	for (i = 0, s = idx; s < seg->area_count; s++) {
-		if (!_extract_image_component(seg, type, s, &lvl_array[i].lv))
+	for (s = idx; s < end; s++) {
+		if (!_extract_image_component_error_seg(seg, type, s, &lvl->lv, error_seg))
 			return 0;
 
-		dm_list_add(removal_lvs, &lvl_array[i].list);
-		i++;
+		dm_list_add(removal_lvs, &lvl->list);
+		lvl++;
 	}
 
-	if (!idx) {
+	if (!idx && end == seg->area_count) {
 		if (type == RAID_IMAGE)
 			seg->areas = NULL;
 		else
@@ -953,6 +963,13 @@ static int _extract_image_component_list(struct lv_segment *seg,
 	}
 
 	return 1;
+}
+
+static int _extract_image_component_list(struct lv_segment *seg,
+					 uint64_t type, uint32_t idx,
+					 struct dm_list *removal_lvs)
+{
+	return _extract_image_component_sublist(seg, type, idx, seg->area_count, removal_lvs, 1);
 }
 
 /* Add new @lvs to @lv at @area_offset */
@@ -3693,41 +3710,53 @@ static void _rename_lv(struct logical_volume *lv, const char *from, const char *
 	size_t sz;
 	char *name = lv->name, *p;
 
-	if (!(p = strstr(lv->name, from)))
+	if (!(p = strstr(lv->name, from))) {
+		log_error(INTERNAL_ERROR "Fqiled to find %s in lv name %s", from, display_lvname(lv));
 		return;
+	}
 
 	sz = p - lv->name + strlen(to) + (strlen(p) - strlen(from)) + 1;
-	if (!(name = dm_pool_alloc(lv->vg->vgmem, sz)))
+	if (!(name = dm_pool_alloc(lv->vg->vgmem, sz))) {
+		log_error(INTERNAL_ERROR "Failed to allocate name for %s", display_lvname(lv));
 		return;
+	}
 		
 	sz = p - lv->name;
 	strncpy(name, lv->name, sz);
 	strncpy(name + sz, to, strlen(to));
 	strcpy(name + sz + strlen(to), p + strlen(from));
+
 	lv->name = name;
 }
 
 /* Helper to rename image/meta name suffixes */
-static void _rename_sub_lvs(struct logical_volume *lv,
-			    const char *from_image, const char *to_image,
-			    const char *from_meta , const char *to_meta)
+static void _rename_sub_lvs(struct logical_volume *lv, int to_dup)
 {
 	uint32_t s;
 	struct lv_segment *seg = first_seg(lv);
+	struct from_to {
+		const char *image[2];
+		const char *meta[2];
+	};
+	static struct from_to ft = {
+		{ "_rimage", "_rdimage" } ,
+		{ "_rmeta" , "_rdmeta"  }
+	};
 
 	for (s = 0; s < seg->area_count; s++) {
-		_rename_lv(seg_lv(seg, s), from_image, to_image);
+		_rename_lv(seg_lv(seg, s), ft.image[!to_dup], ft.image[!!to_dup]);
 
 		if (seg->meta_areas)
-			_rename_lv(seg_metalv(seg, s), from_meta, to_meta);
+			_rename_lv(seg_metalv(seg, s), ft.meta[!to_dup], ft.meta[!!to_dup]);
 	}
 }
+
 TAKEOVER_HELPER_FN(_raid_conv_duplicate)
 {
 	int i;
 	uint32_t extents, mirrors, s;
-	char *lv_name, *suffix;
-	struct logical_volume *dst_lv;
+	char *lv_name, *suffix, *tos, *tod;
+	struct logical_volume *dst_lv, *lv1;
 	struct lv_segment *seg = first_seg(lv);
 
 	if (!_yes_no_conversion(lv, new_segtype, yes, force, new_image_count, 0, 0))
@@ -3746,52 +3775,64 @@ PFL();
 		 * withdraw the destination LV, else withdraw the source LV
 		 */
 		uint32_t idx = _raid_in_sync(lv) ? 0 : 1;
-		struct lv_list *lvl_array;
-		struct logical_volume *lv_tmp;
 		struct dm_list removal_lvs;
+		struct lv_list lvl;
+		struct logical_volume *lv_del, *lv_tmp;
+		struct lv_segment *seg1;
+
+		if (idx)
+			log_warn("Keeping source lv %s", display_lvname(seg_lv(seg, 0)));
 
 		dm_list_init(&removal_lvs);
-
-		if (!(lvl_array = dm_pool_alloc(lv->vg->vgmem, 4 * sizeof(*lvl_array))))
-			return_0;
-
 PFL();
-		/* Extract image component pair of the source/destination raid1 LV */
-		if (!_extract_image_component_pair(seg, idx, lvl_array, &removal_lvs, &removal_lvs)) {
-			log_error(INTERNAL_ERROR "Failed to extract source lv image component pair");
+		_rename_sub_lvs(seg_lv(seg, idx), 0);
+
+		/*
+		 * Extract image components of the raid1 top-level LV and set to error segment
+		 * but the source/destination lv extracted, so that the sublvs get deactivated
+		 */
+		if (!_extract_image_component_sublist(seg, RAID_META, 0, 1, &removal_lvs, 1) ||
+		    !_extract_image_component_sublist(seg, RAID_META, 1, 2, &removal_lvs, 1) ||
+		    !_extract_image_component_sublist(seg, RAID_IMAGE, idx, idx + 1, &removal_lvs, 0)) {
+			log_error(INTERNAL_ERROR "Failed to extract top-level %s LVs %s images",
+				  idx ? "source" : "destination",
+				  display_lvname(seg_lv(seg, idx)));
 			return 0;
 		}
-PFL();
-		/* Extract metadata component of the raid1 destination/source LV */
-		if (!_extract_image_component(seg, RAID_META, idx ? 0 : 1, &lvl_array[2].lv))
-			return 0;
 
-		if (!idx)
+		/* If we drop source, move destination areas across */
+		if (!idx) {
 			seg->areas[0] = seg->areas[1];
+			seg->meta_areas[0] = seg->meta_areas[1];
+		}
 
-		dm_list_add(&removal_lvs, &lvl_array[2].list);
+		seg->area_count = 1;
 PFL();
 		/* Add source/destination last image lv to removal_lvs */
-		lv_tmp = lvl_array[3].lv = seg_lv(seg, 0);
+		lv_tmp = lvl.lv = seg_lv(seg, 0);
 		lv_tmp->status &= ~(RAID | RAID_IMAGE);
-		dm_list_add(&removal_lvs, &lvl_array[3].list);
-PFL();
+		dm_list_add(&removal_lvs, &lvl.list);
+
+		/* Adjust size */
 		lv_tmp->le_count = lv->le_count = max(lv->le_count, lv_tmp->le_count);
 		lv_tmp->size = lv->size = lv->le_count * lv->vg->extent_size;
 		lv_set_visible(lv_tmp);
 
-		seg->area_count = 1;
+PFLA("lv_tmp=%s", display_lvname(lv_tmp));
 PFL();
 		/* Remove the raid1 layer from the LV */
 		if (!remove_layer_from_lv(lv, lv_tmp))
 			return_0;
 
-		_rename_sub_lvs(lv, "_imgimg", "_rimage", "_metmd", "_rmeta");
+		_rename_sub_lvs(lv, 0);
 PFL();
 		return _lv_update_and_reload_origin_eliminate_lvs(lv, &removal_lvs);
 	}
 
+
+
 #if 0
+	/* HM FIXME: do I care about source sync? */
 	if (!_raid_in_sync(lv)) {
 		log_error("Can't convert by duplication when source LV %s is not in sync", display_lvname(lv));
 		return 0;
@@ -3830,7 +3871,7 @@ PFL();
 PFL();
 	/* Adjust counts for destination lv creation */
 	if (segtype_is_raid1(new_segtype)) {
-		mirrors = new_image_count = 2;
+		mirrors = 2;
 		new_image_count = 1;
 	} else if (segtype_is_raid10(new_segtype)) {
 		mirrors = 2;
@@ -3840,22 +3881,21 @@ PFL();
 PFLA("new_image_count=%u mirrors=%u", new_image_count, mirrors);
 
 
-	if (!(lv_name = _unique_lv_name(lv, "_src")))
+	if (!(lv_name = _unique_lv_name(lv, "_dsrc")))
 		return 0;
 
-	if (!(suffix = strstr(lv_name, "_src"))) {
+	if (!(suffix = strstr(lv_name, "_dsrc"))) {
 		log_error(INTERNAL_ERROR "Failed to find source prefix in source lv name %s", lv_name);
 		return 0;
 	}
 
-PFLA("lv_name=%s, suffix=%s", lv_name, suffix);
-	/* Insert src layer on top of source lv and set it to striped */
 	log_debug_metadata("Inserting layer lv on top of source LV %s", display_lvname(lv));
 	if (!(seg = _convert_lv_to_raid1(lv, suffix)))
 		return 0;
 	/* seg now is the first segment of the new raid1 top-level lv */
 PFL();
-	_rename_sub_lvs(seg_lv(seg, 0), "_rimage", "_src_imgimg", "_rmeta", "_src_metmd");
+	/* Rename soure lvs sub lvs */
+	_rename_sub_lvs(seg_lv(seg, 0), 1);
 
 PFLA("seg->area_count=%u", seg->area_count);
 PFLA("lv->name=%s seg_lv(seg, 0)=%s", lv->name, seg_lv(seg, 0)->name);
@@ -3863,7 +3903,7 @@ PFLA("lv->name=%s seg_lv(seg, 0)=%s", lv->name, seg_lv(seg, 0)->name);
 if (!vg_validate(lv->vg))
 	return 0;
 PFL();
-	if (!(lv_name = _unique_lv_name(lv, "_dst")))
+	if (!(lv_name = _unique_lv_name(lv, "_ddst")))
 		return 0;
 
 	/* Create the destination lv */
@@ -3874,7 +3914,8 @@ PFL();
 	}
 
 PFL();
-	_rename_sub_lvs(dst_lv, "_rimage", "_imgimg", "_rmeta", "_metmd");
+	/* Rename destination lvs sub lvs */
+	_rename_sub_lvs(dst_lv, 1);
 
 PFL();
 	/* Grow areas arrays for data devs to add destination lv */
@@ -4874,9 +4915,6 @@ TAKEOVER_FN(_r1_r0m)
 
 TAKEOVER_FN(_r1_r1) 
 {
-
-	if (_lv_is_duplicating(lv))
-		return _raid_conv_duplicate(lv, yes, force, new_segtype, new_image_count, new_stripe_size, 0, allocate_pvs);
 
 	return _raid145_raid1_raid6(lv, yes, force, new_segtype, new_image_count, 0, 0, allocate_pvs);
 }
