@@ -6476,7 +6476,7 @@ PFL();
 	 * Before removal, the layer should be cleaned up,
 	 * i.e. additional segments and areas should have been removed.
 	 */
-PFLA("segments=%u area_count=%u layer_lv!=%u pareant_lv->le_count=%u layer_lv->le_count=%u", dm_list_size(&parent_lv->segments), parent_seg->area_count, layer_lv != seg_lv(parent_seg, 0), parent_lv->le_count, layer_lv->le_count)
+PFLA("segments=%u area_count=%u layer_lv!=%u parent_lv->le_count=%u layer_lv->le_count=%u", dm_list_size(&parent_lv->segments), parent_seg->area_count, layer_lv != seg_lv(parent_seg, 0), parent_lv->le_count, layer_lv->le_count)
 	if (dm_list_size(&parent_lv->segments) != 1 ||
 	    parent_seg->area_count != 1 ||
 	    seg_type(parent_seg, 0) != AREA_LV ||

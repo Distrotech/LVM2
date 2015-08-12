@@ -163,6 +163,26 @@ static int _activate_sublv_preserving_excl(struct logical_volume *top_lv,
 /*
  * HM
  *
+ * Put @lv on @removal_lvs resetting it's raid image state
+ */
+static int _lv_reset_raid_add_to_list(struct logical_volume *lv, struct dm_list *removal_lvs)
+{
+	struct lv_list *lvl;
+
+	if (!(lvl = dm_pool_alloc(lv->vg->vgmem, sizeof(*lvl))))
+		return 0;
+
+	lvl->lv = lv;
+	lv->status &= ~(RAID | RAID_IMAGE);
+	lv_set_visible(lv);
+	dm_list_add(removal_lvs, &lvl->list);
+
+	return 1;
+}
+
+/*
+ * HM
+ *
  * Deactivate and remove the LVs on @removal_lvs list from @vg
  *
  * Returns 1 on success or 0 on failure
@@ -421,7 +441,6 @@ static int _extract_image_component_list(struct lv_segment *seg,
 static int _convert_raid_to_linear(struct logical_volume *lv,
 				   struct dm_list *removal_lvs)
 {
-	struct lv_list *lvl;
 	struct logical_volume *lv_tmp;
 	struct lv_segment *seg = first_seg(lv);
 
@@ -442,19 +461,14 @@ static int _convert_raid_to_linear(struct logical_volume *lv,
 		return 0;
 	}
 
-	if (!(lvl = dm_pool_alloc(lv->vg->vgmem, sizeof(*lvl))))
-		return_0;
-
 	if (seg->meta_areas &&
 	    !_extract_image_component_list(seg, RAID_META, 0 /* idx */, removal_lvs))
 		return 0;
 
 	/* Add remaining last image lv to removal_lvs */
 	lv_tmp = seg_lv(seg, 0);
-	lv_tmp->status &= ~RAID_IMAGE;
-	lv_set_visible(lv_tmp);
-	lvl->lv = lv_tmp;
-	dm_list_add(removal_lvs, &lvl->list);
+	if (!_lv_reset_raid_add_to_list(lv_tmp, removal_lvs))
+		return 0;
 
 	if (!remove_layer_from_lv(lv, lv_tmp))
 		return_0;
@@ -3764,27 +3778,25 @@ TAKEOVER_HELPER_FN(_raid_conv_duplicate)
 
 	if (segtype_is_linear(new_segtype))
 		new_image_count = 1;
-PFL();
-	/*
-	 * HM FIXME: check for destination lv present and remove source if 100% in-sync -or- remove destination
-	 * if not (i.e. cancel copy conversion)
-	 */
+
+	/* In case of conversion dulpication, remove top-level raid1 lv with source/destination legs */
 	if (_lv_is_duplicating(lv)) {
 		/*
-		 * If we get here once possible and the top-level raid1 is still synchronozing ->
-		 * withdraw the destination LV, else withdraw the source LV
+		 * If we get here and the top-level raid1 is still synchronozing ->
+		 *
+		 * withdraw the destination LV thus canceling the conversion duplication,
+		 * else withdraw the source LV
 		 */
 		uint32_t idx = _raid_in_sync(lv) ? 0 : 1;
 		struct dm_list removal_lvs;
-		struct lv_list lvl;
 		struct logical_volume *lv_del, *lv_tmp;
 		struct lv_segment *seg1;
+
+		dm_list_init(&removal_lvs);
 
 		if (idx)
 			log_warn("Keeping source lv %s", display_lvname(seg_lv(seg, 0)));
 
-		dm_list_init(&removal_lvs);
-PFL();
 		_rename_sub_lvs(seg_lv(seg, idx), 0);
 
 		/*
@@ -3805,18 +3817,18 @@ PFL();
 			seg->areas[0] = seg->areas[1];
 			seg->meta_areas[0] = seg->meta_areas[1];
 		}
-
 		seg->area_count = 1;
-PFL();
+
 		/* Add source/destination last image lv to removal_lvs */
-		lv_tmp = lvl.lv = seg_lv(seg, 0);
-		lv_tmp->status &= ~(RAID | RAID_IMAGE);
-		dm_list_add(&removal_lvs, &lvl.list);
+
+
+		lv_tmp = seg_lv(seg, 0);
+		if (!_lv_reset_raid_add_to_list(lv_tmp, &removal_lvs))
+			return 0;
 
 		/* Adjust size */
-		lv_tmp->le_count = lv->le_count = max(lv->le_count, lv_tmp->le_count);
-		lv_tmp->size = lv->size = lv->le_count * lv->vg->extent_size;
-		lv_set_visible(lv_tmp);
+		lv->le_count = max(lv->le_count, lv_tmp->le_count);
+		lv->size = lv->le_count * lv->vg->extent_size;
 
 PFLA("lv_tmp=%s", display_lvname(lv_tmp));
 PFL();
