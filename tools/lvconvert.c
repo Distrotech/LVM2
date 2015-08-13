@@ -1699,10 +1699,15 @@ static int _lvconvert_raid(struct logical_volume *lv, struct lvconvert_params *l
 	/* -m0 can change raid0 with one stripe and raid4/5 with 2 to linear */
 	if (arg_count(cmd, mirrors_ARG) &&
 	    !seg_is_linear(seg) &&
+#if 1
+	    !seg_is_raid(seg) &&
+	    !seg_is_mirrored(seg)) {
+#else
 	    !seg_is_mirrored(seg) &&
 	    !(seg_is_any_raid0(seg) && seg->area_count == 1) &&
 	    !(seg_is_raid4(seg) && seg->area_count == 2) &&
 	    !(seg_is_any_raid5(seg) && seg->area_count == 2)) {
+#endif
 		log_error("'--mirrors/-m' is not compatible with %s",
 			  lvseg_name(seg));
 		return 0;
