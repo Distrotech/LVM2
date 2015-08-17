@@ -1032,6 +1032,8 @@ int lv_is_cow_covering_origin(const struct logical_volume *lv);
 /* Test if given LV is visible from user's perspective */
 int lv_is_visible(const struct logical_volume *lv);
 
+int lv_is_dead(const struct logical_volume *lv);
+
 int pv_is_in_vg(struct volume_group *vg, struct physical_volume *pv);
 
 /* Given a cow or thin LV, return the snapshot lv_segment that uses it */
