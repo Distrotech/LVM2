@@ -1564,6 +1564,9 @@ static int _lvname_disp(struct dm_report *rh, struct dm_pool *mem,
 	char *repstr, *lvname;
 	size_t len;
 
+	if (lv_is_dead(lv))
+		return dm_report_field_string(rh, field, &lv->this_glv->dead->name);
+
 	if (lv_is_visible(lv))
 		return dm_report_field_string(rh, field, &lv->name);
 
@@ -1584,6 +1587,19 @@ static int _lvname_disp(struct dm_report *rh, struct dm_pool *mem,
 	}
 
 	return _field_set_value(field, repstr, lvname);
+}
+
+static int _lvnameremoved_disp(struct dm_report *rh, struct dm_pool *mem,
+			       struct dm_report_field *field,
+			       const void *data, void *private __attribute__((unused)))
+{
+	const struct logical_volume *lv = (const struct logical_volume *) data;
+	static const char *blank_name = "";
+
+	if (!lv_is_dead(lv))
+		return dm_report_field_string(rh, field, &blank_name);
+
+	return dm_report_field_string(rh, field, &lv->this_glv->dead->dname);
 }
 
 static int _lvfullname_disp(struct dm_report *rh, struct dm_pool *mem,
@@ -2199,6 +2215,26 @@ static int _uuid_disp(struct dm_report *rh __attribute__((unused)), struct dm_po
 	return _field_set_value(field, repstr, NULL);
 }
 
+static int _lvuuid_disp(struct dm_report *rh __attribute__((unused)), struct dm_pool *mem,
+			struct dm_report_field *field,
+			const void *data, void *private __attribute__((unused)))
+{
+	const struct logical_volume *lv = (const struct logical_volume *) data;
+	const struct generic_logical_volume *glv = lv->this_glv;
+	const union lvid *lvid;
+	char *repstr;
+
+	if (glv && glv->is_dead)
+		lvid = &glv->dead->lvid;
+	else
+		lvid = &lv->lvid;
+
+	if (!(repstr = id_format_and_copy(mem, &lvid->id[1])))
+		return_0;
+
+	return _field_set_value(field, repstr, NULL);
+}
+
 static int _pvuuid_disp(struct dm_report *rh __attribute__((unused)), struct dm_pool *mem,
 		        struct dm_report_field *field,
 		        const void *data, void *private __attribute__((unused)))
@@ -2561,14 +2597,31 @@ static int _lvtime_disp(struct dm_report *rh, struct dm_pool *mem,
 	char *repstr;
 	uint64_t *sortval;
 
-	if (!(repstr = lv_time_dup(mem, lv, 0)) ||
+	if (!(repstr = lv_creation_time_dup(mem, lv, 0)) ||
 	    !(sortval = dm_pool_alloc(mem, sizeof(uint64_t)))) {
 		log_error("Failed to allocate buffer for time.");
 		return 0;
 	}
 
-	*sortval = lv->timestamp;
+	*sortval = lv_is_dead(lv) ? lv->this_glv->dead->timestamp : lv->timestamp;
+	return _field_set_value(field, repstr, sortval);
+}
 
+static int _lvtimeremoved_disp(struct dm_report *rh, struct dm_pool *mem,
+			       struct dm_report_field *field,
+			       const void *data, void *private)
+{
+	const struct logical_volume *lv = (const struct logical_volume *) data;
+	char *repstr;
+	uint64_t *sortval;
+
+	if (!(repstr = lv_removal_time_dup(mem, lv, 0)) ||
+	    !(sortval = dm_pool_alloc(mem, sizeof(uint64_t)))) {
+		log_error("Failed to allocate buffer for time.");
+		return 0;
+	}
+
+	*sortval = lv_is_dead(lv) ? lv->this_glv->dead->timestamp_removed : 0;
 	return _field_set_value(field, repstr, sortval);
 }
 
