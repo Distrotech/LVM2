@@ -3578,7 +3578,7 @@ static struct logical_volume *_create_lv(struct volume_group *vg, const char *lv
 					 uint32_t region_size, uint32_t stripe_size,
 					 uint32_t extents, struct dm_list *pvs)
 {
-	uint64_t status = LVM_READ | LVM_WRITE;
+	uint64_t status = RAID_IMAGE |  LVM_READ | LVM_WRITE;
 	struct logical_volume *r;
 
 PFLA("lv_name=%s mirrors=%u stripes=%u", lv_name, mirrors, stripes);
@@ -3590,12 +3590,10 @@ PFLA("lv_name=%s mirrors=%u stripes=%u", lv_name, mirrors, stripes);
 	}
 
 #if 1
-	if (segtype_is_raid(segtype))
-		status |= (RAID | RAID_IMAGE);
-
-	else if (segtype_is_mirror(segtype)) {
+	if (segtype_is_mirror(segtype)) {
 		mirrors = stripes;
 		stripes = 1;
+		status &= ~RAID_IMAGE;
 		status |= MIRROR_IMAGE;
 	}
 #endif
@@ -3734,7 +3732,7 @@ static int _insert_layer_and_add_sub_lv(struct logical_volume *lv,
 static void _rename_lv(struct logical_volume *lv, const char *from, const char *to)
 {
 	size_t sz;
-	char *name = lv->name, *p;
+	char *name = (char *) lv->name, *p;
 
 	if (!(p = strstr(lv->name, from))) {
 		log_error(INTERNAL_ERROR "Fqiled to find %s in lv name %s", from, display_lvname(lv));
@@ -3780,10 +3778,9 @@ static void _rename_sub_lvs(struct logical_volume *lv, int to_dup)
 
 TAKEOVER_HELPER_FN(_raid_conv_duplicate)
 {
-	int i;
-	uint32_t extents, mirrors, region_size = 1024, s;
-	char *lv_name, *suffix, *tos, *tod;
-	struct logical_volume *dst_lv, *lv1;
+	uint32_t extents, mirrors, region_size = 1024;
+	char *lv_name, *suffix;
+	struct logical_volume *dst_lv;
 	struct lv_segment *seg = first_seg(lv);
 
 	if (!_yes_no_conversion(lv, new_segtype, yes, force, new_image_count, 0, 0))
@@ -3797,10 +3794,35 @@ TAKEOVER_HELPER_FN(_raid_conv_duplicate)
 		 * withdraw the destination LV thus canceling the conversion duplication,
 		 * else withdraw the source LV
 		 */
-		uint32_t idx = _raid_in_sync(lv) ? 0 : 1;
+		uint32_t idx;
 		struct dm_list removal_lvs;
-		struct logical_volume *lv_del, *lv_tmp;
-		struct lv_segment *seg1;
+		struct logical_volume *lv_tmp;
+		struct lv_segment *seg0 = first_seg(seg_lv(seg, 0));
+		struct lv_segment *seg1 = first_seg(seg_lv(seg, 1));
+
+		if (segtype_is_linear(new_segtype) &&
+		    !(new_segtype = get_segtype_from_string(lv->vg->cmd, SEG_TYPE_NAME_STRIPED)))
+			return_0;
+
+		if (seg0->segtype == new_segtype)
+			/* Keep source requested */
+			idx = 1;
+		else if (seg1->segtype == new_segtype)
+			/* Keep destination requested */
+			idx = 0;
+		else {
+			log_error("Wrong raid type %s requested", new_segtype->name);
+			log_error("Possible are either %s to keep the source or %s for the destination",
+				  seg0->segtype->name, seg1->segtype->name);
+			return 0;
+		}
+
+		/* Removing the source requires the destination to be fully in sync! */
+		if (!idx && !_raid_in_sync(lv)) {
+			log_error("Can't convert to destination when LV %s is not in sync",
+				  display_lvname(lv));
+			return 0;
+		}
 
 		dm_list_init(&removal_lvs);
 
@@ -3830,35 +3852,26 @@ TAKEOVER_HELPER_FN(_raid_conv_duplicate)
 		seg->area_count = 1;
 
 		/* Add source/destination last image lv to removal_lvs */
-
-
 		lv_tmp = seg_lv(seg, 0);
 		if (!_lv_reset_raid_add_to_list(lv_tmp, &removal_lvs))
 			return 0;
 
-		/* Adjust size */
+		/* Adjust size, because the 2 legs may differ caused by stripe rounding */
 		lv->le_count = max(lv->le_count, lv_tmp->le_count);
 		lv->size = lv->le_count * lv->vg->extent_size;
 
-PFLA("lv_tmp=%s", display_lvname(lv_tmp));
 		/* Remove the raid1 layer from the LV */
 		if (!remove_layer_from_lv(lv, lv_tmp))
 			return_0;
 
 		_rename_sub_lvs(lv, 0);
-PFL();
+
 		return _lv_update_and_reload_origin_eliminate_lvs(lv, &removal_lvs);
 	}
 
-#if 0
-	/* HM FIXME: do I care about source sync? */
-	if (!_raid_in_sync(lv)) {
-		log_error("Can't convert by duplication when source LV %s is not in sync", display_lvname(lv));
-		return 0;
-	}
-
-#endif
-	/* Creation of destination LV with intended layout and insertion of raid1 top-layer from here on */
+	/*
+	 * Creation of destination LV with intended layout and insertion of raid1 top-layer from here on
+	 */
 	new_image_count = new_image_count <= new_segtype->parity_devs ? 2 + new_segtype->parity_devs : new_image_count;
 	new_stripe_size = new_stripe_size ?: 64 * 2;
 	extents = lv->le_count;
@@ -3868,7 +3881,7 @@ PFLA("new_image_count=%u", new_image_count);
 	 * By default, prevent any PVs holding image components from
 	 * being used for allocation unless --force provided
 	 *
-	 * HM FIXME: If non-redundant destination requested -> set force?
+	 * HM FIXME: If non-redundant source/destination given/requested -> set force?
 	 */
 	if (!force &&
 	    !_avoid_pvs_with_other_images_of_lv(lv, allocate_pvs)) {
@@ -3884,7 +3897,7 @@ PFL();
 		new_image_count = 1;
 	} else if (segtype_is_raid10(new_segtype)) {
 		mirrors = 2;
-		// new_image_count /= 2;
+		new_image_count /= 2;
 	} else
 		mirrors = 1;
 
@@ -5179,8 +5192,10 @@ TAKEOVER_FN(_r6_r6)
 /* raid10 with 2 images -> linear */
 TAKEOVER_FN(_r10_l)
 {
-	return _lv_has_segments_with_n_areas(lv, 2) &&
-	       _raid14510_linear(lv, yes, force, NULL, 1, 0, 0, allocate_pvs);
+	if (first_seg(lv)->area_count != 2)
+		return _raid_conv_duplicate(lv, yes, force, new_segtype, new_image_count, new_stripe_size, 0, allocate_pvs);
+
+	return _raid14510_linear(lv, yes, force, NULL, 1, 0, 0, allocate_pvs);
 }
 
 /* raid10 -> raid0* */
@@ -5189,6 +5204,9 @@ TAKEOVER_FN(_r10_s)
 	struct dm_list removal_lvs;
 
 	dm_list_init(&removal_lvs);
+
+	if (first_seg(lv)->area_count != 2)
+		return _raid_conv_duplicate(lv, yes, force, new_segtype, new_image_count, new_stripe_size, 0, allocate_pvs);
 
 	return _raid10_striped_r0(lv, yes, 0, new_segtype, first_seg(lv)->area_count / 2, 0, 0, allocate_pvs, &removal_lvs);
 }
@@ -5347,7 +5365,7 @@ int lv_raid_convert(struct logical_volume *lv,
 		    struct dm_list *allocate_pvs)
 {
 	uint32_t stripes, stripe_size;
-	struct lv_segment *seg = first_seg(lv), *seg1;
+	struct lv_segment *seg = first_seg(lv);
 	struct segment_type *new_segtype_tmp = (struct segment_type *) new_segtype;
 	struct segment_type *striped_segtype;
 	struct dm_list removal_lvs;
@@ -5378,7 +5396,7 @@ int lv_raid_convert(struct logical_volume *lv,
 
 	/* Define new image count if not passed in */
 	new_image_count = new_image_count ?: seg->area_count;
-PFLA("new_segtype=%s new_image_count=%u segtype=%s, seg->area_count=%u", new_segtype->name, new_image_count, seg->segtype->name, seg->area_count);
+PFLA("new_segtype=%s new_image_count=%u new_stripes=%u segtype=%s, seg->area_count=%u", new_segtype->name, new_image_count, new_stripes, seg->segtype->name, seg->area_count);
 
 	if (!_check_max_raid_devices(new_image_count))
 		return 0;
@@ -5452,6 +5470,7 @@ PFLA("new_segtype=%s new_image_count=%u new_stripes=%u stripes=%u", new_segtype-
 
 PFLA("new_segtype=%s new_image_count=%u new_stripes=%u stripes=%u", new_segtype->name, new_image_count, new_stripes, stripes);
 
+	/* Catch any active duplicating conversions early */
 	if (_lv_is_duplicating(lv)) {
 		if (!_raid_conv_duplicate(lv, yes, force, new_segtype, new_image_count, new_stripe_size, 0, allocate_pvs)) {
 			_log_possible_conversion_types(lv);
