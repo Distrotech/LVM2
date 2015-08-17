@@ -1561,27 +1561,36 @@ static int _lvname_disp(struct dm_report *rh, struct dm_pool *mem,
 			const void *data, void *private __attribute__((unused)))
 {
 	const struct logical_volume *lv = (const struct logical_volume *) data;
+	int is_dead = lv_is_dead(lv);
+	const char *tmp_lvname;
 	char *repstr, *lvname;
 	size_t len;
 
-	if (lv_is_dead(lv))
-		return dm_report_field_string(rh, field, &lv->this_glv->dead->name);
-
-	if (lv_is_visible(lv))
+	if (lv_is_visible(lv) && !is_dead)
 		return dm_report_field_string(rh, field, &lv->name);
 
-	len = strlen(lv->name) + 3;
+	tmp_lvname = is_dead ? lv->this_glv->dead->name : lv->name;
+
+	if (is_dead)
+		len = strlen(tmp_lvname) + strlen(DEAD_LV_PREFIX) + 1;
+	else
+		len = strlen(tmp_lvname) + 3;
 	if (!(repstr = dm_pool_zalloc(mem, len))) {
 		log_error("dm_pool_alloc failed");
 		return 0;
 	}
 
-	if (dm_snprintf(repstr, len, "[%s]", lv->name) < 0) {
+	if (dm_snprintf(repstr, len, "%s%s%s",
+			is_dead ? DEAD_LV_PREFIX : "[",
+			tmp_lvname,
+			is_dead ? "" : "]") < 0) {
 		log_error("lvname snprintf failed");
 		return 0;
 	}
 
-	if (!(lvname = dm_pool_strdup(mem, lv->name))) {
+	if (is_dead)
+		lvname = repstr;
+	else if (!(lvname = dm_pool_strdup(mem, tmp_lvname))) {
 		log_error("dm_pool_strdup failed");
 		return 0;
 	}
@@ -1595,11 +1604,26 @@ static int _lvnameremoved_disp(struct dm_report *rh, struct dm_pool *mem,
 {
 	const struct logical_volume *lv = (const struct logical_volume *) data;
 	static const char *blank_name = "";
+	const char *dead_lvname;
+	char *repstr;
+	size_t len;
 
 	if (!lv_is_dead(lv))
 		return dm_report_field_string(rh, field, &blank_name);
 
-	return dm_report_field_string(rh, field, &lv->this_glv->dead->dname);
+	dead_lvname = lv->this_glv->dead->dname;
+	len = strlen(dead_lvname) + strlen(DEAD_LV_PREFIX) + 1;
+	if (!(repstr = dm_pool_zalloc(mem, len))) {
+		log_error("dm_pool_alloc failed");
+		return 0;
+	}
+
+	if (dm_snprintf(repstr, len, "%s%s", DEAD_LV_PREFIX, dead_lvname) < 0) {
+		log_error("lvnameremoved snprintf failed");
+		return 0;
+	}
+
+	return _field_set_value(field, repstr, repstr);
 }
 
 static int _lvfullname_disp(struct dm_report *rh, struct dm_pool *mem,
