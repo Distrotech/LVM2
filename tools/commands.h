@@ -669,6 +669,7 @@ xx(lvs,
    "\t[-O|--sort [+|-]key1[,[+|-]key2[,...]]]\n"
    "\t[-P|--partial]\n"
    "\t[--readonly]\n"
+   "\t[-r|--removed]\n"
    "\t[--rows]\n"
    "\t[--segments]\n"
    "\t[-S|--select Selection]\n"
@@ -684,8 +685,9 @@ xx(lvs,
    aligned_ARG, all_ARG, binary_ARG, foreign_ARG, ignorelockingfailure_ARG,
    ignoreskippedcluster_ARG, nameprefixes_ARG, noheadings_ARG,
    nolocking_ARG, nosuffix_ARG, options_ARG, partial_ARG,
-   readonly_ARG, rows_ARG, segments_ARG, select_ARG, separator_ARG, shared_ARG,
-   sort_ARG, trustcache_ARG, unbuffered_ARG, units_ARG, unquoted_ARG)
+   readonly_ARG, removed_ARG, rows_ARG, segments_ARG, select_ARG,
+   separator_ARG, shared_ARG, sort_ARG, trustcache_ARG, unbuffered_ARG,
+   units_ARG, unquoted_ARG)
 
 xx(lvscan,
    "List all logical volumes in all volume groups",
