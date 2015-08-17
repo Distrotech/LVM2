@@ -2075,6 +2075,32 @@ out:
 	return ret;
 }
 
+static struct dm_str_list *_str_list_match_item_with_prefix(const struct dm_list *sll, const char *prefix, const char *str)
+{
+	struct dm_str_list *sl;
+	size_t prefix_len = strlen(prefix);
+
+	dm_list_iterate_items(sl, sll) {
+		if (!strncmp(prefix, sl->str, prefix_len) &&
+		    !strcmp(sl->str + prefix_len, str))
+			return sl;
+	}
+
+	return NULL;
+}
+
+static struct logical_volume _dummy_lv = {
+	.name = "",
+	.major = -1,
+	.minor = -1,
+	.snapshot_segs = DM_LIST_HEAD_INIT(_dummy_lv.snapshot_segs),
+	.segments = DM_LIST_HEAD_INIT(_dummy_lv.segments),
+	.tags = DM_LIST_HEAD_INIT(_dummy_lv.tags),
+	.segs_using_this_lv = DM_LIST_HEAD_INIT(_dummy_lv.segs_using_this_lv),
+	.indirect_users = DM_LIST_HEAD_INIT(_dummy_lv.indirect_users),
+	.hostname = "",
+};
+
 int process_each_lv_in_vg(struct cmd_context *cmd, struct volume_group *vg,
 			  struct dm_list *arg_lvnames, const struct dm_list *tags_in,
 			  int stop_on_error,
@@ -2094,6 +2120,7 @@ int process_each_lv_in_vg(struct cmd_context *cmd, struct volume_group *vg,
 	struct dm_str_list *sl;
 	struct dm_list final_lvs;
 	struct lv_list *final_lvl;
+	struct glv_list *glvl, *tglvl;
 
 	dm_list_init(&final_lvs);
 
@@ -2229,6 +2256,44 @@ int process_each_lv_in_vg(struct cmd_context *cmd, struct volume_group *vg,
 
 		if (stop_on_error && ret != ECMD_PROCESSED)
 			goto_out;
+	}
+
+	if (handle->include_dead_entities && !tags_supplied) {
+		_dummy_lv.vg = vg;
+		dm_list_iterate_items_safe(glvl, tglvl, &vg->dead_lvs) {
+			process_lv = process_all;
+
+			if (lvargs_supplied &&
+			    (sl = _str_list_match_item_with_prefix(arg_lvnames, DEAD_LV_PREFIX, glvl->glv->dead->dname))) {
+				str_list_del(arg_lvnames, glvl->glv->dead->dname);
+				dm_list_del(&sl->list);
+				process_lv = 1;
+			}
+
+			process_lv = process_lv && select_match_lv(cmd, handle, vg, lvl->lv, &selected) && selected;
+
+			if (sigint_caught()) {
+				ret_max = ECMD_FAILED;
+				goto_out;
+			}
+
+			if (!process_lv)
+				continue;
+
+			_dummy_lv.this_glv = glvl->glv;
+			log_very_verbose("Processing dead LV %s in VG %s.", glvl->glv->dead->name, vg->name);
+
+			ret = process_single_lv(cmd, &_dummy_lv, handle);
+			if (handle_supplied)
+				_update_selection_result(handle, &whole_selected);
+			if (ret != ECMD_PROCESSED)
+				stack;
+			if (ret > ret_max)
+				ret_max = ret;
+
+			if (stop_on_error && ret != ECMD_PROCESSED)
+				goto_out;
+		}
 	}
 
 	if (lvargs_supplied) {
