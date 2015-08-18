@@ -3887,7 +3887,7 @@ static int _clear_metadata(struct logical_volume *lv)
  * the "raid0" personality does not utilize a bitmap.
  */
 static uint64_t max_raid_bitmap_entries = 1 << 21;
-inline uint64_t _max_lv_size_for_region_size(uint32_t region_size)
+static inline uint64_t _max_lv_size_for_region_size(uint32_t region_size)
 {
 	return max_raid_bitmap_entries * region_size;
 }
