@@ -5363,6 +5363,26 @@ char *generate_lv_name(struct volume_group *vg, const char *format,
 	return buffer;
 }
 
+char *generate_dead_lv_name(struct volume_group *vg, const char *format,
+			    char *buffer, size_t len)
+{
+	struct glv_list *glvl;
+	int high = -1, i;
+
+	dm_list_iterate_items(glvl, &vg->dead_lvs) {
+		if (sscanf(glvl->glv->dead->dname, format, &i) != 1)
+			continue;
+
+		if (i > high)
+			high = i;
+	}
+
+	if (dm_snprintf(buffer, len, format, high + 1) < 0)
+		return NULL;
+
+	return buffer;
+}
+
 int vg_max_lv_reached(struct volume_group *vg)
 {
 	if (!vg->max_lv)
