@@ -1845,33 +1845,69 @@ static int _lvfullancestors_disp(struct dm_report *rh, struct dm_pool *mem,
 }
 
 static int _find_descendants(struct _str_list_append_baton *descendants,
-			     struct logical_volume *lv)
+			     struct generic_logical_volume glv,
+			     int full, int include_dead_lvs)
 {
-	struct logical_volume *descendant_lv = NULL;
 	const struct seg_list *sl;
 	struct lv_segment *seg;
+	struct glv_list *glvl;
+	struct dm_list *list;
+	const char *descendant_str;
+	char buf[64];
 
-	if (lv_is_origin(lv)) {
-		dm_list_iterate_items_gen(seg, &lv->snapshot_segs, origin_list) {
-			if ((descendant_lv = seg->cow)) {
-				if (!_str_list_append(descendant_lv->name, descendants))
+	if (glv.is_dead) {
+		if (full) {
+			list = &glv.dead->indirect_users;
+			dm_list_iterate_items(glvl, list) {
+				if (!glvl->glv->is_dead || include_dead_lvs) {
+					if (!(descendant_str = _get_glv_str(buf, sizeof(buf), glvl->glv)))
+						return_0;
+					if (!_str_list_append(descendant_str, descendants))
+						return_0;
+				}
+				if (!_find_descendants(descendants, *glvl->glv, full, include_dead_lvs))
 					return_0;
-				if (!_find_descendants(descendants, descendant_lv))
+			}
+		}
+	} else if (lv_is_origin(glv.live)) {
+		list = &glv.live->snapshot_segs;
+		dm_list_iterate_items_gen(seg, list, origin_list) {
+			if ((glv.live = seg->cow)) {
+				if (!(descendant_str = _get_glv_str(buf, sizeof(buf), &glv)))
+					return_0;
+				if (!_str_list_append(descendant_str, descendants))
+					return_0;
+				if (!_find_descendants(descendants, glv, full, include_dead_lvs))
 					return_0;
 			}
 		}
 	} else {
-		dm_list_iterate_items(sl, &lv->segs_using_this_lv) {
+		list = &glv.live->segs_using_this_lv;
+		dm_list_iterate_items(sl, list) {
 			if (lv_is_thin_volume(sl->seg->lv)) {
 				seg = first_seg(sl->seg->lv);
-				if ((seg->origin == lv) || (seg->external_lv == lv))
-					descendant_lv = sl->seg->lv;
+				if ((seg->origin == glv.live) || (seg->external_lv == glv.live)) {
+					glv.live = sl->seg->lv;
+					if (!(descendant_str = _get_glv_str(buf, sizeof(buf), &glv)))
+						return_0;
+					if (!_str_list_append(descendant_str, descendants))
+						return_0;
+					if (!_find_descendants(descendants, glv, full, include_dead_lvs))
+						return_0;
+				}
 			}
+		}
 
-			if (descendant_lv) {
-				if (!_str_list_append(descendant_lv->name, descendants))
-					return_0;
-				if (!_find_descendants(descendants, descendant_lv))
+		if (full) {
+			list = &glv.live->indirect_users;
+			dm_list_iterate_items(glvl, list) {
+				if (!glvl->glv->is_dead || include_dead_lvs) {
+					if (!(descendant_str = _get_glv_str(buf, sizeof(buf), glvl->glv)))
+						return_0;
+					if (!_str_list_append(descendant_str, descendants))
+						return_0;
+				}
+				if (!_find_descendants(descendants, *glvl->glv, full, include_dead_lvs))
 					return_0;
 			}
 		}
@@ -1884,14 +1920,47 @@ static int _lvdescendants_disp(struct dm_report *rh, struct dm_pool *mem,
 			     struct dm_report_field *field,
 			     const void *data, void *private)
 {
+	struct cmd_context *cmd = (struct cmd_context *) private;
 	struct logical_volume *lv = (struct logical_volume *) data;
 	struct _str_list_append_baton descendants;
+	struct generic_logical_volume glv;
 
 	descendants.mem = mem;
 	if (!(descendants.result = str_list_create(mem)))
 		return_0;
 
-	if (!_find_descendants(&descendants, lv)) {
+	if ((glv.is_dead = lv_is_dead(lv)))
+		glv.dead = lv->this_glv->dead;
+	else
+		glv.live = lv;
+
+	if (!_find_descendants(&descendants, glv, 0, cmd->include_dead_entities)) {
+		dm_pool_free(descendants.mem, descendants.result);
+		return_0;
+	}
+
+	return _field_set_string_list(rh, field, descendants.result, private, 0);
+}
+
+static int _lvfulldescendants_disp(struct dm_report *rh, struct dm_pool *mem,
+				   struct dm_report_field *field,
+				   const void *data, void *private)
+{
+	struct cmd_context *cmd = (struct cmd_context *) private;
+	struct logical_volume *lv = (struct logical_volume *) data;
+	struct _str_list_append_baton descendants;
+	struct generic_logical_volume glv;
+
+	descendants.mem = mem;
+	if (!(descendants.result = str_list_create(mem)))
+		return_0;
+
+	if ((glv.is_dead = lv_is_dead(lv)))
+		glv.dead = lv->this_glv->dead;
+	else
+		glv.live = lv;
+
+	if (!_find_descendants(&descendants, glv, 1, cmd->include_dead_entities)) {
 		dm_pool_free(descendants.mem, descendants.result);
 		return_0;
 	}
