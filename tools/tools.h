@@ -16,18 +16,15 @@
 #ifndef _LVM_TOOLS_H
 #define _LVM_TOOLS_H
 
-#define _GNU_SOURCE
-#define _FILE_OFFSET_BITS 64
-
-#include "configure.h"
-#include <assert.h>
-#include "libdevmapper.h"
+#include "tool.h"
 
 #include "lvm-logging.h"
+
 #include "activate.h"
 #include "archiver.h"
 #include "lvmcache.h"
 #include "lvmetad.h"
+#include "lvmlockd.h"
 #include "lvm-version.h"
 #include "config.h"
 #include "defaults.h"
@@ -46,11 +43,7 @@
 #include "toolcontext.h"
 #include "toollib.h"
 
-#include <stdlib.h>
-#include <unistd.h>
 #include <ctype.h>
-#include <limits.h>
-#include <stdarg.h>
 #include <sys/types.h>
 
 #define CMD_LEN 256
@@ -108,8 +101,10 @@ struct arg_value_group_list {
 #define ENABLE_ALL_DEVS		0x00000008	
 /* Exactly one VG name argument required. */
 #define ONE_VGNAME_ARG		0x00000010
-/* Command is allowed to read foreign VGs. */
-#define ENABLE_FOREIGN_VGS	0x00000020
+/* Command needs a shared lock on a VG; it only reads the VG. */
+#define LOCKD_VG_SH		0x00000020
+/* Command does not process any metadata. */
+#define NO_METADATA_PROCESSING	0x00000040
  
 /* a register of the lvm commands */
 struct command {
@@ -146,6 +141,7 @@ int metadatatype_arg(struct cmd_context *cmd, struct arg_values *av);
 int units_arg(struct cmd_context *cmd, struct arg_values *av);
 int segtype_arg(struct cmd_context *cmd, struct arg_values *av);
 int alloc_arg(struct cmd_context *cmd, struct arg_values *av);
+int locktype_arg(struct cmd_context *cmd, struct arg_values *av);
 int readahead_arg(struct cmd_context *cmd, struct arg_values *av);
 int metadatacopies_arg(struct cmd_context *cmd __attribute__((unused)), struct arg_values *av);
 

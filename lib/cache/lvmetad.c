@@ -22,6 +22,7 @@
 #include "format-text.h" // TODO for disk_locn, used as a DA representation
 #include "crc.h"
 #include "lvm-signal.h"
+#include "lvmlockd.h"
 
 #define SCAN_TIMEOUT_SECONDS	80
 #define MAX_RESCANS		10	/* Maximum number of times to scan all PVs and retry if the daemon returns a token mismatch error */
@@ -33,6 +34,8 @@ static int _lvmetad_connected = 0;
 static char *_lvmetad_token = NULL;
 static const char *_lvmetad_socket = NULL;
 static struct cmd_context *_lvmetad_cmd = NULL;
+
+static struct volume_group *lvmetad_pvscan_vg(struct cmd_context *cmd, struct volume_group *vg);
 
 void lvmetad_disconnect(void)
 {
@@ -145,7 +148,7 @@ static int _lvmetad_pvscan_all_devs(struct cmd_context *cmd, activation_handler 
 static daemon_reply _lvmetad_send(const char *id, ...)
 {
 	va_list ap;
-	daemon_reply repl;
+	daemon_reply repl = { 0 };
 	daemon_request req;
 	unsigned num_rescans = 0;
 	unsigned total_usecs_waited = 0;
@@ -155,8 +158,10 @@ static daemon_reply _lvmetad_send(const char *id, ...)
 retry:
 	req = daemon_request_make(id);
 
-	if (_lvmetad_token)
-		daemon_request_extend(req, "token = %s", _lvmetad_token, NULL);
+	if (_lvmetad_token && !daemon_request_extend(req, "token = %s", _lvmetad_token, NULL)) {
+		repl.error = ENOMEM;
+		return repl;
+	}
 
 	va_start(ap, id);
 	daemon_request_extend_v(req, ap);
@@ -417,6 +422,7 @@ static int _pv_update_struct_pv(struct physical_volume *pv, struct format_instan
 struct volume_group *lvmetad_vg_lookup(struct cmd_context *cmd, const char *vgname, const char *vgid)
 {
 	struct volume_group *vg = NULL;
+	struct volume_group *vg2 = NULL;
 	daemon_reply reply;
 	int found;
 	char uuid[64];
@@ -483,8 +489,20 @@ struct volume_group *lvmetad_vg_lookup(struct cmd_context *cmd, const char *vgna
 				_pv_populate_lvmcache(cmd, pvcn, fmt, 0);
 
 		top->key = name;
-		if (!(vg = import_vg_from_config_tree(reply.cft, fid)))
+		if (!(vg = import_vg_from_lvmetad_config_tree(reply.cft, fid)))
 			goto_out;
+
+		/*
+		 * locking may have detected a newer vg version and
+		 * invalidated the cached vg.
+		 */
+		if (dm_config_find_node(reply.cft->root, "vg_invalid")) {
+			log_debug_lvmetad("Update invalid lvmetad cache for VG %s", vgname);
+			vg2 = lvmetad_pvscan_vg(cmd, vg);
+			release_vg(vg);
+			vg = vg2;
+			fid = vg->fid;
+		}
 
 		dm_list_iterate_items(pvl, &vg->pvs) {
 			if (!_pv_update_struct_pv(pvl->pv, fid)) {
@@ -934,6 +952,51 @@ int lvmetad_pv_found(const struct id *pvid, struct device *dev, const struct for
 	     daemon_reply_int(reply, "seqno_after", -1) != daemon_reply_int(reply, "seqno_before", -1)))
 		log_warn("WARNING: Inconsistent metadata found for VG %s", vg->name);
 
+	/*
+	 * pvscan --cache does not perform any lvmlockd locking, and
+	 * pvscan --cache -aay skips autoactivation in lockd VGs.
+	 *
+	 * pvscan --cache populates lvmetad with VG metadata from disk.
+	 * No lvmlockd locking is needed.  It is expected that lockd VG
+	 * metadata that is read by pvscan and populated in lvmetad may
+	 * be immediately stale due to changes to the VG from other hosts
+	 * during or after this pvscan.  This is normal and not a problem.
+	 * When a subsequent lvm command uses the VG, it will lock the VG
+	 * with lvmlockd, read the VG from lvmetad, and update the cached
+	 * copy from disk if necessary.
+	 *
+	 * pvscan --cache -aay does not activate LVs in lockd VGs because
+	 * activation requires locking, and a lock-start operation is needed
+	 * on a lockd VG before any locking can be performed in it.
+	 *
+	 * An equivalent of pvscan --cache -aay for lockd VGs is:
+	 * 1. pvscan --cache
+	 * 2. vgchange --lock-start
+	 * 3. vgchange -aay -S 'locktype=sanlock || locktype=dlm'
+	 *
+	 * [We could eventually add support for autoactivating lockd VGs
+	 * using pvscan by incorporating the lock start step (which can
+	 * take a long time), but there may be a better option than
+	 * continuing to overload pvscan.]
+	 * 
+	 * Stages of starting a lockd VG:
+	 *
+	 * . pvscan --cache populates lockd VGs in lvmetad without locks,
+	 *   and this initial cached copy may quickly become stale.
+	 *
+	 * . vgchange --lock-start VG reads the VG without the VG lock
+	 *   because no locks are available until the locking is started.
+	 *   It only uses the VG name and lock_type from the VG metadata,
+	 *   and then only uses it to start the VG lockspace in lvmlockd.
+	 *
+	 * . Further lvm commands, e.g. activation, can then lock the VG
+	 *   with lvmlockd and use current VG metdata.
+	 */
+	if (handler && vg && is_lockd_type(vg->lock_type)) {
+		log_debug_lvmetad("Skip pvscan activation for lockd type VG %s", vg->name);
+		handler = NULL;
+	}
+
 	if (result && handler) {
 		status = daemon_reply_str(reply, "status", "<missing>");
 		vgname = daemon_reply_str(reply, "vgname", "<missing>");
@@ -1001,7 +1064,8 @@ static int _lvmetad_pvscan_single(struct metadata_area *mda, void *baton)
 	struct _lvmetad_pvscan_baton *b = baton;
 	struct volume_group *this;
 
-	this = mda_is_ignored(mda) ? NULL : mda->ops->vg_read(b->fid, "", mda, NULL, NULL, 1);
+	if (!(this = mda_is_ignored(mda) ? NULL : mda->ops->vg_read(b->fid, "", mda, NULL, NULL, 1)))
+		return 1;
 
 	/* FIXME Also ensure contents match etc. */
 	if (!b->vg || this->seqno > b->vg->seqno)
@@ -1010,6 +1074,100 @@ static int _lvmetad_pvscan_single(struct metadata_area *mda, void *baton)
 		release_vg(this);
 
 	return 1;
+}
+
+/*
+ * The lock manager may detect that the vg cached in lvmetad is out of date,
+ * due to something like an lvcreate from another host.
+ * This is limited to changes that only affect the vg (not global state like
+ * orphan PVs), so we only need to reread mdas on the vg's existing pvs.
+ */
+
+static struct volume_group *lvmetad_pvscan_vg(struct cmd_context *cmd, struct volume_group *vg)
+{
+	struct volume_group *vg_ret = NULL;
+	struct dm_config_tree *vgmeta_ret = NULL;
+	struct dm_config_tree *vgmeta;
+	struct pv_list *pvl;
+	struct lvmcache_info *info;
+	struct format_instance *fid;
+	struct format_instance_ctx fic = { .type = 0 };
+	struct _lvmetad_pvscan_baton baton;
+
+	dm_list_iterate_items(pvl, &vg->pvs) {
+		/* missing pv */
+		if (!pvl->pv->dev)
+			continue;
+
+		if (!(info = lvmcache_info_from_pvid((const char *)&pvl->pv->id, 0))) {
+			log_error("Failed to find cached info for PV %s.", pv_dev_name(pvl->pv));
+			return NULL;
+		}
+
+		baton.vg = NULL;
+		baton.fid = lvmcache_fmt(info)->ops->create_instance(lvmcache_fmt(info), &fic);
+
+		if (!baton.fid)
+			return NULL;
+
+		if (baton.fid->fmt->features & FMT_OBSOLETE) {
+			log_error("WARNING: Ignoring obsolete format of metadata (%s) on device %s when using lvmetad",
+			  	baton.fid->fmt->name, dev_name(pvl->pv->dev));
+			lvmcache_fmt(info)->ops->destroy_instance(baton.fid);
+			return NULL;
+		}
+
+		lvmcache_foreach_mda(info, _lvmetad_pvscan_single, &baton);
+
+		if (!baton.vg) {
+			lvmcache_fmt(info)->ops->destroy_instance(baton.fid);
+			return NULL;
+		}
+
+		if (!(vgmeta = export_vg_to_config_tree(baton.vg))) {
+			log_error("VG export to config tree failed");
+			release_vg(baton.vg);
+			return NULL;
+		}
+
+		if (!vgmeta_ret) {
+			vgmeta_ret = vgmeta;
+		} else {
+			if (!compare_config(vgmeta_ret->root, vgmeta->root)) {
+				log_error("VG metadata comparison failed");
+				dm_config_destroy(vgmeta);
+				dm_config_destroy(vgmeta_ret);
+				release_vg(baton.vg);
+				return NULL;
+			}
+			dm_config_destroy(vgmeta);
+		}
+
+		release_vg(baton.vg);
+	}
+
+	if (vgmeta_ret) {
+		fid = lvmcache_fmt(info)->ops->create_instance(lvmcache_fmt(info), &fic);
+		if (!(vg_ret = import_vg_from_config_tree(vgmeta_ret, fid))) {
+			log_error("VG import from config tree failed");
+			lvmcache_fmt(info)->ops->destroy_instance(fid);
+			goto out;
+		}
+
+		/*
+		 * Update lvmetad with the newly read version of the VG.
+		 * The "precommitted" name is a misnomer in this case,
+		 * but that is the field which lvmetad_vg_update() uses
+		 * to send the metadata cft to lvmetad.
+		 */
+		vg_ret->cft_precommitted = vgmeta_ret;
+		if (!lvmetad_vg_update(vg_ret))
+			log_error("Failed to update lvmetad with new VG meta");
+		vg_ret->cft_precommitted = NULL;
+		dm_config_destroy(vgmeta_ret);
+	}
+out:
+	return vg_ret;
 }
 
 int lvmetad_pvscan_single(struct cmd_context *cmd, struct device *dev,
@@ -1160,4 +1318,328 @@ int lvmetad_pvscan_all_devs(struct cmd_context *cmd, activation_handler handler)
 int lvmetad_pvscan_foreign_vgs(struct cmd_context *cmd, activation_handler handler)
 {
 	return _lvmetad_pvscan_all_devs(cmd, handler, 1);
+}
+
+int lvmetad_vg_clear_outdated_pvs(struct volume_group *vg)
+{
+	char uuid[64];
+	daemon_reply reply;
+	int result;
+
+	if (!id_write_format(&vg->id, uuid, sizeof(uuid)))
+		return_0;
+
+	reply = _lvmetad_send("vg_clear_outdated_pvs", "vgid = %s", uuid, NULL);
+	result = _lvmetad_handle_reply(reply, "clear the list of outdated PVs", vg->name, NULL);
+	daemon_reply_destroy(reply);
+
+	return result;
+}
+
+/*
+ * Records the state of cached PVs in lvmetad so we can look for changes
+ * after rescanning.
+ */
+struct pv_cache_list {
+	struct dm_list list;
+	dev_t devt;
+	struct id pvid;
+	const char *vgid;
+	unsigned found : 1;
+	unsigned update_udev : 1;
+};
+
+/*
+ * Get the list of PVs known to lvmetad.
+ */
+static int _lvmetad_get_pv_cache_list(struct cmd_context *cmd, struct dm_list *pvc_list)
+{
+	daemon_reply reply;
+	struct dm_config_node *cn;
+	struct pv_cache_list *pvcl;
+	const char *pvid_txt;
+	const char *vgid;
+
+	if (!lvmetad_active())
+		return 1;
+
+	log_debug_lvmetad("Asking lvmetad for complete list of known PVs");
+	reply = _lvmetad_send("pv_list", NULL);
+	if (!_lvmetad_handle_reply(reply, "list PVs", "", NULL)) {
+		log_error("lvmetad message failed.");
+		daemon_reply_destroy(reply);
+		return_0;
+	}
+
+	if ((cn = dm_config_find_node(reply.cft->root, "physical_volumes"))) {
+		for (cn = cn->child; cn; cn = cn->sib) {
+			if (!(pvcl = dm_pool_zalloc(cmd->mem, sizeof(*pvcl)))) {
+				log_error("pv_cache_list allocation failed.");
+				return 0;
+			}
+
+			pvid_txt = cn->key;
+			if (!id_read_format(&pvcl->pvid, pvid_txt)) {
+				stack;
+				continue;
+			}
+
+			pvcl->devt = dm_config_find_int(cn->child, "device", 0);
+
+			if ((vgid = dm_config_find_str(cn->child, "vgid", NULL)))
+				pvcl->vgid = dm_pool_strdup(cmd->mem, vgid);
+
+			dm_list_add(pvc_list, &pvcl->list);
+		}
+	}
+
+	daemon_reply_destroy(reply);
+
+	return 1;
+}
+
+/*
+ * Opening the device RDWR should trigger a udev db update.
+ * FIXME: is there a better way to update the udev db than
+ * doing an open/close of the device? - For example writing
+ * "change" to /sys/block/<device>/uevent?
+ */
+static void _update_pv_in_udev(struct cmd_context *cmd, dev_t devt)
+{
+	struct device *dev;
+
+	log_debug_devs("device %d:%d open to update udev",
+		       (int)MAJOR(devt), (int)MINOR(devt));
+
+	if (!(dev = dev_cache_get_by_devt(devt, cmd->lvmetad_filter))) {
+		log_error("_update_pv_in_udev no dev found");
+		return;
+	}
+
+	if (!dev_open(dev)) {
+		stack;
+		return;
+	}
+
+	if (!dev_close(dev))
+		stack;
+}
+
+/*
+ * Compare before and after PV lists from before/after rescanning,
+ * and update udev db for changes.
+ *
+ * For PVs that have changed pvid or vgid in lvmetad from rescanning,
+ * there may be information in the udev database to update, so open
+ * these devices to trigger a udev update.
+ *
+ * "before" refers to the list of pvs from lvmetad before rescanning
+ * "after" refers to the list of pvs from lvmetad after rescanning
+ *
+ * Comparing both lists, we can see which PVs changed (pvid or vgid),
+ * and trigger a udev db update for those.
+ */
+static void _update_changed_pvs_in_udev(struct cmd_context *cmd,
+					struct dm_list *pvc_before,
+					struct dm_list *pvc_after)
+{
+	struct pv_cache_list *before;
+	struct pv_cache_list *after;
+	char id_before[ID_LEN + 1]  __attribute__((aligned(8)));
+	char id_after[ID_LEN + 1]  __attribute__((aligned(8)));
+	int found;
+
+	dm_list_iterate_items(before, pvc_before) {
+		found = 0;
+
+		dm_list_iterate_items(after, pvc_after) {
+			if (after->found)
+				continue;
+
+			if (before->devt != after->devt)
+				continue;
+
+			if (!id_equal(&before->pvid, &after->pvid)) {
+				memset(id_before, 0, sizeof(id_before));
+				memset(id_after, 0, sizeof(id_after));
+				strncpy(&id_before[0], (char *) &before->pvid, sizeof(id_before) - 1);
+				strncpy(&id_after[0], (char *) &after->pvid, sizeof(id_after) - 1);
+
+				log_debug_devs("device %d:%d changed pvid from %s to %s",
+					       (int)MAJOR(before->devt), (int)MINOR(before->devt),
+					       id_before, id_after);
+
+				before->update_udev = 1;
+
+			} else if ((before->vgid && !after->vgid) ||
+				   (after->vgid && !before->vgid) ||
+				   (before->vgid && after->vgid && strcmp(before->vgid, after->vgid))) {
+
+				log_debug_devs("device %d:%d changed vg from %s to %s",
+					       (int)MAJOR(before->devt), (int)MINOR(before->devt),
+					       before->vgid ?: "none", after->vgid ?: "none");
+
+				before->update_udev = 1;
+			}
+
+			after->found = 1;
+			before->found = 1;
+			found = 1;
+			break;
+		}
+
+		if (!found) {
+			memset(id_before, 0, sizeof(id_before));
+			strncpy(&id_before[0], (char *) &before->pvid, sizeof(id_before) - 1);
+
+			log_debug_devs("device %d:%d pvid %s vg %s is gone",
+				       (int)MAJOR(before->devt), (int)MINOR(before->devt),
+				       id_before, before->vgid ? before->vgid : "none");
+
+			before->update_udev = 1;
+		}
+	}
+
+	dm_list_iterate_items(before, pvc_before) {
+		if (before->update_udev)
+			_update_pv_in_udev(cmd, before->devt);
+	}
+
+	dm_list_iterate_items(after, pvc_after) {
+		if (after->update_udev)
+			_update_pv_in_udev(cmd, after->devt);
+	}
+}
+
+/*
+ * Before this command was run, some external entity may have
+ * invalidated lvmetad's cache of global information, e.g. lvmlockd.
+ *
+ * The global information includes things like a new VG, a
+ * VG that was removed, the assignment of a PV to a VG;
+ * any change that is not isolated within a single VG.
+ *
+ * The external entity, like a lock manager, would invalidate
+ * the lvmetad global cache if it detected that the global
+ * information had been changed on disk by something other
+ * than a local lvm command, e.g. an lvm command on another
+ * host with access to the same devices.  (How it detects
+ * the change is specific to lock manager or other entity.)
+ *
+ * The effect is that metadata on disk is newer than the metadata
+ * in the local lvmetad daemon, and the local lvmetad's cache
+ * should be updated from disk before this command uses it.
+ *
+ * So, using this function, a command checks if lvmetad's global
+ * cache is valid.  If so, it does nothing.  If not, it rescans
+ * devices to update the lvmetad cache, then it notifies lvmetad
+ * that it's cache is valid again (consistent with what's on disk.)
+ * This command can then go ahead and use the newly refreshed metadata.
+ *
+ * 1. Check if the lvmetad global cache is invalid.
+ * 2. If so, reread metadata from all devices and update the lvmetad cache.
+ * 3. Tell lvmetad that the global cache is now valid.
+ */
+
+void lvmetad_validate_global_cache(struct cmd_context *cmd, int force)
+{
+	struct dm_list pvc_before; /* pv_cache_list */
+	struct dm_list pvc_after; /* pv_cache_list */
+	daemon_reply reply;
+	int global_invalid;
+
+	dm_list_init(&pvc_before);
+	dm_list_init(&pvc_after);
+
+	if (!lvmlockd_use()) {
+		log_error(INTERNAL_ERROR "validate global cache without lvmlockd");
+		return;
+	}
+
+	if (!lvmetad_used())
+		return;
+
+	log_debug_lvmetad("Validating global lvmetad cache");
+
+	if (force)
+		goto do_scan;
+
+	reply = daemon_send_simple(_lvmetad, "get_global_info",
+				   "token = %s", "skip",
+				   NULL);
+
+	if (reply.error) {
+		log_error("lvmetad_validate_global_cache get_global_info error %d", reply.error);
+		goto do_scan;
+	}
+
+	if (strcmp(daemon_reply_str(reply, "response", ""), "OK")) {
+		log_error("lvmetad_validate_global_cache get_global_info not ok");
+		goto do_scan;
+	}
+
+	global_invalid = daemon_reply_int(reply, "global_invalid", -1);
+
+	daemon_reply_destroy(reply);
+
+	if (!global_invalid) {
+		/* cache is valid */
+		return;
+	}
+
+ do_scan:
+	/*
+	 * Save the current state of pvs from lvmetad so after devices are
+	 * scanned, we can compare to the new state to see if pvs changed.
+	 */
+	_lvmetad_get_pv_cache_list(cmd, &pvc_before);
+
+	/*
+	 * Update the local lvmetad cache so it correctly reflects any
+	 * changes made on remote hosts.
+	 */
+	lvmetad_pvscan_all_devs(cmd, NULL);
+
+	/*
+	 * Clear the global_invalid flag in lvmetad.
+	 * Subsequent local commands that read global state
+	 * from lvmetad will not see global_invalid until
+	 * another host makes another global change.
+	 */
+	reply = daemon_send_simple(_lvmetad, "set_global_info",
+				   "token = %s", "skip",
+				   "global_invalid = %d", 0,
+				   NULL);
+	if (reply.error)
+		log_error("lvmetad_validate_global_cache set_global_info error %d", reply.error);
+
+	if (strcmp(daemon_reply_str(reply, "response", ""), "OK"))
+		log_error("lvmetad_validate_global_cache set_global_info not ok");
+
+	daemon_reply_destroy(reply);
+
+	/*
+	 * Populate this command's lvmcache structures from lvmetad.
+	 */
+	lvmcache_seed_infos_from_lvmetad(cmd);
+
+	/*
+	 * Update the local udev database to reflect PV changes from
+	 * other hosts.
+	 *
+	 * Compare the before and after PV lists, and if a PV's
+	 * pvid or vgid has changed, then open that device to trigger
+	 * a uevent to update the udev db.
+	 *
+	 * This has no direct benefit to lvm, but is just a best effort
+	 * attempt to keep the udev db updated and reflecting current
+	 * lvm information.
+	 *
+	 * FIXME: lvmcache_seed_infos_from_lvmetad() and _lvmetad_get_pv_cache_list()
+	 * each get pv_list from lvmetad, and they could share a single pv_list reply.
+	 */
+	if (!dm_list_empty(&pvc_before)) {
+		_lvmetad_get_pv_cache_list(cmd, &pvc_after);
+		_update_changed_pvs_in_udev(cmd, &pvc_before, &pvc_after);
+	}
 }

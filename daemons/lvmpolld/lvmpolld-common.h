@@ -18,19 +18,14 @@
 #ifndef _LVM_LVMPOLLD_COMMON_H
 #define _LVM_LVMPOLLD_COMMON_H
 
-#include "configure.h"
-
 #define _REENTRANT
-#define _GNU_SOURCE
-#define _FILE_OFFSET_BITS 64
 
-#include "libdevmapper.h"
+#include "tool.h"
 
 #include "lvmpolld-cmd-utils.h"
 #include "lvmpolld-protocol.h"
 
 #include <assert.h>
 #include <errno.h>
-#include <unistd.h>
 
 #endif	/* _LVM_LVMPOLLD_COMMON_H */

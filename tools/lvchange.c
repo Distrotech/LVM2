@@ -14,6 +14,7 @@
  */
 
 #include "tools.h"
+
 #include "memlock.h"
 
 static int _lvchange_permission(struct cmd_context *cmd,
@@ -472,7 +473,12 @@ static int _lvchange_resync(struct cmd_context *cmd, struct logical_volume *lv)
 		}
 	}
 
-	sync_local_dev_names(lv->vg->cmd);  /* Wait until devices are away */
+	/* Wait until devices are away */
+	if (!sync_local_dev_names(lv->vg->cmd)) {
+		log_error("Failed to sync local devices after updating %s",
+			  display_lvname(lv));
+		return 0;
+	}
 
 	/* Put metadata sub-LVs back in place */
 	if (!attach_metadata_devices(seg, &device_list)) {
@@ -601,6 +607,9 @@ static int _lvchange_persistent(struct cmd_context *cmd,
 {
 	enum activation_change activate = CHANGE_AN;
 
+	/* The LV lock in lvmlockd should remain as it is. */
+	cmd->lockd_lv_disable = 1;
+
 	if (!get_and_validate_major_minor(cmd, lv->vg->fid->fmt,
 					  &lv->major, &lv->minor))
 		return_0;
@@ -671,25 +680,27 @@ static int _lvchange_persistent(struct cmd_context *cmd,
 
 static int _lvchange_cachepolicy(struct cmd_context *cmd, struct logical_volume *lv)
 {
-	struct dm_config_tree *policy = NULL;
+	const char *name;
+	struct dm_config_tree *settings = NULL;
 	int r = 0;
 
 	if (!lv_is_cache(lv) && !lv_is_cache_pool(lv)) {
 		log_error("LV %s is not a cache LV.", lv->name);
 		log_error("Only cache or cache pool devices can have --cachepolicy set.");
-		goto_out;
+		goto out;
 	}
 
-	if (!(policy = get_cachepolicy_params(cmd)))
+	if (!get_cache_params(cmd, NULL, &name, &settings))
 		goto_out;
-	if (!lv_cache_setpolicy(lv, policy))
+	if (!cache_set_policy(first_seg(lv), name, settings))
 		goto_out;
 	if (!lv_update_and_reload(lv))
 		goto_out;
 	r = 1;
 out:
-	if (policy)
-		dm_config_destroy(policy);
+	if (settings)
+		dm_config_destroy(settings);
+
 	return r;
 }
 
@@ -984,6 +995,22 @@ static int _lvchange_single(struct cmd_context *cmd, struct logical_volume *lv,
 		return ECMD_FAILED;
 	}
 
+	if (!arg_count(cmd, activate_ARG) && !arg_count(cmd, refresh_ARG)) {
+		/*
+		 * If a persistent lv lock already exists from activation
+		 * (with the needed mode or higher), this will be a no-op.
+		 * Otherwise, the lv lock will be taken as non-persistent
+		 * and released when this command exits.
+		 *
+		 * FIXME: use "sh" if the options imply that the lvchange
+		 * operation does not modify the LV.
+		 */
+		if (!lockd_lv(cmd, lv, "ex", 0)) {
+			stack;
+			return ECMD_FAILED;
+		}
+	}
+
 	/*
 	 * FIXME: DEFAULT_BACKGROUND_POLLING should be "unspecified".
 	 * If --poll is explicitly provided use it; otherwise polling
@@ -1254,8 +1281,25 @@ int lvchange(struct cmd_context *cmd, int argc, char **argv)
 		}
 	}
 
+	/*
+	 * Include foreign VGs that contain active LVs.
+	 * That shouldn't happen in general, but if it does by some
+	 * mistake, then we want to allow those LVs to be deactivated.
+	 */
 	if (arg_is_set(cmd, activate_ARG))
 		cmd->include_active_foreign_vgs = 1;
+
+	/*
+	 * The default vg lock mode for lvchange is ex, but these options
+	 * are cases where lvchange does not modify the vg, so they can use
+	 * the sh lock mode.
+	 */
+	if (arg_count(cmd, activate_ARG) || arg_count(cmd, refresh_ARG)) {
+		cmd->lockd_vg_default_sh = 1;
+		/* Allow deactivating if locks fail. */
+		if (is_change_activating((activation_change_t)arg_uint_value(cmd, activate_ARG, CHANGE_AY)))
+			cmd->lockd_vg_enforce_sh = 1;
+	}
 
 	return process_each_lv(cmd, argc, argv,
 			       update ? READ_FOR_UPDATE : 0, NULL,

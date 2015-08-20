@@ -21,6 +21,7 @@
 #include "defaults.h"
 #include "display.h"
 
+/* TODO: drop unused no_update */
 int attach_pool_message(struct lv_segment *pool_seg, dm_thin_message_t type,
 			struct logical_volume *lv, uint32_t delete_id,
 			int no_update)
@@ -237,18 +238,107 @@ int pool_below_threshold(const struct lv_segment *pool_seg)
 }
 
 /*
+ * Detect overprovisioning and check lvm2 is configured for auto resize.
+ *
+ * If passed LV is thin volume/pool, check first only this one for overprovisiong.
+ * Lots of test combined together.
+ * Test is not detecting status of dmeventd, too complex for now...
+ */
+int pool_check_overprovisioning(const struct logical_volume *lv)
+{
+	const struct lv_list *lvl;
+	const struct seg_list *sl;
+	const struct logical_volume *pool_lv = NULL;
+	struct cmd_context *cmd = lv->vg->cmd;
+	const char *txt = "";
+	uint64_t thinsum = 0, poolsum = 0, sz = ~0;
+	int threshold, max_threshold = 0;
+	int percent, min_percent = 100;
+	int more_pools = 0;
+
+	/* When passed thin volume, check related pool first */
+	if (lv_is_thin_volume(lv))
+		pool_lv = first_seg(lv)->pool_lv;
+	else if (lv_is_thin_pool(lv))
+		pool_lv = lv;
+
+	if (pool_lv) {
+		poolsum += pool_lv->size;
+		dm_list_iterate_items(sl, &pool_lv->segs_using_this_lv)
+			thinsum += sl->seg->lv->size;
+
+		if (thinsum <= poolsum)
+			return 1; /* All thins fit into this thin pool */
+	}
+
+	/* Sum all thins and all thin pools in VG */
+	dm_list_iterate_items(lvl, &lv->vg->lvs) {
+		if (!lv_is_thin_pool(lvl->lv))
+			continue;
+
+		threshold = find_config_tree_int(cmd, activation_thin_pool_autoextend_threshold_CFG,
+						 lv_config_profile(lvl->lv));
+		percent = find_config_tree_int(cmd, activation_thin_pool_autoextend_percent_CFG,
+					       lv_config_profile(lvl->lv));
+		if (threshold > max_threshold)
+			max_threshold = threshold;
+		if (percent < min_percent)
+			min_percent = percent;
+
+		if (lvl->lv == pool_lv)
+			continue; /* Skip iteration for already checked thin pool */
+
+		more_pools++;
+		poolsum += lvl->lv->size;
+		dm_list_iterate_items(sl, &lvl->lv->segs_using_this_lv)
+			thinsum += sl->seg->lv->size;
+	}
+
+	if (thinsum <= poolsum)
+		return 1; /* All fits for all pools */
+
+	if ((sz = vg_size(lv->vg)) < thinsum)
+		/* Thin sum size is above VG size */
+		txt = " and the size of whole volume group";
+	else if ((sz = vg_free(lv->vg)) < thinsum)
+		/* Thin sum size is more then free space in a VG */
+		txt = !sz ? "" : " and the amount of free space in volume group";
+	else if ((max_threshold > 99) || !min_percent)
+		/* There is some free space in VG, but it is not configured
+		 * for growing - threshold is 100% or percent is 0% */
+		sz = poolsum;
+	else
+		sz = ~0; /* No warning */
+
+	if (sz != ~0) {
+		log_warn("WARNING: Sum of all thin volume sizes (%s) exceeds the "
+			 "size of thin pool%s%s%s (%s)!",
+			 display_size(cmd, thinsum),
+			 more_pools ? "" : " ",
+			 more_pools ? "s" : display_lvname(pool_lv),
+			 txt,
+			 (sz > 0) ? display_size(cmd, sz) : "no free space in volume group");
+		if (max_threshold > 99)
+			log_print_unless_silent("For thin pool auto extension activation/thin_pool_autoextend_threshold should be below 100.");
+		if (!min_percent)
+			log_print_unless_silent("For thin pool auto extension activation/thin_pool_autoextend_percent should be above 0.");
+	}
+
+	return 1;
+}
+
+/*
  * Validate given external origin could be used with thin pool
  */
 int pool_supports_external_origin(const struct lv_segment *pool_seg, const struct logical_volume *external_lv)
 {
 	uint32_t csize = pool_seg->chunk_size;
 
-	if ((external_lv->size < csize) || (external_lv->size % csize)) {
-		/* TODO: Validate with thin feature flag once, it will be supported */
-		log_error("Can't use \"%s/%s\" as external origin with \"%s/%s\" pool. "
+	if (((external_lv->size < csize) || (external_lv->size % csize)) &&
+	    !thin_pool_feature_supported(pool_seg->lv, THIN_FEATURE_EXTERNAL_ORIGIN_EXTEND)) {
+		log_error("Can't use \"%s\" as external origin with \"%s\" pool. "
 			  "Size %s is not a multiple of pool's chunk size %s.",
-			  external_lv->vg->name, external_lv->name,
-			  pool_seg->lv->vg->name, pool_seg->lv->name,
+			  display_lvname(external_lv), display_lvname(pool_seg->lv),
 			  display_size(external_lv->vg->cmd, external_lv->size),
 			  display_size(external_lv->vg->cmd, csize));
 		return 0;
@@ -336,7 +426,7 @@ static int _check_pool_create(const struct logical_volume *lv)
 
 int update_pool_lv(struct logical_volume *lv, int activate)
 {
-	int monitored;
+	int monitored = DMEVENTD_MONITOR_IGNORE;
 	int ret = 1;
 
 	if (!lv_is_thin_pool(lv)) {
@@ -362,28 +452,30 @@ int update_pool_lv(struct logical_volume *lv, int activate)
 					  display_lvname(lv));
 				return 0;
 			}
+		} else
+			activate = 0; /* Was already active */
 
-			if (!(ret = _check_pool_create(lv)))
-				stack;
+		if (!(ret = _check_pool_create(lv)))
+			stack; /* Safety guard, needs local presence of thin-pool target */
+		else if (!(ret = suspend_lv_origin(lv->vg->cmd, lv)))
+			/* Send messages */
+			log_error("Failed to suspend and send message %s.", display_lvname(lv));
+		else if (!(ret = resume_lv_origin(lv->vg->cmd, lv)))
+			log_error("Failed to resume %s.", display_lvname(lv));
 
+		if (activate) {
 			if (!deactivate_lv(lv->vg->cmd, lv)) {
 				init_dmeventd_monitor(monitored);
 				return_0;
 			}
 			init_dmeventd_monitor(monitored);
-
-			/* Unlock memory if possible */
-			memlock_unlock(lv->vg->cmd);
 		}
-		/*
-		 * Resume active pool to send thin messages.
-		 * origin_only is used to skip check for resumed state
-		 */
-		else if (!resume_lv_origin(lv->vg->cmd, lv)) {
-			log_error("Failed to resume %s.", lv->name);
-			return 0;
-		} else if (!(ret = _check_pool_create(lv)))
-			stack;
+
+		/* Unlock memory if possible */
+		memlock_unlock(lv->vg->cmd);
+
+		if (!ret)
+			return_0;
 	}
 
 	dm_list_init(&(first_seg(lv)->thin_messages));
@@ -631,7 +723,7 @@ int check_new_thin_pool(const struct logical_volume *pool_lv)
 	/* Require pool to have same transaction_id as new  */
 	if (first_seg(pool_lv)->transaction_id != transaction_id) {
 		log_error("Cannot use thin pool %s with transaction id "
-			  "%" PRIu64 " for thin volumes. "
+			  FMTu64 " for thin volumes. "
 			  "Expected transaction id %" PRIu64 ".",
 			  display_lvname(pool_lv), transaction_id,
 			  first_seg(pool_lv)->transaction_id);

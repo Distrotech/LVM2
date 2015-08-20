@@ -13,6 +13,7 @@
  */
 
 #include "tools.h"
+
 #include "polldaemon.h"
 #include "lv_alloc.h"
 #include "lvconvert_poll.h"
@@ -58,7 +59,9 @@ struct lvconvert_params {
 	uint32_t stripes;
 	uint32_t stripe_size;
 	uint32_t read_ahead;
-	uint64_t feature_flags; /* cache_pool */
+	const char *cache_mode; /* cache */
+	const char *policy_name; /* cache */
+	struct dm_config_tree *policy_settings; /* cache */
 
 	const struct segment_type *segtype;
 	unsigned target_attr;
@@ -74,6 +77,7 @@ struct lvconvert_params {
 	struct dm_list *replace_pvh;
 
 	struct logical_volume *lv_to_poll;
+	struct dm_list idls;
 
 	uint32_t pool_metadata_extents;
 	int passed_args;
@@ -84,6 +88,13 @@ struct lvconvert_params {
 	const char *pool_metadata_name;
 	struct logical_volume *pool_metadata_lv;
 	thin_discards_t discards;
+};
+
+struct convert_poll_id_list {
+	struct dm_list list;
+	struct poll_operation_id *id;
+	unsigned is_merging_origin:1;
+	unsigned is_merging_origin_thin:1;
 };
 
 static int _lvconvert_validate_names(struct lvconvert_params *lp)
@@ -294,21 +305,14 @@ static int _read_pool_params(struct cmd_context *cmd, int *pargc, char ***pargv,
 	} else if (!strcmp(type_str, "thin-pool"))
 		thinpool = 1;
 
-	if (cachepool) {
-		const char *cachemode = arg_str_value(cmd, cachemode_ARG, NULL);
-		if (!cachemode)
-			cachemode = find_config_tree_str(cmd, allocation_cache_pool_cachemode_CFG, NULL);
-
-		if (!set_cache_pool_feature(&lp->feature_flags, cachemode))
-			return_0;
-	} else {
-		if (arg_from_list_is_set(cmd, "is valid only with cache pools",
-					 cachepool_ARG, cachemode_ARG, -1))
-			return_0;
-		if (lp->cache) {
-			log_error("--cache requires --cachepool.");
-			return 0;
-		}
+	if (lp->cache && !cachepool) {
+		log_error("--cache requires --cachepool.");
+		return 0;
+	}
+	if ((lp->cache || cachepool) &&
+	    !get_cache_params(cmd, &lp->cache_mode, &lp->policy_name, &lp->policy_settings)) {
+		log_error("Failed to parse cache policy and/or settings.");
+		return 0;
 	}
 
 	if (thinpool) {
@@ -769,26 +773,41 @@ static struct poll_operation_id *_create_id(struct cmd_context *cmd,
 	return id;
 }
 
+static int _lvconvert_poll_by_id(struct cmd_context *cmd, struct poll_operation_id *id,
+				 unsigned background,
+				 int is_merging_origin,
+				 int is_merging_origin_thin)
+{
+	if (is_merging_origin)
+		return poll_daemon(cmd, background,
+				(MERGING | (is_merging_origin_thin ? THIN_VOLUME : SNAPSHOT)),
+				is_merging_origin_thin ? &_lvconvert_thin_merge_fns : &_lvconvert_merge_fns,
+				"Merged", id);
+	else
+		return poll_daemon(cmd, background, CONVERTING,
+				&_lvconvert_mirror_fns, "Converted", id);
+}
+
 int lvconvert_poll(struct cmd_context *cmd, struct logical_volume *lv,
 		   unsigned background)
 {
-	int is_thin, r;
+	int r;
 	struct poll_operation_id *id = _create_id(cmd, lv->vg->name, lv->name, lv->lvid.s);
+	int is_merging_origin = 0;
+	int is_merging_origin_thin = 0;
 
 	if (!id) {
 		log_error("Failed to allocate poll identifier for lvconvert.");
 		return ECMD_FAILED;
 	}
 
+	/* FIXME: check this in polling instead */
 	if (lv_is_merging_origin(lv)) {
-		is_thin = seg_is_thin_volume(find_snapshot(lv));
-		r = poll_daemon(cmd, background,
-				(MERGING | (is_thin ? THIN_VOLUME : SNAPSHOT)),
-				is_thin ? &_lvconvert_thin_merge_fns : &_lvconvert_merge_fns,
-				"Merged", id);
-	} else
-		r = poll_daemon(cmd, background, CONVERTING,
-				&_lvconvert_mirror_fns, "Converted", id);
+		is_merging_origin = 1;
+		is_merging_origin_thin = seg_is_thin_volume(find_snapshot(lv));
+	}
+
+	r = _lvconvert_poll_by_id(cmd, id, background, is_merging_origin, is_merging_origin_thin);
 
 	_destroy_id(cmd, id);
 
@@ -1144,6 +1163,12 @@ static int _lvconvert_mirrors_parse_params(struct cmd_context *cmd,
 	int repair = arg_count(cmd, repair_ARG);
 	*old_mimage_count = lv_mirror_count(lv);
 	*old_log_count = _get_log_count(lv);
+
+	if (is_lockd_type(lv->vg->lock_type) && arg_count(cmd, splitmirrors_ARG)) {
+		/* FIXME: we need to create a lock for the new LV. */
+		log_error("Unable to split mirrors in VG with lock_type %s", lv->vg->lock_type);
+		return 0;
+	}
 
 	/*
 	 * Collapsing a stack of mirrors:
@@ -1896,6 +1921,12 @@ static int _lvconvert_splitsnapshot(struct cmd_context *cmd, struct logical_volu
 		return 0;
 	}
 
+	if (is_lockd_type(vg->lock_type)) {
+		/* FIXME: we need to create a lock for the new LV. */
+		log_error("Unable to split snapshots in VG with lock_type %s", vg->lock_type);
+		return 0;
+	}
+
 	if (!vg_check_status(vg, LVM_WRITE))
 		return_0;
 
@@ -2031,7 +2062,7 @@ static int _lvconvert_uncache(struct cmd_context *cmd,
 		return 0;
 	}
 
-	if (!lv_remove_single(cmd, first_seg(lv)->pool_lv, lp->force, 0))
+	if (!lv_remove_single(cmd, first_seg(lv)->pool_lv, (force_t) lp->force, 0))
 		return_0;
 
 	log_print_unless_silent("Logical volume %s is not cached.", display_lvname(lv));
@@ -2357,7 +2388,7 @@ static int _lvconvert_pool_repair(struct cmd_context *cmd,
 	int ret = 0, status;
 	int args = 0;
 	const char *argv[19]; /* Max supported 10 args */
-	char *split, *dm_name, *trans_id_str;
+	char *dm_name, *trans_id_str;
 	char meta_path[PATH_MAX];
 	char pms_path[PATH_MAX];
 	uint64_t trans_id;
@@ -2397,22 +2428,18 @@ static int _lvconvert_pool_repair(struct cmd_context *cmd,
 		return 0;
 	}
 
-	if ((cn = find_config_tree_node(cmd, global_thin_repair_options_CFG, NULL))) {
-		for (cv = cn->v; cv && args < 16; cv = cv->next) {
-			if (cv->type != DM_CFG_STRING) {
-				log_error("Invalid string in config file: "
-					  "global/thin_repair_options");
-				return 0;
-			}
-			argv[++args] = cv->v.str;
-		}
-	} else {
-		/* Use default options (no support for options with spaces) */
-		if (!(split = dm_pool_strdup(cmd->mem, DEFAULT_THIN_REPAIR_OPTIONS))) {
-			log_error("Failed to duplicate thin repair string.");
+	if (!(cn = find_config_tree_array(cmd, global_thin_repair_options_CFG, NULL))) {
+		log_error(INTERNAL_ERROR "Unable to find configuration for global/thin_repair_options");
+		return 0;
+	}
+
+	for (cv = cn->v; cv && args < 16; cv = cv->next) {
+		if (cv->type != DM_CFG_STRING) {
+			log_error("Invalid string in config file: "
+				  "global/thin_repair_options");
 			return 0;
 		}
-		args = dm_split_words(split, 16, 0, (char**) argv + 1);
+		argv[++args] = cv->v.str;
 	}
 
 	if (args == 10) {
@@ -2463,14 +2490,14 @@ static int _lvconvert_pool_repair(struct cmd_context *cmd,
 			 * Scan only the 1st. line for transation id.
 			 * Watch out, if the thin_dump format changes
 			 */
-			if ((fgets(meta_path, sizeof(meta_path), f) > 0) &&
+			if (fgets(meta_path, sizeof(meta_path), f) &&
 			    (trans_id_str = strstr(meta_path, "transaction=\"")) &&
-			    (sscanf(trans_id_str + 13, "%" PRIu64, &trans_id) == 1) &&
+			    (sscanf(trans_id_str + 13, FMTu64, &trans_id) == 1) &&
 			    (trans_id != first_seg(pool_lv)->transaction_id) &&
 			    ((trans_id - 1) != first_seg(pool_lv)->transaction_id))
-				log_error("Transaction id %" PRIu64 " from pool \"%s/%s\" "
+				log_error("Transaction id " FMTu64 " from pool \"%s/%s\" "
 					  "does not match repaired transaction id "
-					  "%" PRIu64 " from %s.",
+					  FMTu64 " from %s.",
 					  first_seg(pool_lv)->transaction_id,
 					  pool_lv->vg->name, pool_lv->name, trans_id,
 					  pms_path);
@@ -2581,6 +2608,22 @@ static int _lvconvert_thin(struct cmd_context *cmd,
 			  lv_is_visible(lv) ? "" : " hidden",
 			  lvseg_name(first_seg(lv)),
 			  display_lvname(lv));
+		return 0;
+	}
+
+	if (is_lockd_type(lv->vg->lock_type)) {
+		/*
+		 * FIXME: external origins don't work in lockd VGs.
+		 * Prior to the lvconvert, there's a lock associated with
+		 * the uuid of the external origin LV.  After the convert,
+		 * that uuid belongs to the new thin LV, and a new LV with
+		 * a new uuid exists as the non-thin, readonly external LV.
+		 * We'd need to remove the lock for the previous uuid
+		 * (the new thin LV will have no lock), and create a new
+		 * lock for the new LV uuid used by the external LV.
+		 */
+		log_error("Can't use lock_type %s LV as external origin.",
+			  lv->vg->lock_type);
 		return 0;
 	}
 
@@ -2701,6 +2744,12 @@ static int _lvconvert_pool(struct cmd_context *cmd,
 	struct logical_volume *data_lv;
 	struct logical_volume *metadata_lv = NULL;
 	struct logical_volume *pool_metadata_lv;
+	char *lockd_data_args = NULL;
+	char *lockd_meta_args = NULL;
+	char *lockd_data_name = NULL;
+	char *lockd_meta_name = NULL;
+	struct id lockd_data_id;
+	struct id lockd_meta_id;
 	char metadata_name[NAME_LEN], data_name[NAME_LEN];
 	int activate_pool;
 
@@ -2715,6 +2764,13 @@ static int _lvconvert_pool(struct cmd_context *cmd,
 			log_error("Unknown pool data LV %s.", lp->pool_data_name);
 			return 0;
 		}
+	}
+
+	/* An existing LV needs to have its lock freed once it becomes a data LV. */
+	if (is_lockd_type(vg->lock_type) && !lv_is_pool(pool_lv) && pool_lv->lock_args) {
+		lockd_data_args = dm_pool_strdup(cmd->mem, pool_lv->lock_args);
+		lockd_data_name = dm_pool_strdup(cmd->mem, pool_lv->name);
+		memcpy(&lockd_data_id, &pool_lv->lvid.id[1], sizeof(struct id));
 	}
 
 	if (!lv_is_visible(pool_lv)) {
@@ -2771,6 +2827,13 @@ static int _lvconvert_pool(struct cmd_context *cmd,
 		}
 		lp->pool_metadata_extents = lp->pool_metadata_lv->le_count;
 		metadata_lv = lp->pool_metadata_lv;
+
+		/* An existing LV needs to have its lock freed once it becomes a meta LV. */
+		if (is_lockd_type(vg->lock_type) && metadata_lv->lock_args) {
+			lockd_meta_args = dm_pool_strdup(cmd->mem, metadata_lv->lock_args);
+			lockd_meta_name = dm_pool_strdup(cmd->mem, metadata_lv->name);
+			memcpy(&lockd_meta_id, &metadata_lv->lvid.id[1], sizeof(struct id));
+		}
 
 		if (metadata_lv == pool_lv) {
 			log_error("Can't use same LV for pool data and metadata LV %s.",
@@ -3034,6 +3097,27 @@ static int _lvconvert_pool(struct cmd_context *cmd,
 	if (!attach_pool_data_lv(seg, data_lv))
 		return_0;
 
+	/*
+	 * Create a new lock for a thin pool LV.  A cache pool LV has no lock.
+	 * Locks are removed from existing LVs that are being converted to
+	 * data and meta LVs (they are unlocked and deleted below.)
+	 */
+	if (is_lockd_type(vg->lock_type)) {
+		if (segtype_is_cache_pool(lp->segtype)) {
+			data_lv->lock_args = NULL;
+			metadata_lv->lock_args = NULL;
+		} else {
+			data_lv->lock_args = NULL;
+			metadata_lv->lock_args = NULL;
+
+			if (!strcmp(vg->lock_type, "sanlock"))
+				pool_lv->lock_args = "pending";
+			else if (!strcmp(vg->lock_type, "dlm"))
+				pool_lv->lock_args = "dlm";
+			/* The lock_args will be set in vg_write(). */
+		}
+	}
+
 	/* FIXME: revert renamed LVs in fail path? */
 	/* FIXME: any common code with metadata/thin_manip.c  extend_pool() ? */
 
@@ -3044,7 +3128,10 @@ mda_write:
 	seg->chunk_size = lp->chunk_size;
 	seg->discards = lp->discards;
 	seg->zero_new_blocks = lp->zero ? 1 : 0;
-	seg->feature_flags = lp->feature_flags; /* cache-pool */
+
+	if ((lp->policy_name || lp->policy_settings) &&
+	    !cache_set_policy(seg, lp->policy_name, lp->policy_settings))
+		return_0;
 
 	/* Rename deactivated metadata LV to have _tmeta suffix */
 	/* Implicit checks if metadata_lv is visible */
@@ -3066,6 +3153,11 @@ mda_write:
 	    seg->chunk_size  >= DEFAULT_THIN_POOL_CHUNK_SIZE_PERFORMANCE * 2)
 		log_warn("WARNING: Pool zeroing and large %s chunk size slows down "
 			 "provisioning.", display_size(cmd, seg->chunk_size));
+
+	if (activate_pool && !lockd_lv(cmd, pool_lv, "ex", LDLV_PERSISTENT)) {
+		log_error("Failed to lock pool LV %s/%s", vg->name, pool_lv->name);
+		goto out;
+	}
 
 	if (activate_pool &&
 	    !activate_lv_excl(cmd, pool_lv)) {
@@ -3090,6 +3182,22 @@ out:
 					display_lvname(pool_lv),
 					(segtype_is_cache_pool(lp->segtype)) ?
 					"cache" : "thin");
+
+	/*
+	 * Unlock and free the locks from existing LVs that became pool data
+	 * and meta LVs.
+	 */
+	if (lockd_data_name) {
+		if (!lockd_lv_name(cmd, vg, lockd_data_name, &lockd_data_id, lockd_data_args, "un", LDLV_PERSISTENT))
+			log_error("Failed to unlock pool data LV %s/%s", vg->name, lockd_data_name);
+		lockd_free_lv(cmd, vg, lockd_data_name, &lockd_data_id, lockd_data_args);
+	}
+
+	if (lockd_meta_name) {
+		if (!lockd_lv_name(cmd, vg, lockd_meta_name, &lockd_meta_id, lockd_meta_args, "un", LDLV_PERSISTENT))
+			log_error("Failed to unlock pool metadata LV %s/%s", vg->name, lockd_meta_name);
+		lockd_free_lv(cmd, vg, lockd_meta_name, &lockd_meta_id, lockd_meta_args);
+	}
 
 	return r;
 #if 0
@@ -3128,6 +3236,12 @@ static int _lvconvert_cache(struct cmd_context *cmd,
 		return_0;
 
 	if (!(cache_lv = lv_cache_create(pool_lv, origin_lv)))
+		return_0;
+
+	if (!cache_set_mode(first_seg(cache_lv), lp->cache_mode))
+		return_0;
+
+	if (!cache_set_policy(first_seg(cache_lv), lp->policy_name, lp->policy_settings))
 		return_0;
 
 	if (!lv_update_and_reload(cache_lv))
@@ -3295,17 +3409,49 @@ segtype_is_striped(lp->segtype) ||
 	return ECMD_PROCESSED;
 }
 
-static int _poll_logical_volume(struct cmd_context *cmd, struct logical_volume *lv,
-			       int wait_completion)
+static struct convert_poll_id_list* _convert_poll_id_list_create(struct cmd_context *cmd,
+								 const struct logical_volume *lv)
 {
-	struct lvinfo info;
+	struct convert_poll_id_list *idl = (struct convert_poll_id_list *) dm_pool_alloc(cmd->mem, sizeof(struct convert_poll_id_list));
 
-	if (!lv_info(cmd, lv, 0, &info, 0, 0) || !info.exists) {
-		log_print_unless_silent("Conversion starts after activation.");
-		return ECMD_PROCESSED;
+	if (!idl) {
+		log_error("Convert poll ID list allocation failed.");
+		return NULL;
 	}
 
-	return lvconvert_poll(cmd, lv, wait_completion ? 0 : 1U);
+	if (!(idl->id = _create_id(cmd, lv->vg->name, lv->name, lv->lvid.s))) {
+		dm_pool_free(cmd->mem, idl);
+		return_NULL;
+	}
+
+	idl->is_merging_origin = lv_is_merging_origin(lv);
+	idl->is_merging_origin_thin = idl->is_merging_origin && seg_is_thin_volume(find_snapshot(lv));
+
+	return idl;
+}
+
+static int _convert_and_add_to_poll_list(struct cmd_context *cmd,
+					 struct lvconvert_params *lp,
+					 struct logical_volume *lv)
+{
+	int ret;
+	struct lvinfo info;
+	struct convert_poll_id_list *idl;
+
+	/* _lvconvert_single() call may alter the reference in lp->lv_to_poll */
+	if ((ret = _lvconvert_single(cmd, lv, lp)) != ECMD_PROCESSED)
+		stack;
+	else if (lp->need_polling) {
+		if (!lv_info(cmd, lp->lv_to_poll, 0, &info, 0, 0) || !info.exists)
+			log_print_unless_silent("Conversion starts after activation.");
+		else {
+			if (!(idl = _convert_poll_id_list_create(cmd, lp->lv_to_poll)))
+				return_ECMD_FAILED;
+			dm_list_add(&lp->idls, &idl->list);
+		}
+	}
+
+	return ret;
 }
 
 static int lvconvert_single(struct cmd_context *cmd, struct lvconvert_params *lp)
@@ -3314,6 +3460,7 @@ static int lvconvert_single(struct cmd_context *cmd, struct lvconvert_params *lp
 	struct volume_group *vg;
 	int ret = ECMD_FAILED;
 	int saved_ignore_suspended_devices = ignore_suspended_devices();
+	uint32_t lockd_state = 0;
 
 	if (arg_count(cmd, repair_ARG)) {
 		init_ignore_suspended_devices(1);
@@ -3326,7 +3473,11 @@ static int lvconvert_single(struct cmd_context *cmd, struct lvconvert_params *lp
 #endif
 	}
 
-	vg = vg_read(cmd, lp->vg_name, NULL, READ_FOR_UPDATE);
+	/* Unlock on error paths not required, it's automatic when command exits. */
+	if (!lockd_vg(cmd, lp->vg_name, "ex", 0, &lockd_state))
+		goto_out;
+
+	vg = vg_read(cmd, lp->vg_name, NULL, READ_FOR_UPDATE, lockd_state);
 	if (vg_read_error(vg)) {
 		release_vg(vg);
 		goto_out;
@@ -3337,6 +3488,15 @@ static int lvconvert_single(struct cmd_context *cmd, struct lvconvert_params *lp
 		unlock_and_release_vg(cmd, vg, lp->vg_name);
 		goto_out;
 	}
+
+	/*
+	 * Request a transient lock.  If the LV is active, it has a persistent
+	 * lock already, and this request does nothing.  If the LV is not
+	 * active, this acquires a transient lock that will be released when
+	 * the command exits.
+	 */
+	if (!lockd_lv(cmd, lv, "ex", 0))
+		goto_bad;
 
 	/*
 	 * lp->pvh holds the list of PVs available for allocation or removal
@@ -3354,13 +3514,14 @@ static int lvconvert_single(struct cmd_context *cmd, struct lvconvert_params *lp
 			goto_bad;
 
 	lp->lv_to_poll = lv;
-	ret = _lvconvert_single(cmd, lv, lp);
+	ret = _convert_and_add_to_poll_list(cmd, lp, lv);
+
 bad:
 	unlock_vg(cmd, lp->vg_name);
 
-	if (ret == ECMD_PROCESSED && lp->need_polling)
-		ret = _poll_logical_volume(cmd, lp->lv_to_poll,
-					  lp->wait_completion);
+	/* Unlock here so it's not held during polling. */
+	if (!lockd_vg(cmd, lp->vg_name, "un", 0, &lockd_state))
+		stack;
 
 	release_vg(vg);
 out:
@@ -3372,67 +3533,22 @@ static int _lvconvert_merge_single(struct cmd_context *cmd, struct logical_volum
 				   struct processing_handle *handle)
 {
 	struct lvconvert_params *lp = (struct lvconvert_params *) handle->custom_handle;
-	const char *vg_name;
-	struct volume_group *vg_fresh;
-	struct logical_volume *lv_fresh;
-	int ret = ECMD_FAILED;
 
-	/*
-	 * FIXME can't trust lv's VG to be current given that caller
-	 * is process_each_lv() -- _poll_logical_volume() may have
-	 * already updated the VG's metadata in an earlier iteration.
-	 * - preemptively drop the VG lock, as is needed for
-	 *   _poll_logical_volume(), refresh LV (and VG in the process).
-	 */
+	lp->lv_to_poll = lv;
 
-	vg_name = lv->vg->name;
-	unlock_vg(cmd, vg_name);
-	vg_fresh = vg_read(cmd, vg_name, NULL, READ_FOR_UPDATE);
-	if (vg_read_error(vg_fresh)) {
-		log_error("ABORTING: Can't reread VG %s", vg_name);
-		goto out;
-	}
-
-	if (!(lv_fresh = find_lv(vg_fresh, lv->name))) {
-		log_error("ABORTING: Can't find LV %s in VG %s", lv->name, vg_name);
-		unlock_vg(cmd, vg_name);
-		goto out;
-	}
-
-	lp->lv_to_poll = lv_fresh;
-	if ((ret = _lvconvert_single(cmd, lv_fresh, lp)) != ECMD_PROCESSED)
-		stack;
-
-	if (ret == ECMD_PROCESSED && lp->need_polling) {
-		/*
-		 * Must drop VG lock, because lvconvert_poll() needs it,
-		 * then reacquire it after polling completes
-		 */
-		unlock_vg(cmd, vg_name);
-
-		if ((ret = _poll_logical_volume(cmd, lp->lv_to_poll,
-						 lp->wait_completion)) != ECMD_PROCESSED)
-			stack;
-
-		/* use LCK_VG_WRITE to match lvconvert()'s READ_FOR_UPDATE */
-		if (!lock_vol(cmd, vg_name, LCK_VG_WRITE, NULL)) {
-			log_error("ABORTING: Can't relock VG for %s "
-				  "after polling finished", vg_name);
-			ret = ECMD_FAILED;
-		}
-	}
-out:
-	release_vg(vg_fresh);
-	return ret;
+	return _convert_and_add_to_poll_list(cmd, lp, lv);
 }
 
 int lvconvert(struct cmd_context * cmd, int argc, char **argv)
 {
-	int ret;
+	int poll_ret, ret;
+	struct convert_poll_id_list *idl;
 	struct lvconvert_params lp = {
 		.target_attr = ~0,
 	};
 	struct processing_handle *handle = NULL;
+
+	dm_list_init(&lp.idls);
 
 	if (!(handle = init_processing_handle(cmd))) {
 		log_error("Failed to initialize processing handle.");
@@ -3449,10 +3565,24 @@ int lvconvert(struct cmd_context * cmd, int argc, char **argv)
 
 	if (lp.merge)
 		ret = process_each_lv(cmd, argc, argv, READ_FOR_UPDATE, handle,
-				    &_lvconvert_merge_single);
+				      &_lvconvert_merge_single);
 	else
 		ret = lvconvert_single(cmd, &lp);
+
+	dm_list_iterate_items(idl, &lp.idls) {
+		poll_ret = _lvconvert_poll_by_id(cmd, idl->id,
+						 lp.wait_completion ? 0 : 1U,
+						 idl->is_merging_origin,
+						 idl->is_merging_origin_thin);
+		if (poll_ret > ret)
+			ret = poll_ret;
+	}
+
 out:
+	if (!dm_list_empty(&lp.idls))
+		dm_pool_free(cmd->mem, dm_list_item(dm_list_first(&lp.idls), struct convert_poll_id_list));
+	if (lp.policy_settings)
+		dm_config_destroy(lp.policy_settings);
 	destroy_processing_handle(cmd, handle);
 	return ret;
 }

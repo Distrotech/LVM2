@@ -14,6 +14,7 @@
  */
 
 #include "tools.h"
+
 #include "lvm2cmdline.h"
 #include "label.h"
 #include "memlock.h"
@@ -32,7 +33,7 @@ void *cmdlib_lvm2_init(unsigned static_compile)
 	lvm_register_commands();
 
 	init_is_static(static_compile);
-	if (!(cmd = init_lvm()))
+	if (!(cmd = init_lvm(1, 1)))
 		return NULL;
 
 	return (void *) cmd;

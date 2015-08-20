@@ -1,5 +1,6 @@
 /*
- * Copyright (C) 2006 Rackable Systems All rights reserved.  
+ * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.  
+ * Copyright (C) 2004-2015 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
  *
@@ -12,22 +13,19 @@
  * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
-#ifndef _LVM_TIMESTAMP_H
-#define _LVM_TIMESTAMP_H
+/* Most source files should include this file or lib.h or dmlib.h */
 
-struct timestamp;
+#ifndef _LVM_TOOL_H
+#define _LVM_TOOL_H
 
-struct timestamp *get_timestamp(void);
+#define _GNU_SOURCE
+#define _FILE_OFFSET_BITS 64
 
-/* cmp_timestamp: Compare two timestamps
- * 
- * Return: -1 if t1 is less than t2
- *  	    0 if t1 is equal to t2
- *          1 if t1 is greater than t2
- */
-int cmp_timestamp(struct timestamp *t1, struct timestamp *t2);
+#include "configure.h"
 
-void destroy_timestamp(struct timestamp *t);
+#include <unistd.h>
 
-#endif /* _LVM_TIMESTAMP_H */
+#include "libdevmapper.h"
+#include "util.h"
 
+#endif	/* _LVM_TOOL_H */

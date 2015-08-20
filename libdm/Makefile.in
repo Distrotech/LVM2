@@ -25,6 +25,8 @@ SOURCES =\
 	libdm-deptree.c \
 	libdm-string.c \
 	libdm-report.c \
+	libdm-timestamp.c \
+	libdm-stats.c \
 	libdm-config.c \
 	mm/dbg_malloc.c \
 	mm/pool.c \
@@ -53,7 +55,7 @@ include $(top_builddir)/make.tmpl
 
 CFLAGS += $(UDEV_CFLAGS) $(VALGRIND_CFLAGS)
 
-LIBS += $(SELINUX_LIBS) $(UDEV_LIBS) $(PTHREAD_LIBS)
+LIBS += $(SELINUX_LIBS) $(UDEV_LIBS) $(PTHREAD_LIBS) $(M_LIBS)
 
 device-mapper: all
 

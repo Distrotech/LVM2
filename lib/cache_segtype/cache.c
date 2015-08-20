@@ -25,6 +25,11 @@
 #include "lv_alloc.h"
 #include "defaults.h"
 
+static const char _cache_module[] = "cache";
+
+/* TODO: using static field here, maybe should be a part of segment_type */
+static unsigned _feature_mask;
+
 #define SEG_LOG_ERROR(t, p...) \
         log_error(t " segment %s of logical volume %s.", ## p,	\
                   dm_config_parent_name(sn), seg->lv->name), 0;
@@ -66,20 +71,16 @@ static int _cache_pool_text_import(struct lv_segment *seg,
 	if (dm_config_has_node(sn, "cache_mode")) {
 		if (!(str = dm_config_find_str(sn, "cache_mode", NULL)))
 			return SEG_LOG_ERROR("cache_mode must be a string in");
-		if (!set_cache_pool_feature(&seg->feature_flags, str))
+		if (!cache_set_mode(seg, str))
 			return SEG_LOG_ERROR("Unknown cache_mode in");
-	} else
-		/* When missed in metadata, it's an old stuff - use writethrough */
-		seg->feature_flags |= DM_CACHE_FEATURE_WRITETHROUGH;
+	}
 
 	if (dm_config_has_node(sn, "policy")) {
 		if (!(str = dm_config_find_str(sn, "policy", NULL)))
 			return SEG_LOG_ERROR("policy must be a string in");
 		if (!(seg->policy_name = dm_pool_strdup(mem, str)))
 			return SEG_LOG_ERROR("Failed to duplicate policy in");
-	} else
-		/* Cannot use 'just' default, so pick one */
-		seg->policy_name = DEFAULT_CACHE_POOL_POLICY; /* FIXME make configurable */
+	}
 
 	/*
 	 * Read in policy args:
@@ -99,6 +100,9 @@ static int _cache_pool_text_import(struct lv_segment *seg,
 	 *   If the policy is not present, default policy is used.
 	 */
 	if ((sn = dm_config_find_node(sn, "policy_settings"))) {
+		if (!seg->policy_name)
+			return SEG_LOG_ERROR("policy_settings must have a policy_name in");
+
 		if (sn->v)
 			return SEG_LOG_ERROR("policy_settings must be a section in");
 
@@ -127,24 +131,33 @@ static int _cache_pool_text_export(const struct lv_segment *seg,
 {
 	const char *cache_mode;
 
-	if (!(cache_mode = get_cache_pool_cachemode_name(seg)))
-		return_0;
-
 	outf(f, "data = \"%s\"", seg_lv(seg, 0)->name);
 	outf(f, "metadata = \"%s\"", seg->metadata_lv->name);
 	outf(f, "chunk_size = %" PRIu32, seg->chunk_size);
-	outf(f, "cache_mode = \"%s\"", cache_mode);
 
-	if (seg->policy_name)
+	/*
+	 * Cache pool used by a cache LV holds data. Not ideal,
+	 * but not worth to break backward compatibility, by shifting
+	 * content to cache segment
+	 */
+	if (cache_mode_is_set(seg)) {
+		if (!(cache_mode = get_cache_mode_name(seg)))
+			return_0;
+		outf(f, "cache_mode = \"%s\"", cache_mode);
+	}
+
+	if (seg->policy_name) {
 		outf(f, "policy = \"%s\"", seg->policy_name);
 
-	if (seg->policy_settings) {
-		if (strcmp(seg->policy_settings->key, "policy_settings")) {
-			log_error(INTERNAL_ERROR "Incorrect policy_settings tree, %s.",
-				  seg->policy_settings->key);
-			return 0;
+		if (seg->policy_settings) {
+			if (strcmp(seg->policy_settings->key, "policy_settings")) {
+				log_error(INTERNAL_ERROR "Incorrect policy_settings tree, %s.",
+					  seg->policy_settings->key);
+				return 0;
+			}
+			if (seg->policy_settings->child)
+				out_config_node(f, seg->policy_settings);
 		}
-		out_config_node(f, seg->policy_settings);
 	}
 
 	return 1;
@@ -157,12 +170,29 @@ static void _destroy(struct segment_type *segtype)
 
 #ifdef DEVMAPPER_SUPPORT
 static int _target_present(struct cmd_context *cmd,
-				const struct lv_segment *seg __attribute__((unused)),
-				unsigned *attributes __attribute__((unused)))
+			   const struct lv_segment *seg __attribute__((unused)),
+			   unsigned *attributes __attribute__((unused)))
 {
-	uint32_t maj, min, patchlevel;
+	/* List of features with their kernel target version */
+	static const struct feature {
+		uint32_t maj;
+		uint32_t min;
+		unsigned cache_feature;
+		const char feature[12];
+		const char module[12]; /* check dm-%s */
+	} _features[] = {
+		{ 1, 3, CACHE_FEATURE_POLICY_MQ, "policy_mq", "cache-mq" },
+		{ 1, 8, CACHE_FEATURE_POLICY_SMQ, "policy_smq", "cache-smq" },
+	};
+	static const char _lvmconf[] = "global/cache_disabled_features";
+	static unsigned _attrs = 0;
 	static int _cache_checked = 0;
 	static int _cache_present = 0;
+	uint32_t maj, min, patchlevel;
+	unsigned i;
+	const struct dm_config_node *cn;
+	const struct dm_config_value *cv;
+	const char *str;
 
 	if (!_cache_checked) {
 		_cache_present = target_present(cmd, "cache", 1);
@@ -176,11 +206,53 @@ static int _target_present(struct cmd_context *cmd,
 
 		if ((maj < 1) ||
 		    ((maj == 1) && (min < 3))) {
-			log_error("The cache kernel module is version %u.%u.%u."
-				  "  Version 1.3.0+ is required.",
+			_cache_present = 0;
+			log_error("The cache kernel module is version %u.%u.%u. "
+				  "Version 1.3.0+ is required.",
 				  maj, min, patchlevel);
 			return 0;
 		}
+
+
+		for (i = 0; i < DM_ARRAY_SIZE(_features); ++i) {
+			if (((maj > _features[i].maj) ||
+			     (maj == _features[i].maj && min >= _features[i].min)) &&
+			    (!_features[i].module[0] || module_present(cmd, _features[i].module)))
+				_attrs |= _features[i].cache_feature;
+			else
+				log_very_verbose("Target %s does not support %s.",
+						 _cache_module, _features[i].feature);
+		}
+	}
+
+	if (attributes) {
+		if (!_feature_mask) {
+			/* Support runtime lvm.conf changes, N.B. avoid 32 feature */
+			if ((cn = find_config_tree_array(cmd, global_cache_disabled_features_CFG, NULL))) {
+				for (cv = cn->v; cv; cv = cv->next) {
+					if (cv->type != DM_CFG_STRING) {
+						log_error("Ignoring invalid string in config file %s.",
+							  _lvmconf);
+						continue;
+					}
+					str = cv->v.str;
+					if (!*str)
+						continue;
+					for (i = 0; i < DM_ARRAY_SIZE(_features); ++i)
+						if (strcasecmp(str, _features[i].feature) == 0)
+							_feature_mask |= _features[i].cache_feature;
+				}
+			}
+
+			_feature_mask = ~_feature_mask;
+
+			for (i = 0; i < DM_ARRAY_SIZE(_features); ++i)
+				if ((_attrs & _features[i].cache_feature) &&
+				    !(_feature_mask & _features[i].cache_feature))
+					log_very_verbose("Target %s %s support disabled by %s",
+							 _cache_module, _features[i].feature, _lvmconf);
+		}
+		*attributes = _attrs & _feature_mask;
 	}
 
 	return _cache_present;
@@ -306,7 +378,9 @@ static int _cache_add_target_line(struct dev_manager *dm,
 					   metadata_uuid,
 					   data_uuid,
 					   origin_uuid,
-					   seg->cleaner_policy ? "cleaner" : cache_pool_seg->policy_name,
+					   seg->cleaner_policy ? "cleaner" :
+						   /* undefined policy name -> likely an old "mq" */
+						   cache_pool_seg->policy_name ? : "mq",
 					   seg->cleaner_policy ? NULL : cache_pool_seg->policy_settings,
 					   cache_pool_seg->chunk_size))
 		return_0;
@@ -367,6 +441,9 @@ int init_cache_segtypes(struct cmd_context *cmd,
 	if (!lvm_register_segtype(seglib, segtype))
 		return_0;
 	log_very_verbose("Initialised segtype: %s", segtype->name);
+
+	/* Reset mask for recalc */
+	_feature_mask = 0;
 
 	return 1;
 }

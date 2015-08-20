@@ -453,8 +453,9 @@ static struct raw_locn *_find_vg_rlocn(struct device_area *dev_area,
 				   "not match expected name %s.", vgname);
 
       bad:
-	if ((info = lvmcache_info_from_pvid(dev_area->dev->pvid, 0)))
-		lvmcache_update_vgname_and_id(info, &vgsummary_orphan);
+	if ((info = lvmcache_info_from_pvid(dev_area->dev->pvid, 0)) &&
+	    !lvmcache_update_vgname_and_id(info, &vgsummary_orphan))
+		stack;
 
 	return NULL;
 }
@@ -2237,7 +2238,7 @@ static int _text_pv_add_metadata_area(const struct format_type *fmt,
 	if (limit_applied)
 		log_very_verbose("Using limited metadata area size on %s "
 				 "with value %" PRIu64 " (limited by %s of "
-				 "%" PRIu64 ").", pv_dev_name(pv),
+				 FMTu64 ").", pv_dev_name(pv),
 				  mda_size, limit_name, limit);
 
 	if (mda_size) {
@@ -2491,7 +2492,7 @@ struct format_type *create_text_format(struct cmd_context *cmd)
 		goto bad;
 	}
 
-	if ((cn = find_config_tree_node(cmd, metadata_dirs_CFG, NULL))) {
+	if ((cn = find_config_tree_array(cmd, metadata_dirs_CFG, NULL))) {
 		for (cv = cn->v; cv; cv = cv->next) {
 			if (cv->type != DM_CFG_STRING) {
 				log_error("Invalid string in config file: "

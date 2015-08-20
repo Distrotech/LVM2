@@ -378,7 +378,11 @@ static int _init_mirror_log(struct cmd_context *cmd,
 	backup(log_lv->vg);
 
 	/* Wait for events following any deactivation before reactivating */
-	sync_local_dev_names(cmd);
+	if (!sync_local_dev_names(cmd)) {
+		log_error("Aborting. Failed to sync local devices before initialising mirror log %s.",
+			  display_lvname(log_lv));
+		goto revert_new_lv;
+	}
 
 	if (!activate_lv(cmd, log_lv)) {
 		log_error("Aborting. Failed to activate mirror log.");
@@ -494,7 +498,11 @@ static int _delete_lv(struct logical_volume *mirror_lv, struct logical_volume *l
 			return_0;
 
 		/* FIXME Is this superfluous now? */
-		sync_local_dev_names(cmd);
+		if (!sync_local_dev_names(cmd)) {
+			log_error("Failed to sync local devices when reactivating %s.",
+				  display_lvname(lv));
+			return 0;
+		}
 
 		if (!deactivate_lv(cmd, lv))
 			return_0;
@@ -1173,7 +1181,7 @@ static int _remove_mirror_images(struct logical_volume *lv,
 	if (removed)
 		*removed = old_area_count - new_area_count;
 
-	log_very_verbose("%" PRIu32 " image(s) removed from %s",
+	log_very_verbose(FMTu32 " image(s) removed from %s",
 			 old_area_count - new_area_count, lv->name);
 
 	return 1;

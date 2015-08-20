@@ -45,4 +45,14 @@ check_
 test -e LOCAL_LVMETAD && lvremove $vg/boo # FIXME trigger a write :-(
 check_ not
 
+aux disable_dev "$dev1"
+vgreduce --removemissing --force $vg
+aux enable_dev "$dev1"
+
+vgscan 2>&1 | tee out
+grep 'Removing PV' out
+
+vgs 2>&1 | tee out
+not grep 'Removing PV' out
+
 vgremove -ff $vg

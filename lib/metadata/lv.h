@@ -51,7 +51,9 @@ struct logical_volume {
 	struct dm_list segs_using_this_lv;
 
 	uint64_t timestamp;
+	unsigned new_lock_args:1;
 	const char *hostname;
+	const char *lock_args;
 };
 
 struct lv_with_info_and_seg_status;
@@ -91,7 +93,7 @@ char *lvseg_monitor_dup(struct dm_pool *mem, const struct lv_segment *seg);
 char *lvseg_tags_dup(const struct lv_segment *seg);
 char *lvseg_devices(struct dm_pool *mem, const struct lv_segment *seg);
 char *lvseg_seg_pe_ranges(struct dm_pool *mem, const struct lv_segment *seg);
-char *lv_time_dup(struct dm_pool *mem, const struct logical_volume *lv);
+char *lv_time_dup(struct dm_pool *mem, const struct logical_volume *lv, int iso_mode);
 char *lv_host_dup(struct dm_pool *mem, const struct logical_volume *lv);
 int lv_set_creation(struct logical_volume *lv,
 		    const char *hostname, uint64_t timestamp);
@@ -103,6 +105,7 @@ const struct logical_volume *lv_lock_holder(const struct logical_volume *lv);
 const struct logical_volume *lv_ondisk(const struct logical_volume *lv);
 struct profile *lv_config_profile(const struct logical_volume *lv);
 char *lv_profile_dup(struct dm_pool *mem, const struct logical_volume *lv);
+char *lv_lock_args_dup(struct dm_pool *mem, const struct logical_volume *lv);
 int lv_mirror_image_in_sync(const struct logical_volume *lv);
 int lv_raid_image_in_sync(const struct logical_volume *lv);
 int lv_raid_healthy(const struct logical_volume *lv);

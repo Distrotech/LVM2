@@ -14,6 +14,7 @@
  */
 
 #include "tools.h"
+
 #include <sys/stat.h>
 #include <signal.h>
 #include <sys/wait.h>
@@ -66,7 +67,10 @@ int become_daemon(struct cmd_context *cmd, int skip_lvm)
 	sigaction(SIGCHLD, &act, NULL);
 
 	if (!skip_lvm)
-		sync_local_dev_names(cmd); /* Flush ops and reset dm cookie */
+		if (!sync_local_dev_names(cmd)) { /* Flush ops and reset dm cookie */
+			log_error("Failed to sync local devices before forking.");
+			return -1;
+		}
 
 	if ((pid = fork()) == -1) {
 		log_error("fork failed: %s", strerror(errno));
@@ -220,6 +224,30 @@ static int _ignore_vg(struct volume_group *vg, const char *vg_name,
 		} else {
 			read_error &= ~FAILED_SYSTEMID; /* Check for other errors */
 			log_verbose("Skipping foreign volume group %s", vg_name);
+			*skip = 1;
+		}
+	}
+
+	/*
+	 * Accessing a lockd VG when lvmlockd is not used is similar
+	 * to accessing a foreign VG.
+	 * This is also the point where a command fails if it failed
+	 * to acquire the necessary lock from lvmlockd.
+	 * The two cases are distinguished by FAILED_LOCK_TYPE (the
+	 * VG lock_type requires lvmlockd), and FAILED_LOCK_MODE (the
+	 * command failed to acquire the necessary lock.)
+	 */
+	if (read_error & (FAILED_LOCK_TYPE | FAILED_LOCK_MODE)) {
+		if (arg_vgnames && str_list_match_item(arg_vgnames, vg->name)) {
+			if (read_error & FAILED_LOCK_TYPE)
+				log_error("Cannot access VG %s with lock type %s that requires lvmlockd.",
+					  vg->name, vg->lock_type);
+			/* For FAILED_LOCK_MODE, the error is printed in vg_read. */
+			return 1;
+		} else {
+			read_error &= ~FAILED_LOCK_TYPE; /* Check for other errors */
+			read_error &= ~FAILED_LOCK_MODE;
+			log_verbose("Skipping volume group %s", vg_name);
 			*skip = 1;
 		}
 	}
@@ -728,6 +756,11 @@ int vgcreate_params_set_from_args(struct cmd_context *cmd,
 				  struct vgcreate_params *vp_def)
 {
 	const char *system_id_arg_str;
+	const char *lock_type = NULL;
+	int locking_type;
+	int use_lvmlockd;
+	int use_clvmd;
+	lock_type_t lock_type_num;
 
 	vp_new->vg_name = skip_dev_dir(cmd, vp_def->vg_name, NULL);
 	vp_new->max_lv = arg_uint_value(cmd, maxlogicalvolumes_ARG,
@@ -739,12 +772,6 @@ int vgcreate_params_set_from_args(struct cmd_context *cmd,
 	/* Units of 512-byte sectors */
 	vp_new->extent_size =
 	    arg_uint_value(cmd, physicalextentsize_ARG, vp_def->extent_size);
-
-	if (arg_count(cmd, clustered_ARG))
-		vp_new->clustered = arg_int_value(cmd, clustered_ARG, vp_def->clustered);
-	else
-		/* Default depends on current locking type */
-		vp_new->clustered = locking_is_clustered();
 
 	if (arg_sign_value(cmd, physicalextentsize_ARG, SIGN_NONE) == SIGN_MINUS) {
 		log_error(_pe_size_may_not_be_negative_msg);
@@ -776,16 +803,9 @@ int vgcreate_params_set_from_args(struct cmd_context *cmd,
 	else
 		vp_new->vgmetadatacopies = find_config_tree_int(cmd, metadata_vgmetadatacopies_CFG, NULL);
 
-	/* A clustered VG has no system ID. */
-	if (vp_new->clustered) {
-		if (arg_is_set(cmd, systemid_ARG)) {
-			log_error("system ID cannot be set on clustered Volume Groups.");
-			return 0;
-		}
-		vp_new->system_id = NULL;
-	} else if (!(system_id_arg_str = arg_str_value(cmd, systemid_ARG, NULL)))
+	if (!(system_id_arg_str = arg_str_value(cmd, systemid_ARG, NULL))) {
 		vp_new->system_id = vp_def->system_id;
-	else {
+	} else {
 		if (!(vp_new->system_id = system_id_from_string(cmd, system_id_arg_str)))
 			return_0;
 
@@ -800,6 +820,186 @@ int vgcreate_params_set_from_args(struct cmd_context *cmd,
 		}
 	}
 
+	if ((system_id_arg_str = arg_str_value(cmd, systemid_ARG, NULL))) {
+		vp_new->system_id = system_id_from_string(cmd, system_id_arg_str);
+	} else {
+		vp_new->system_id = vp_def->system_id;
+	}
+
+	if (system_id_arg_str) {
+		if (!vp_new->system_id || !vp_new->system_id[0])
+			log_warn("WARNING: A VG without a system ID allows unsafe access from other hosts.");
+
+		if (vp_new->system_id && cmd->system_id &&
+		    strcmp(vp_new->system_id, cmd->system_id)) {
+			log_warn("VG with system ID %s might become inaccessible as local system ID is %s",
+				 vp_new->system_id, cmd->system_id);
+		}
+	}
+
+	/*
+	 * Locking: what kind of locking should be used for the
+	 * new VG, and is it compatible with current lvm.conf settings.
+	 *
+	 * The end result is to set vp_new->lock_type to:
+	 * none | clvm | dlm | sanlock.
+	 *
+	 * If 'vgcreate --lock-type <arg>' is set, the answer is given
+	 * directly by <arg> which is one of none|clvm|dlm|sanlock.
+	 *
+	 * 'vgcreate --clustered y' is the way to create clvm VGs.
+	 *
+	 * 'vgcreate --shared' is the way to create lockd VGs.
+	 * lock_type of sanlock or dlm is selected based on
+	 * which lock manager is running.
+	 *
+	 *
+	 * 1. Using neither clvmd nor lvmlockd.
+	 * ------------------------------------------------
+	 * lvm.conf:
+	 * global/use_lvmlockd = 0
+	 * global/locking_type = 1
+	 *
+	 * - no locking is enabled
+	 * - clvmd is not used
+	 * - lvmlockd is not used
+	 * - VGs with CLUSTERED set are ignored (requires clvmd)
+	 * - VGs with lockd type are ignored (requires lvmlockd)
+	 * - vgcreate can create new VGs with lock_type none
+	 * - 'vgcreate --clustered y' fails
+	 * - 'vgcreate --shared' fails
+	 * - 'vgcreate' (neither option) creates a local VG
+	 *
+	 * 2. Using clvmd.
+	 * ------------------------------------------------
+	 * lvm.conf:
+	 * global/use_lvmlockd = 0
+	 * global/locking_type = 3
+	 *
+	 * - locking through clvmd is enabled (traditional clvm config)
+	 * - clvmd is used
+	 * - lvmlockd is not used
+	 * - VGs with CLUSTERED set can be used
+	 * - VGs with lockd type are ignored (requires lvmlockd)
+	 * - vgcreate can create new VGs with CLUSTERED status flag
+	 * - 'vgcreate --clustered y' works
+	 * - 'vgcreate --shared' fails
+	 * - 'vgcreate' (neither option) creates a clvm VG
+	 *
+	 * 3. Using lvmlockd.
+	 * ------------------------------------------------
+	 * lvm.conf:
+	 * global/use_lvmlockd = 1
+	 * global/locking_type = 1
+	 *
+	 * - locking through lvmlockd is enabled
+	 * - clvmd is not used
+	 * - lvmlockd is used
+	 * - VGs with CLUSTERED set are ignored (requires clvmd)
+	 * - VGs with lockd type can be used
+	 * - vgcreate can create new VGs with lock_type sanlock or dlm
+	 * - 'vgcreate --clustered y' fails
+	 * - 'vgcreate --shared' works
+	 * - 'vgcreate' (neither option) creates a local VG
+	 */
+
+	locking_type = find_config_tree_int(cmd, global_locking_type_CFG, NULL);
+	use_lvmlockd = find_config_tree_bool(cmd, global_use_lvmlockd_CFG, NULL);
+	use_clvmd = (locking_type == 3);
+
+	if (arg_is_set(cmd, locktype_ARG)) {
+		if (arg_is_set(cmd, clustered_ARG) || arg_is_set(cmd, shared_ARG)) {
+			log_error("A lock type cannot be specified with --shared or --clustered.");
+			return 0;
+		}
+		lock_type = arg_str_value(cmd, locktype_ARG, "");
+
+	} else if (arg_is_set(cmd, clustered_ARG)) {
+		const char *arg_str = arg_str_value(cmd, clustered_ARG, "");
+		int clustery = strcmp(arg_str, "y") ? 0 : 1;
+
+		if (use_clvmd) {
+			lock_type = clustery ? "clvm" : "none";
+
+		} else if (use_lvmlockd) {
+			log_error("lvmlockd is configured, use --shared with lvmlockd, and --clustered with clvmd.");
+			return 0;
+
+		} else {
+			if (clustery) {
+				log_error("The --clustered option requires clvmd (locking_type=3).");
+				return 0;
+			} else {
+				lock_type = "none";
+			}
+		}
+
+	} else if (arg_is_set(cmd, shared_ARG)) {
+		if (use_lvmlockd) {
+			if (!(lock_type = lockd_running_lock_type(cmd))) {
+				log_error("Failed to detect a running lock manager to select lock type.");
+				return 0;
+			}
+
+		} else if (use_clvmd) {
+			log_error("Use --shared with lvmlockd, and --clustered with clvmd.");
+			return 0;
+
+		} else {
+			log_error("Using a shared lock type requires lvmlockd.");
+			return 0;
+		}
+
+	} else {
+		if (use_clvmd)
+			lock_type = locking_is_clustered() ? "clvm" : "none";
+		else
+			lock_type = "none";
+	}
+
+	/*
+	 * Check that the lock_type is recognized, and is being
+	 * used with the correct lvm.conf settings.
+	 */
+	lock_type_num = get_lock_type_from_string(lock_type);
+
+	switch (lock_type_num) {
+	case LOCK_TYPE_INVALID:
+		log_error("lock_type %s is invalid", lock_type);
+		return 0;
+
+	case LOCK_TYPE_SANLOCK:
+	case LOCK_TYPE_DLM:
+		if (!use_lvmlockd) {
+			log_error("Using a shared lock type requires lvmlockd.");
+			return 0;
+		}
+		break;
+	case LOCK_TYPE_CLVM:
+		if (!use_clvmd) {
+			log_error("Using clvm requires locking_type 3.");
+			return 0;
+		}
+		break;
+	case LOCK_TYPE_NONE:
+		break;
+	};
+
+	/*
+	 * The vg is not owned by one host/system_id.
+	 * Locking coordinates access from multiple hosts.
+	 */
+	if (lock_type_num == LOCK_TYPE_DLM || lock_type_num == LOCK_TYPE_SANLOCK || lock_type_num == LOCK_TYPE_CLVM)
+		vp_new->system_id = NULL;
+
+	vp_new->lock_type = lock_type;
+
+	if (lock_type_num == LOCK_TYPE_CLVM)
+		vp_new->clustered = 1;
+	else
+		vp_new->clustered = 0;
+
+	log_debug("Setting lock_type to %s", vp_new->lock_type);
 	return 1;
 }
 
@@ -861,22 +1061,8 @@ PFLA("activate=%x", activate);
 
 int lv_refresh(struct cmd_context *cmd, struct logical_volume *lv)
 {
-	if (!cmd->partial_activation && (lv->status & PARTIAL_LV)) {
-		log_error("Refusing refresh of partial LV %s."
-			  " Use '--activationmode partial' to override.",
-			  lv->name);
-		return 0;
-	}
-
-	if (!suspend_lv(cmd, lv)) {
-		log_error("Failed to suspend %s.", lv->name);
-		return 0;
-	}
-
-	if (!resume_lv(cmd, lv)) {
-		log_error("Failed to reactivate %s.", lv->name);
-		return 0;
-	}
+	if (!lv_refresh_suspend_resume(cmd, lv))
+		return_0;
 
 	/*
 	 * check if snapshot merge should be polled
@@ -1226,12 +1412,16 @@ int get_stripe_params(struct cmd_context *cmd, uint32_t *stripes, uint32_t *stri
 	return r;
 }
 
-static int _validate_cachepool_params(struct dm_config_tree *tree)
+static int _validate_cachepool_params(const char *name,
+				      const struct dm_config_tree *settings)
 {
 	return 1;
 }
 
-struct dm_config_tree *get_cachepolicy_params(struct cmd_context *cmd)
+int get_cache_params(struct cmd_context *cmd,
+		     const char **mode,
+		     const char **name,
+		     struct dm_config_tree **settings)
 {
 	const char *str;
 	struct arg_value_group_list *group;
@@ -1239,12 +1429,20 @@ struct dm_config_tree *get_cachepolicy_params(struct cmd_context *cmd)
 	struct dm_config_node *cn;
 	int ok = 0;
 
+	if (mode)
+		*mode = arg_str_value(cmd, cachemode_ARG, NULL);
+
+	if (name)
+		*name = arg_str_value(cmd, cachepolicy_ARG, NULL);
+
+	if (!settings)
+		return 1;
+
 	dm_list_iterate_items(group, &cmd->arg_value_groups) {
 		if (!grouped_arg_is_set(group->arg_values, cachesettings_ARG))
 			continue;
 
-		current = dm_config_create();
-		if (!current)
+		if (!(current = dm_config_create()))
 			goto_out;
 		if (prev)
 			current->cascade = prev;
@@ -1259,6 +1457,9 @@ struct dm_config_tree *get_cachepolicy_params(struct cmd_context *cmd)
 			goto_out;
 	}
 
+	if (!current)
+		return 1;
+
 	if (!(result = dm_config_flatten(current)))
 		goto_out;
 
@@ -1270,24 +1471,10 @@ struct dm_config_tree *get_cachepolicy_params(struct cmd_context *cmd)
 		result->root = cn;
 	}
 
-	if (arg_count(cmd, cachepolicy_ARG)) {
-		if (!(cn = dm_config_create_node(result, "policy")))
-			goto_out;
-
-		cn->sib = result->root;
-		result->root = cn;
-		if (!(cn->v = dm_config_create_value(result)))
-			goto_out;
-
-		cn->v->type = DM_CFG_STRING;
-		cn->v->v.str = arg_str_value(cmd, cachepolicy_ARG, NULL);
-	}
-
-	if (!_validate_cachepool_params(result))
+	if (!_validate_cachepool_params(*name, result))
 		goto_out;
 
 	ok = 1;
-
 out:
 	if (!ok && result) {
 		dm_config_destroy(result);
@@ -1298,7 +1485,10 @@ out:
 		dm_config_destroy(prev);
 		prev = current;
 	}
-	return result;
+
+	*settings = result;
+
+	return ok;
 }
 
 /* FIXME move to lib */
@@ -1730,6 +1920,7 @@ static int _process_vgnameid_list(struct cmd_context *cmd, uint32_t flags,
 	struct vgnameid_list *vgnl;
 	const char *vg_name;
 	const char *vg_uuid;
+	uint32_t lockd_state = 0;
 	int selected;
 	int whole_selected = 0;
 	int ret_max = ECMD_PROCESSED;
@@ -1754,17 +1945,19 @@ static int _process_vgnameid_list(struct cmd_context *cmd, uint32_t flags,
 		vg_uuid = vgnl->vgid;
 		skip = 0;
 
-		vg = vg_read(cmd, vg_name, vg_uuid, flags);
+		if (!lockd_vg(cmd, vg_name, NULL, 0, &lockd_state)) {
+			ret_max = ECMD_FAILED;
+			continue;
+		}
+
+		vg = vg_read(cmd, vg_name, vg_uuid, flags, lockd_state);
 		if (_ignore_vg(vg, vg_name, arg_vgnames, flags & READ_ALLOW_INCONSISTENT, &skip)) {
 			stack;
 			ret_max = ECMD_FAILED;
-			release_vg(vg);
-			continue;
+			goto endvg;
 		}
-		if (skip) {
-			release_vg(vg);
-			continue;
-		}
+		if (skip)
+			goto endvg;
 
 		/* Process this VG? */
 		if ((process_all ||
@@ -1779,10 +1972,12 @@ static int _process_vgnameid_list(struct cmd_context *cmd, uint32_t flags,
 				ret_max = ret;
 		}
 
-		if (vg_read_error(vg))
-			release_vg(vg);
-		else
-			unlock_and_release_vg(cmd, vg, vg_name);
+		if (!vg_read_error(vg))
+			unlock_vg(cmd, vg_name);
+endvg:
+		release_vg(vg);
+		if (!lockd_vg(cmd, vg_name, "un", 0, &lockd_state))
+			stack;
 	}
 
 	/* the VG is selected if at least one LV is selected */
@@ -1836,7 +2031,8 @@ int process_each_vg(struct cmd_context *cmd, int argc, char **argv,
 	unsigned one_vgname_arg = (flags & ONE_VGNAME_ARG);
 	int ret;
 
-	cmd->error_foreign_vgs = 0;
+	/* Disable error in vg_read so we can print it from ignore_vg. */
+	cmd->vg_read_print_access_error = 0;
 
 	dm_list_init(&arg_tags);
 	dm_list_init(&arg_vgnames);
@@ -1854,9 +2050,16 @@ int process_each_vg(struct cmd_context *cmd, int argc, char **argv,
 	 *   any tags were supplied and need resolving; or
 	 *   no VG names were given and the command defaults to processing all VGs.
 	 */
-	if (((dm_list_empty(&arg_vgnames) && enable_all_vgs) || !dm_list_empty(&arg_tags)) &&
-	    !get_vgnameids(cmd, &vgnameids_on_system, NULL, 0))
-		goto_out;
+	if ((dm_list_empty(&arg_vgnames) && enable_all_vgs) || !dm_list_empty(&arg_tags)) {
+		/* Needed for a current listing of the global VG namespace. */
+		if (!lockd_gl(cmd, "sh", 0)) {
+			ret = ECMD_FAILED;
+			goto_out;
+		}
+
+		if (!get_vgnameids(cmd, &vgnameids_on_system, NULL, 0))
+			goto_out;
+	}
 
 	if (dm_list_empty(&arg_vgnames) && dm_list_empty(&vgnameids_on_system)) {
 		/* FIXME Should be log_print, but suppressed for reporting cmds */
@@ -1964,11 +2167,24 @@ int process_each_lv_in_vg(struct cmd_context *cmd, struct volume_group *vg,
 		}
 
 		/*
-		 * Only let hidden LVs through it --all was used or the LVs 
+		 * Only let hidden LVs through if --all was used or the LVs 
 		 * were specifically named on the command line.
 		 */
 		if (!lvargs_supplied && !lv_is_visible(lvl->lv) && !arg_count(cmd, all_ARG))
 			continue;
+
+		/*
+		 * Only let sanlock LV through if --all was used or if
+		 * it is named on the command line.
+		 */
+		if (lv_is_lockd_sanlock_lv(lvl->lv)) {
+			if (arg_count(cmd, all_ARG) ||
+			    (lvargs_supplied && str_list_match_item(arg_lvnames, lvl->lv->name))) {
+				log_very_verbose("Processing lockd_sanlock_lv %s/%s.", vg->name, lvl->lv->name);
+			} else {
+				continue;
+			}
+		}
 
 		/*
 		 * process the LV if one of the following:
@@ -2170,6 +2386,7 @@ static int _process_lv_vgnameid_list(struct cmd_context *cmd, uint32_t flags,
 	struct dm_str_list *sl;
 	struct dm_list *tags_arg;
 	struct dm_list lvnames;
+	uint32_t lockd_state = 0;
 	const char *vg_name;
 	const char *vg_uuid;
 	const char *vgn;
@@ -2216,18 +2433,20 @@ static int _process_lv_vgnameid_list(struct cmd_context *cmd, uint32_t flags,
 			}
 		}
 
-		vg = vg_read(cmd, vg_name, vg_uuid, flags);
+		if (!lockd_vg(cmd, vg_name, NULL, 0, &lockd_state)) {
+			ret_max = ECMD_FAILED;
+			continue;
+		}
+
+		vg = vg_read(cmd, vg_name, vg_uuid, flags, lockd_state);
 		if (_ignore_vg(vg, vg_name, arg_vgnames, flags & READ_ALLOW_INCONSISTENT, &skip)) {
 			stack;
 			ret_max = ECMD_FAILED;
-			release_vg(vg);
-			continue;
+			goto endvg;
 
 		}
-		if (skip) {
-			release_vg(vg);
-			continue;
-		}
+		if (skip)
+			goto endvg;
 
 		ret = process_each_lv_in_vg(cmd, vg, &lvnames, tags_arg, 0,
 					    handle, process_single_lv);
@@ -2236,7 +2455,11 @@ static int _process_lv_vgnameid_list(struct cmd_context *cmd, uint32_t flags,
 		if (ret > ret_max)
 			ret_max = ret;
 
-		unlock_and_release_vg(cmd, vg, vg_name);
+		unlock_vg(cmd, vg_name);
+endvg:
+		release_vg(vg);
+		if (!lockd_vg(cmd, vg_name, "un", 0, &lockd_state))
+			stack;
 	}
 
 	return ret_max;
@@ -2259,7 +2482,8 @@ int process_each_lv(struct cmd_context *cmd, int argc, char **argv, uint32_t fla
 	int need_vgnameids = 0;
 	int ret;
 
-	cmd->error_foreign_vgs = 0;
+	/* Disable error in vg_read so we can print it from ignore_vg. */
+	cmd->vg_read_print_access_error = 0;
 
 	dm_list_init(&arg_tags);
 	dm_list_init(&arg_vgnames);
@@ -2293,8 +2517,16 @@ int process_each_lv(struct cmd_context *cmd, int argc, char **argv, uint32_t fla
 	else if (dm_list_empty(&arg_vgnames) && handle->internal_report_for_select)
 		need_vgnameids = 1;
 
-	if (need_vgnameids && !get_vgnameids(cmd, &vgnameids_on_system, NULL, 0))
-		goto_out;
+	if (need_vgnameids) {
+		/* Needed for a current listing of the global VG namespace. */
+		if (!lockd_gl(cmd, "sh", 0)) {
+			ret = ECMD_FAILED;
+			goto_out;
+		}
+
+		if (!get_vgnameids(cmd, &vgnameids_on_system, NULL, 0))
+			goto_out;
+	}
 
 	if (dm_list_empty(&arg_vgnames) && dm_list_empty(&vgnameids_on_system)) {
 		/* FIXME Should be log_print, but suppressed for reporting cmds */
@@ -2687,6 +2919,7 @@ static int _process_pvs_in_vgs(struct cmd_context *cmd, uint32_t flags,
 	struct vgnameid_list *vgnl;
 	const char *vg_name;
 	const char *vg_uuid;
+	uint32_t lockd_state = 0;
 	int ret_max = ECMD_PROCESSED;
 	int ret;
 	int skip;
@@ -2699,14 +2932,17 @@ static int _process_pvs_in_vgs(struct cmd_context *cmd, uint32_t flags,
 		vg_uuid = vgnl->vgid;
 		skip = 0;
 
-		vg = vg_read(cmd, vg_name, vg_uuid, flags | READ_WARN_INCONSISTENT);
+		if (!lockd_vg(cmd, vg_name, NULL, 0, &lockd_state)) {
+			ret_max = ECMD_FAILED;
+			continue;
+		}
+
+		vg = vg_read(cmd, vg_name, vg_uuid, flags | READ_WARN_INCONSISTENT, lockd_state);
 		if (_ignore_vg(vg, vg_name, NULL, flags & READ_ALLOW_INCONSISTENT, &skip)) {
 			stack;
 			ret_max = ECMD_FAILED;
-			if (!skip) {
-				release_vg(vg);
-				continue;
-			}
+			if (!skip)
+				goto endvg;
 			/* Drop through to eliminate a clustered VG's PVs from the devices list */
 		}
 		
@@ -2723,10 +2959,12 @@ static int _process_pvs_in_vgs(struct cmd_context *cmd, uint32_t flags,
 		if (ret > ret_max)
 			ret_max = ret;
 
-		if (skip)
-			release_vg(vg);
-		else
-			unlock_and_release_vg(cmd, vg, vg->name);
+		if (!skip)
+			unlock_vg(cmd, vg->name);
+endvg:
+		release_vg(vg);
+		if (!lockd_vg(cmd, vg_name, "un", 0, &lockd_state))
+			stack;
 
 		/* Quit early when possible. */
 		if (!process_all_pvs && dm_list_empty(arg_tags) && dm_list_empty(arg_devices))
@@ -2754,7 +2992,8 @@ int process_each_pv(struct cmd_context *cmd,
 	int ret_max = ECMD_PROCESSED;
 	int ret;
 
-	cmd->error_foreign_vgs = 0;
+	/* Disable error in vg_read so we can print it from ignore_vg. */
+	cmd->vg_read_print_access_error = 0;
 
 	dm_list_init(&arg_tags);
 	dm_list_init(&arg_pvnames);
@@ -2779,6 +3018,10 @@ int process_each_pv(struct cmd_context *cmd,
 
 	process_all_devices = process_all_pvs && (cmd->command->flags & ENABLE_ALL_DEVS) &&
 			      arg_count(cmd, all_ARG);
+
+	/* Needed for a current listing of the global VG namespace. */
+	if (!only_this_vgname && !lockd_gl(cmd, "sh", 0))
+		return_ECMD_FAILED;
 
 	/*
 	 * Need pvid's set on all PVs before processing so that pvid's

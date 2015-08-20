@@ -16,7 +16,6 @@
 #include "segtype.h"
 #include "display.h"
 #include "text_export.h"
-#include "text_import.h"
 #include "config.h"
 #include "str_list.h"
 #include "targets.h"
@@ -353,6 +352,7 @@ static int _raid_target_percent(void **target_state,
 		else
 			break;
 	}
+
 	if (!pos ||
 	    (sscanf(pos, "%" PRIu64 "/%" PRIu64 "%n",
 		    &numerator, &denominator, &i) != 2) ||

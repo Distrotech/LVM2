@@ -47,7 +47,8 @@ struct text_vg_version_ops {
 	int (*check_version) (const struct dm_config_tree * cf);
 	struct volume_group *(*read_vg) (struct format_instance * fid,
 					 const struct dm_config_tree *cf,
-					 unsigned use_cached_pvs);
+					 unsigned use_cached_pvs,
+					 unsigned allow_lvmetad_extensions);
 	void (*read_desc) (struct dm_pool * mem, const struct dm_config_tree *cf,
 			   time_t *when, char **desc);
 	int (*read_vgname) (const struct format_type *fmt,
@@ -59,9 +60,6 @@ struct text_vg_version_ops *text_vg_vsn1_init(void);
 
 int print_flags(uint64_t status, int type, char *buffer, size_t size);
 int read_flags(uint64_t *status, int type, const struct dm_config_value *cv);
-
-char *alloc_printed_tags(struct dm_list *tags);
-int read_tags(struct dm_pool *mem, struct dm_list *tags, const struct dm_config_value *cv);
 
 int text_vg_export_file(struct volume_group *vg, const char *desc, FILE *fp);
 size_t text_vg_export_raw(struct volume_group *vg, const char *desc, char **buf);

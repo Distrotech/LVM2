@@ -36,9 +36,9 @@ include $(top_builddir)/make.tmpl
 T ?= .
 S ?= @ # never match anything by default
 VERBOSE ?= 0
-ALL := $(shell find $(srcdir) \( -path \*/shell/\*.sh -or -path \*/api/\*.sh \) | sort)
+ALL := $(shell find -L $(srcdir) \( -path \*/shell/\*.sh -or -path \*/api/\*.sh \) | sort)
 comma = ,
-RUN := $(shell find $(srcdir) -regextype posix-egrep \( -path \*/shell/\*.sh -or -path \*/api/\*.sh \) -and -regex "$(srcdir)/.*($(subst $(comma),|,$(T))).*" -and -not -regex "$(srcdir)/.*($(subst $(comma),|,$(S))).*" | sort)
+RUN := $(shell find -L $(srcdir) -regextype posix-egrep \( -path \*/shell/\*.sh -or -path \*/api/\*.sh \) -and -regex "$(srcdir)/.*($(subst $(comma),|,$(T))).*" -and -not -regex "$(srcdir)/.*($(subst $(comma),|,$(S))).*" | sort)
 RUN_BASE = $(subst $(srcdir)/,,$(RUN))
 
 ifeq ("@BUILD_LVMETAD@", "yes")
@@ -66,10 +66,13 @@ help:
 	@echo -e "\nAvailable targets:"
 	@echo "  all			Default target, run check."
 	@echo "  check			Run all tests."
+	@echo "  check_system		Run all tests using udev."
 	@echo "  check_local		Run tests without clvmd and lvmetad."
 	@echo "  check_cluster		Run tests with cluster daemon."
 	@echo "  check_lvmetad		Run tests with lvmetad daemon."
 	@echo "  check_lvmpolld         Run tests with lvmpolld daemon."
+	@echo "  check_lvmlockd_sanlock Run tests with lvmlockd and sanlock."
+	@echo "  check_lvmlockd_dlm     Run tests with lvmlockd and dlm."
 	@echo "  clean			Clean dir."
 	@echo "  help			Display callable targets."
 	@echo -e "\nSupported variables:"
@@ -138,6 +141,32 @@ check_lvmpolld: .tests-stamp
 		--flavours ndev-lvmpolld,ndev-cluster-lvmpolld,ndev-lvmetad-lvmpolld --only $(T) --skip $(S)
 endif
 
+ifeq ("@BUILD_LVMLOCKD@", "yes")
+check_lvmlockd_sanlock: .tests-stamp
+	VERBOSE=$(VERBOSE) ./lib/runner \
+		--testdir . --outdir results \
+		--flavours udev-lvmlockd-sanlock --only shell/sanlock-prepare.sh
+	VERBOSE=$(VERBOSE) ./lib/runner \
+		--testdir . --outdir results \
+		--flavours udev-lvmlockd-sanlock --only $(T) --skip $(S)
+	VERBOSE=$(VERBOSE) ./lib/runner \
+		--testdir . --outdir results \
+		--flavours udev-lvmlockd-sanlock --only shell/sanlock-remove.sh
+endif
+
+ifeq ("@BUILD_LVMLOCKD@", "yes")
+check_lvmlockd_dlm: .tests-stamp
+	VERBOSE=$(VERBOSE) ./lib/runner \
+		--testdir . --outdir results \
+		--flavours udev-lvmlockd-dlm --only shell/dlm-prepare.sh
+	VERBOSE=$(VERBOSE) ./lib/runner \
+		--testdir . --outdir results \
+		--flavours udev-lvmlockd-dlm --only $(T) --skip $(S)
+	VERBOSE=$(VERBOSE) ./lib/runner \
+		--testdir . --outdir results \
+		--flavours udev-lvmlockd-dlm --only shell/dlm-remove.sh
+endif
+
 DATADIR = $(datadir)/lvm2-testsuite
 EXECDIR = $(libexecdir)/lvm2-testsuite
 
@@ -153,6 +182,8 @@ LIB_FLAVOURS = \
  lib/flavour-udev-lvmetad-lvmpolld\
  lib/flavour-udev-lvmetad\
  lib/flavour-udev-lvmpolld\
+ lib/flavour-udev-lvmlockd-sanlock\
+ lib/flavour-udev-lvmlockd-dlm\
  lib/flavour-udev-vanilla
 
 LIB_LOCAL = lib/paths lib/runner
@@ -168,7 +199,8 @@ install: .tests-stamp lib/paths-installed
 	$(INSTALL_PROGRAM) api/*.{t,py} $(DATADIR)/api/
 	$(INSTALL_DATA) lib/paths-installed $(DATADIR)/lib/paths
 	$(INSTALL_DATA) $(LIB_FLAVOURS) $(DATADIR)/lib/
-	$(INSTALL_DATA) $(abs_top_srcdir)/conf/thin-performance.profile $(DATADIR)/lib/thin-performance.profile
+	for i in cache-mq cache-smq thin-performance ; do \
+		$(INSTALL_DATA) $(abs_top_srcdir)/conf/$$i.profile $(DATADIR)/lib/$$i.profile; done
 	$(INSTALL_SCRIPT) $(LIB_SHARED) $(DATADIR)/lib/
 	for i in $(CMDS); do (cd $(DATADIR)/lib && $(LN_S) -f lvm-wrapper $$i); done
 

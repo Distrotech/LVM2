@@ -381,19 +381,61 @@ static int _print_flag_config(struct formatter *f, uint64_t status, int type)
 	return 1;
 }
 
-
-static int _out_tags(struct formatter *f, struct dm_list *tagsl)
+static char *_alloc_printed_str_list(struct dm_list *list)
 {
-	char *tag_buffer;
+	struct dm_str_list *sl;
+	int first = 1;
+	size_t size = 0;
+	char *buffer, *buf;
 
-	if (!dm_list_empty(tagsl)) {
-		if (!(tag_buffer = alloc_printed_tags(tagsl)))
+	dm_list_iterate_items(sl, list)
+		/* '"' + item + '"' + ',' + ' ' */
+		size += strlen(sl->str) + 4;
+	/* '[' + ']' + '\0' */
+	size += 3;
+
+	if (!(buffer = buf = dm_malloc(size))) {
+		log_error("Could not allocate memory for string list buffer.");
+		return NULL;
+	}
+
+	if (!emit_to_buffer(&buf, &size, "["))
+		goto_bad;
+
+	dm_list_iterate_items(sl, list) {
+		if (!first) {
+			if (!emit_to_buffer(&buf, &size, ", "))
+				goto_bad;
+		} else
+			first = 0;
+
+		if (!emit_to_buffer(&buf, &size, "\"%s\"", sl->str))
+			goto_bad;
+	}
+
+	if (!emit_to_buffer(&buf, &size, "]"))
+		goto_bad;
+
+	return buffer;
+
+bad:
+	dm_free(buffer);
+	return_NULL;
+}
+
+static int _out_list(struct formatter *f, struct dm_list *list,
+		     const char *list_name)
+{
+	char *buffer;
+
+	if (!dm_list_empty(list)) {
+		if (!(buffer = _alloc_printed_str_list(list)))
 			return_0;
-		if (!out_text(f, "tags = %s", tag_buffer)) {
-			dm_free(tag_buffer);
+		if (!out_text(f, "%s = %s", list_name, buffer)) {
+			dm_free(buffer);
 			return_0;
 		}
-		dm_free(tag_buffer);
+		dm_free(buffer);
 	}
 
 	return 1;
@@ -431,7 +473,7 @@ static int _print_vg(struct formatter *f, struct volume_group *vg)
 	if (!_print_flag_config(f, status, VG_FLAGS))
 		return_0;
 
-	if (!_out_tags(f, &vg->tags))
+	if (!_out_list(f, &vg->tags, "tags"))
 		return_0;
  
 	if (vg->system_id && *vg->system_id)
@@ -439,8 +481,11 @@ static int _print_vg(struct formatter *f, struct volume_group *vg)
 	else if (vg->lvm1_system_id && *vg->lvm1_system_id)
 		outf(f, "system_id = \"%s\"", vg->lvm1_system_id);
 
-	if (vg->lock_type)
+	if (vg->lock_type) {
 		outf(f, "lock_type = \"%s\"", vg->lock_type);
+		if (vg->lock_args)
+			outf(f, "lock_args = \"%s\"", vg->lock_args);
+	}
 
 	outsize(f, (uint64_t) vg->extent_size, "extent_size = %u",
 		vg->extent_size);
@@ -518,7 +563,7 @@ static int _print_pvs(struct formatter *f, struct volume_group *vg)
 		if (!_print_flag_config(f, pv->status, PV_FLAGS))
 			return_0;
 
-		if (!_out_tags(f, &pv->tags))
+		if (!_out_list(f, &pv->tags, "tags"))
 			return_0;
 
 		outsize(f, pv->size, "dev_size = %" PRIu64, pv->size);
@@ -557,7 +602,7 @@ static int _print_segment(struct formatter *f, struct volume_group *vg,
 	outnl(f);
 	outf(f, "type = \"%s\"", seg->segtype->name);
 
-	if (!_out_tags(f, &seg->tags))
+	if (!_out_list(f, &seg->tags, "tags"))
 		return_0;
 
 	if (seg->segtype->ops->text_export &&
@@ -660,7 +705,7 @@ static int _print_lv(struct formatter *f, struct logical_volume *lv)
 	if (!_print_flag_config(f, status, LV_FLAGS))
 		return_0;
 
-	if (!_out_tags(f, &lv->tags))
+	if (!_out_list(f, &lv->tags, "tags"))
 		return_0;
 
 	if (lv->timestamp) {
@@ -675,6 +720,9 @@ static int _print_lv(struct formatter *f, struct logical_volume *lv)
 		outfc(f, buffer, "creation_time = %" PRIu64,
 		      lv->timestamp);
 	}
+
+	if (lv->lock_args)
+		outf(f, "lock_args = \"%s\"", lv->lock_args);
 
 	if (lv->alloc != ALLOC_INHERIT)
 		outf(f, "allocation_policy = \"%s\"",

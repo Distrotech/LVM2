@@ -10,6 +10,10 @@
  * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
+#define _REENTRANT
+
+#include "tool.h"
+
 #include "daemon-io.h"
 #include "daemon-server.h"
 #include "daemon-log.h"
@@ -77,8 +81,6 @@ static void _exit_handler(int sig __attribute__((unused)))
 #  define SD_LISTEN_FDS_ENV_VAR_NAME "LISTEN_FDS"
 #  define SD_LISTEN_FDS_START 3
 #  define SD_FD_SOCKET_SERVER SD_LISTEN_FDS_START
-
-#  include <stdio.h>
 
 static int _is_idle(daemon_state s)
 {
@@ -537,6 +539,7 @@ void daemon_start(daemon_state s)
 	log_state _log = { { 0 } };
 	thread_state _threads = { .next = NULL };
 	unsigned timeout_count = 0;
+	fd_set in;
 
 	/*
 	 * Switch to C locale to avoid reading large locale-archive file used by
@@ -604,13 +607,23 @@ void daemon_start(daemon_state s)
 	if (!s.foreground)
 		kill(getppid(), SIGTERM);
 
+	/*
+	 * Use daemon_main for daemon-specific init and polling, or
+	 * use daemon_init for daemon-specific init and generic lib polling.
+	 */
+
+	if (s.daemon_main) {
+		if (!s.daemon_main(&s))
+			failed = 1;
+		goto out;
+	}
+
 	if (s.daemon_init)
 		if (!s.daemon_init(&s))
 			failed = 1;
 
 	while (!_shutdown_requested && !failed) {
 		_reset_timeout(s);
-		fd_set in;
 		FD_ZERO(&in);
 		FD_SET(s.socket_fd, &in);
 		if (select(FD_SETSIZE, &in, NULL, NULL, _get_timeout(s)) < 0 && errno != EINTR)
@@ -635,7 +648,7 @@ void daemon_start(daemon_state s)
 
 	INFO(&s, "%s waiting for client threads to finish", s.name);
 	reap(s, 1);
-
+out:
 	/* If activated by systemd, do not unlink the socket - systemd takes care of that! */
 	if (!_systemd_activation && s.socket_fd >= 0)
 		if (unlink(s.socket_path))

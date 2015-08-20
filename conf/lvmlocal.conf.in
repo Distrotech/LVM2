@@ -36,8 +36,7 @@ local {
 	# Example:
 	# Set the system_id to the string 'host1'.
 	# system_id = "host1"
-	# This configuration option does not have a default value defined.
-	# system_id=""
+	# system_id = ""
 
 	# Configuration option local/extra_system_ids.
 	# A list of extra VG system IDs the local host can access.
@@ -49,5 +48,10 @@ local {
 	# Use this only after consulting 'man lvmsystemid'
 	# to be certain of correct usage and possible dangers.
 	# This configuration option does not have a default value defined.
-	# extra_system_ids=[]
+
+	# Configuration option local/host_id.
+	# The lvmlockd sanlock host_id.
+	# This must be a unique among all hosts,
+	# and must be between 1 and 2000.
+	# host_id = 0
 }

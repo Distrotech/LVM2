@@ -68,6 +68,7 @@ struct dev_manager {
 	uint32_t pvmove_mirror_count;
 	int flush_required;
 	int activation;                 /* building activation tree */
+	int suspend;			/* building suspend tree */
 	int skip_external_lv;
 	struct dm_list pending_delete;	/* str_list of dlid(s) with pending delete */
 	unsigned track_pending_delete;
@@ -453,6 +454,78 @@ out:
 	return r;
 }
 
+static int _device_is_suspended(int major, int minor)
+{
+	struct dm_task *dmt;
+	struct dm_info info;
+	int r = 0;
+
+	if (!(dmt = dm_task_create(DM_DEVICE_INFO)))
+		return 0;
+
+	if (!dm_task_set_major_minor(dmt, major, minor, 1))
+		goto_out;
+
+	if (activation_checks() && !dm_task_enable_checks(dmt))
+		goto_out;
+
+	if (!dm_task_run(dmt) ||
+	    !dm_task_get_info(dmt, &info)) {
+		log_error("Failed to get info for device %d:%d", major, minor);
+		goto out;
+	}
+
+	r = info.exists && info.suspended;
+out:
+	dm_task_destroy(dmt);
+	return r;
+}
+
+static int _ignore_suspended_snapshot_component(struct device *dev)
+{
+	struct dm_task *dmt;
+	void *next = NULL;
+	char *params, *target_type = NULL;
+	uint64_t start, length;
+	int major1, minor1, major2, minor2;
+	int r = 0;
+
+	if (!(dmt = dm_task_create(DM_DEVICE_TABLE)))
+		return_0;
+
+	if (!dm_task_set_major_minor(dmt, MAJOR(dev->dev), MINOR(dev->dev), 1))
+		goto_out;
+
+	if (activation_checks() && !dm_task_enable_checks(dmt))
+		goto_out;
+
+	if (!dm_task_run(dmt)) {
+		log_error("Failed to get state of snapshot or snapshot origin device");
+		goto out;
+	}
+
+	do {
+		next = dm_get_next_target(dmt, next, &start, &length, &target_type, &params);
+		if (!strcmp(target_type, "snapshot")) {
+			if (sscanf(params, "%d:%d %d:%d", &major1, &minor1, &major2, &minor2) != 4) {
+				log_error("Incorrect snapshot table found");
+				goto_out;
+			}
+			r = r || _device_is_suspended(major1, minor1) || _device_is_suspended(major2, minor2);
+		} else if (!strcmp(target_type, "snapshot-origin")) {
+			if (sscanf(params, "%d:%d", &major1, &minor1) != 2) {
+				log_error("Incorrect snapshot-origin table found");
+				goto_out;
+			}
+			r = r || _device_is_suspended(major1, minor1);
+		}
+	} while (next);
+
+out:
+	dm_task_destroy(dmt);
+	return r;
+}
+
 /*
  * device_is_usable
  * @dev
@@ -561,15 +634,25 @@ int device_is_usable(struct device *dev, struct dev_usable_check_params check)
 		 * supported anymore and in general using mirrors in a stack
 		 * is disabled by default (with a warning that if enabled,
 		 * it could cause various deadlocks).
-		 * This is former check used, but it's not correct as it
-		 * disables snapshot-origins to be used in a stack in
-		 * general, not just over mirrors!
+		 * Similar situation can happen with RAID devices where
+		 * a RAID device can be snapshotted.
+		 * If one of the RAID legs are down and we're doing
+		 * lvconvert --repair, there's a time period in which
+		 * snapshot components are (besides other devs) suspended.
+		 * See also https://bugzilla.redhat.com/show_bug.cgi?id=1219222
+		 * for an example where this causes problems.
+		 *
+		 * This is a quick check for now, but replace it with more
+		 * robust and better check that would check the stack
+		 * correctly, not just snapshots but any cobimnation possible
+		 * in a stack - use proper dm tree to check this instead.
 		 */
-		/*if (check.check_suspended && target_type && !strcmp(target_type, "snapshot-origin")) {
-			log_debug_activation("%s: Snapshot-origin device %s not usable.",
-					     dev_name(dev), name);
+		if (check.check_suspended && target_type &&
+		    (!strcmp(target_type, "snapshot") || !strcmp(target_type, "snapshot-origin")) &&
+		    _ignore_suspended_snapshot_component(dev)) {
+			log_debug_activation("%s: %s device %s not usable.", dev_name(dev), target_type, name);
 			goto out;
-		}*/
+		}
 
 		if (target_type && strcmp(target_type, "error"))
 			only_error_target = 0;
@@ -1843,7 +1926,6 @@ struct pool_cb_data {
 	int skip_zero;  /* to skip zeroed device header (check first 64B) */
 	int exec;       /* which binary to call */
 	int opts;
-	const char *defaults;
 	const char *global;
 };
 
@@ -1851,7 +1933,6 @@ static int _pool_callback(struct dm_tree_node *node,
 			  dm_node_callback_t type, void *cb_data)
 {
 	int ret, status, fd;
-	char *split;
 	const struct dm_config_node *cn;
 	const struct dm_config_value *cv;
 	const struct pool_cb_data *data = cb_data;
@@ -1866,23 +1947,19 @@ static int _pool_callback(struct dm_tree_node *node,
 	if (!*argv[0])
 		return 1; /* Checking disabled */
 
-	if ((cn = find_config_tree_node(mlv->vg->cmd, data->opts, NULL))) {
-		for (cv = cn->v; cv && args < 16; cv = cv->next) {
-			if (cv->type != DM_CFG_STRING) {
-				log_error("Invalid string in config file: "
-					  "global/%s_check_options",
-					  data->global);
-				return 0;
-			}
-			argv[++args] = cv->v.str;
-		}
-	} else {
-		/* Use default options (no support for options with spaces) */
-		if (!(split = dm_pool_strdup(data->dm->mem, data->defaults))) {
-			log_error("Failed to duplicate defaults.");
+	if (!(cn = find_config_tree_array(mlv->vg->cmd, data->opts, NULL))) {
+		log_error(INTERNAL_ERROR "Unable to find configuration for pool check options.");
+		return 0;
+	}
+
+	for (cv = cn->v; cv && args < 16; cv = cv->next) {
+		if (cv->type != DM_CFG_STRING) {
+			log_error("Invalid string in config file: "
+				  "global/%s_check_options",
+				  data->global);
 			return 0;
 		}
-		args = dm_split_words(split, 16, 0, (char**) argv + 1);
+		argv[++args] = cv->v.str;
 	}
 
 	if (args == 16) {
@@ -1973,14 +2050,12 @@ static int _pool_register_callback(struct dev_manager *dm,
 		data->skip_zero = 1;
 		data->exec = global_thin_check_executable_CFG;
 		data->opts = global_thin_check_options_CFG;
-		data->defaults = DEFAULT_THIN_CHECK_OPTION1 " " DEFAULT_THIN_CHECK_OPTION2;
 		data->global = "thin";
 	} else if (lv_is_cache(lv)) { /* cache pool */
 		data->pool_lv = first_seg(lv)->pool_lv;
 		data->skip_zero = dm->activation;
 		data->exec = global_cache_check_executable_CFG;
 		data->opts = global_cache_check_options_CFG;
-		data->defaults = DEFAULT_CACHE_CHECK_OPTION1;
 		data->global = "cache";
 	} else {
 		log_error(INTERNAL_ERROR "Registering unsupported pool callback.");
@@ -1992,6 +2067,11 @@ static int _pool_register_callback(struct dev_manager *dm,
 	return 1;
 }
 
+/* Declaration to resolve suspend tree and message passing for thin-pool */
+static int _add_target_to_dtree(struct dev_manager *dm,
+				struct dm_tree_node *dnode,
+				struct lv_segment *seg,
+				struct lv_activate_opts *laopts);
 /*
  * Add LV and any known dependencies
  */
@@ -2060,15 +2140,43 @@ static int _add_lv_to_dtree(struct dev_manager *dm, struct dm_tree *dtree,
 		 */
 		if (!_add_dev_to_dtree(dm, dtree, lv, lv_layer(lv)))
 			return_0;
+
+		/*
+		 * TODO: change API and move this code
+		 * Could be easier to handle this in _add_dev_to_dtree()
+		 * and base this according to info.exists ?
+		 */
 		if (!dm->activation) {
-			/* Setup callback for non-activation partial tree */
-			/* Activation gets own callback when needed */
-			/* TODO: extend _cached_dm_info() to return dnode */
 			if (!(uuid = build_dm_uuid(dm->mem, lv, lv_layer(lv))))
 				return_0;
-			if ((node = dm_tree_find_node_by_uuid(dtree, uuid)) &&
-			    !_pool_register_callback(dm, node, lv))
-				return_0;
+			if ((node = dm_tree_find_node_by_uuid(dtree, uuid))) {
+				if (origin_only) {
+					struct lv_activate_opts laopts = {
+						.origin_only = 1,
+						.send_messages = 1 /* Node with messages */
+					};
+					/*
+					 * Add some messsages if right node exist in the table only
+					 * when building SUSPEND tree for origin-only thin-pool.
+					 *
+					 * TODO: Fix call of '_add_target_to_dtree()' to add message
+					 * to thin-pool node as we already know the pool node exists
+					 * in the table. Any better/cleaner API way ?
+					 *
+					 * Probably some 'new' target method to add messages for any node?
+					 */
+					if (dm->suspend &&
+					    !dm_list_empty(&(first_seg(lv)->thin_messages)) &&
+					    !_add_target_to_dtree(dm, node, first_seg(lv), &laopts))
+						return_0;
+				} else {
+					/* Setup callback for non-activation partial tree */
+					/* Activation gets own callback when needed */
+					/* TODO: extend _cached_dm_info() to return dnode */
+					if (!_pool_register_callback(dm, node, lv))
+						return_0;
+				}
+			}
 		}
 	}
 
@@ -2167,7 +2275,7 @@ static struct dm_tree *_create_partial_dtree(struct dev_manager *dm, const struc
 
 	dm_tree_set_optional_uuid_suffixes(dtree, &uuid_suffix_list[0]);
 
-	if (!_add_lv_to_dtree(dm, dtree, lv, (lv_is_origin(lv) || lv_is_thin_volume(lv)) ? origin_only : 0))
+	if (!_add_lv_to_dtree(dm, dtree, lv, (lv_is_origin(lv) || lv_is_thin_volume(lv) || lv_is_thin_pool(lv)) ? origin_only : 0))
 		goto_bad;
 
 	return dtree;
@@ -2627,7 +2735,7 @@ static int _add_segment_to_dtree(struct dev_manager *dm,
 		return_0;
 
 	/* Add pool layer */
-	if (seg->pool_lv &&
+	if (seg->pool_lv && !laopts->origin_only &&
 	    !_add_new_lv_to_dtree(dm, dtree, seg->pool_lv, laopts,
 				  lv_layer(seg->pool_lv)))
 		return_0;
@@ -3081,7 +3189,10 @@ static int _tree_action(struct dev_manager *dm, const struct logical_volume *lv,
 	int r = 0;
 
 	if (action < DM_ARRAY_SIZE(_action_names))
-		log_debug_activation("Creating %s tree for %s.", _action_names[action], lv->name);
+		log_debug_activation("Creating %s%s tree for %s.",
+				     _action_names[action],
+				     (laopts->origin_only) ? " origin-only" : "",
+				     display_lvname(lv));
 
 	/* Some LV can be used for top level tree */
 	/* TODO: add more.... */
@@ -3091,6 +3202,7 @@ static int _tree_action(struct dev_manager *dm, const struct logical_volume *lv,
 	}
 	/* Some targets may build bigger tree for activation */
 	dm->activation = ((action == PRELOAD) || (action == ACTIVATE));
+	dm->suspend = (action == SUSPEND_WITH_LOCKFS) || (action == SUSPEND);
 	if (!(dtree = _create_partial_dtree(dm, lv, laopts->origin_only)))
 		return_0;
 
@@ -3135,7 +3247,9 @@ static int _tree_action(struct dev_manager *dm, const struct logical_volume *lv,
 	case PRELOAD:
 	case ACTIVATE:
 		/* Add all required new devices to tree */
-		if (!_add_new_lv_to_dtree(dm, dtree, lv, laopts, (lv_is_origin(lv) && laopts->origin_only) ? "real" : NULL))
+		if (!_add_new_lv_to_dtree(dm, dtree, lv, laopts,
+					  (lv_is_origin(lv) && laopts->origin_only) ? "real" :
+					  (lv_is_thin_pool(lv) && laopts->origin_only) ? "tpool" : NULL))
 			goto_out;
 
 		/* Preload any devices required before any suspensions */
@@ -3173,7 +3287,6 @@ out_no_root:
 int dev_manager_activate(struct dev_manager *dm, const struct logical_volume *lv,
 			 struct lv_activate_opts *laopts)
 {
-	laopts->send_messages = 1;
 	if (!_tree_action(dm, lv, laopts, ACTIVATE))
 		return_0;
 

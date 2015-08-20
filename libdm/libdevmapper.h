@@ -1,6 +1,7 @@
 /*
  * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.
- * Copyright (C) 2004-2014 Red Hat, Inc. All rights reserved.
+ * Copyright (C) 2004-2015 Red Hat, Inc. All rights reserved.
+ * Copyright (C) 2006 Rackable Systems All rights reserved.
  *
  * This file is part of the device-mapper userspace tools.
  *
@@ -127,6 +128,7 @@ enum {
  */
 
 struct dm_task;
+struct dm_timestamp;
 
 struct dm_task *dm_task_create(int type);
 void dm_task_destroy(struct dm_task *dmt);
@@ -226,6 +228,12 @@ int dm_task_suppress_identical_reload(struct dm_task *dmt);
 int dm_task_secure_data(struct dm_task *dmt);
 int dm_task_retry_remove(struct dm_task *dmt);
 int dm_task_deferred_remove(struct dm_task *dmt);
+
+/*
+ * Record timestamp immediately after the ioctl returns.
+ */
+int dm_task_set_record_timestamp(struct dm_task *dmt);
+struct dm_timestamp *dm_task_get_ioctl_timestamp(struct dm_task *dmt);
 
 /*
  * Enable checks for common mistakes such as issuing ioctls in an unsafe order.
@@ -389,6 +397,515 @@ int dm_get_status_thin(struct dm_pool *mem, const char *params,
 		       struct dm_status_thin **status);
 
 /*
+ * device-mapper statistics support
+ */
+
+/*
+ * Statistics handle.
+ *
+ * Operations on dm_stats objects include managing statistics regions
+ * and obtaining and manipulating current counter values from the
+ * kernel. Methods are provided to return baisc count values and to
+ * derive time-based metrics when a suitable interval estimate is
+ * provided.
+ *
+ * Internally the dm_stats handle contains a pointer to a table of one
+ * or more dm_stats_region objects representing the regions registered
+ * with the dm_stats_create_region() method. These in turn point to a
+ * table of one or more dm_stats_counters objects containing the
+ * counter sets for each defined area within the region:
+ *
+ * dm_stats->dm_stats_region[nr_regions]->dm_stats_counters[nr_areas]
+ *
+ * This structure is private to the library and may change in future
+ * versions: all users should make use of the public interface and treat
+ * the dm_stats type as an opaque handle.
+ *
+ * Regions and counter sets are stored in order of increasing region_id.
+ * Depending on region specifications and the sequence of create and
+ * delete operations this may not correspond to increasing sector
+ * number: users of the library should not assume that this is the case
+ * unless region creation is deliberately managed to ensure this (by
+ * always creating regions in strict order of ascending sector address).
+ *
+ * Regions may also overlap so the same sector range may be included in
+ * more than one region or area: applications should be prepared to deal
+ * with this or manage regions such that it does not occur.
+ */
+struct dm_stats;
+
+/*
+ * Allocate a dm_stats handle to use for subsequent device-mapper
+ * statistics operations. A program_id may be specified and will be
+ * used by default for subsequent operations on this handle.
+ *
+ * If program_id is NULL or the empty string a program_id will be
+ * automatically set to the value contained in /proc/self/comm.
+ */
+struct dm_stats *dm_stats_create(const char *program_id);
+
+/*
+ * Bind a dm_stats handle to the specified device major and minor
+ * values. Any previous binding is cleared and any preexisting counter
+ * data contained in the handle is released.
+ */
+int dm_stats_bind_devno(struct dm_stats *dms, int major, int minor);
+
+/*
+ * Bind a dm_stats handle to the specified device name.
+ * Any previous binding is cleared and any preexisting counter
+ * data contained in the handle is released.
+ */
+int dm_stats_bind_name(struct dm_stats *dms, const char *name);
+
+/*
+ * Bind a dm_stats handle to the specified device UUID.
+ * Any previous binding is cleared and any preexisting counter
+ * data contained in the handle is released.
+ */
+int dm_stats_bind_uuid(struct dm_stats *dms, const char *uuid);
+
+#define DM_STATS_ALL_PROGRAMS ""
+/*
+ * Parse the response from a @stats_list message. dm_stats_list will
+ * allocate the necessary dm_stats and dm_stats region structures from
+ * the embedded dm_pool. No counter data will be obtained (the counters
+ * members of dm_stats_region objects are set to NULL).
+ *
+ * A program_id may optionally be supplied; if the argument is non-NULL
+ * only regions with a matching program_id value will be considered. If
+ * the argument is NULL then the default program_id associated with the
+ * dm_stats handle will be used. Passing the special value
+ * DM_STATS_ALL_PROGRAMS will cause all regions to be queried
+ * regardless of region program_id.
+ */
+int dm_stats_list(struct dm_stats *dms, const char *program_id);
+
+#define DM_STATS_REGIONS_ALL UINT64_MAX
+/*
+ * Populate a dm_stats object with statistics for one or more regions of
+ * the specified device.
+ *
+ * A program_id may optionally be supplied; if the argument is non-NULL
+ * only regions with a matching program_id value will be considered. If
+ * the argument is NULL then the default program_id associated with the
+ * dm_stats handle will be used. Passing the special value
+ * DM_STATS_ALL_PROGRAMS will cause all regions to be queried
+ * regardless of region program_id.
+ *
+ * Passing the special value DM_STATS_REGIONS_ALL as the region_id
+ * argument will attempt to retrieve all regions selected by the
+ * program_id argument.
+ *
+ * If region_id is used to request a single region_id to be populated
+ * the program_id is ignored.
+ */
+int dm_stats_populate(struct dm_stats *dms, const char *program_id,
+		      uint64_t region_id);
+
+/*
+ * Create a new statistics region on the device bound to dms.
+ *
+ * start and len specify the region start and length in 512b sectors.
+ * Passing zero for both start and len will create a region spanning
+ * the entire device.
+ *
+ * Step determines how to subdivide the region into discrete counter
+ * sets: a positive value specifies the size of areas into which the
+ * region should be split while a negative value will split the region
+ * into a number of areas equal to the absolute value of step:
+ *
+ * - a region with one area spanning the entire device:
+ *
+ *   dm_stats_create_region(dms, 0, 0, -1, p, a);
+ *
+ * - a region with areas of 1MiB:
+ *
+ *   dm_stats_create_region(dms, 0, 0, 1 << 11, p, a);
+ *
+ * - one 1MiB region starting at 1024 sectors with two areas:
+ *
+ *   dm_stats_create_region(dms, 1024, 1 << 11, -2, p, a);
+ *
+ * program_id is an optional string argument that identifies the
+ * program creating the region. If program_id is NULL or the empty
+ * string the default program_id stored in the handle will be used.
+ *
+ * aux_data is an optional string argument passed to the kernel that is
+ * stored with the statistics region. It is not currently accessed by
+ * the library or kernel and may be used to store arbitrary user data.
+ *
+ * The region_id of the newly-created region is returned in *region_id
+ * if it is non-NULL.
+ */
+int dm_stats_create_region(struct dm_stats *dms, uint64_t *region_id,
+			   uint64_t start, uint64_t len, int64_t step,
+			   const char *program_id, const char *aux_data);
+
+/*
+ * Delete the specified statistics region. This will also mark the
+ * region as not-present and discard any existing statistics data.
+ */
+int dm_stats_delete_region(struct dm_stats *dms, uint64_t region_id);
+
+/*
+ * Clear the specified statistics region. This requests the kernel to
+ * zero all counter values (except in-flight I/O). Note that this
+ * operation is not atomic with respect to reads of the counters; any IO
+ * events occurring between the last print operation and the clear will
+ * be lost. This can be avoided by using the atomic print-and-clear
+ * function of the dm_stats_print_region() call or by using the higher
+ * level dm_stats_populate() interface.
+ */
+int dm_stats_clear_region(struct dm_stats *dms, uint64_t region_id);
+
+/*
+ * Print the current counter values for the specified statistics region
+ * and return them as a string. The memory for the string buffer will
+ * be allocated from the dm_stats handle's private pool and should be
+ * returned by calling dm_stats_buffer_destroy() when no longer
+ * required. The pointer will become invalid following any call that
+ * clears or reinitializes the handle (destroy, list, populate, bind).
+ *
+ * This allows applications that wish to access the raw message response
+ * to obtain it via a dm_stats handle; no parsing of the textual counter
+ * data is carried out by this function.
+ *
+ * Most users are recommended to use the dm_stats_populate() call
+ * instead since this will automatically parse the statistics data into
+ * numeric form accessible via the dm_stats_get_*() counter access
+ * methods.
+ *
+ * A subset of the data lines may be requested by setting the
+ * start_line and num_lines parameters. If both are zero all data
+ * lines are returned.
+ *
+ * If the clear parameter is non-zero the operation will also
+ * atomically reset all counter values to zero (except in-flight IO).
+ */
+char *dm_stats_print_region(struct dm_stats *dms, uint64_t region_id,
+			    unsigned start_line, unsigned num_lines,
+			    unsigned clear);
+
+/*
+ * Destroy a statistics response buffer obtained from a call to
+ * dm_stats_print_region().
+ */
+void dm_stats_buffer_destroy(struct dm_stats *dms, char *buffer);
+
+/*
+ * Determine the number of regions contained in a dm_stats handle
+ * following a dm_stats_list() or dm_stats_populate() call.
+ *
+ * The value returned is the number of registered regions visible with the
+ * progam_id value used for the list or populate operation and may not be
+ * equal to the highest present region_id (either due to program_id
+ * filtering or gaps in the sequence of region_id values).
+ *
+ * Always returns zero on an empty handle.
+ */
+uint64_t dm_stats_get_nr_regions(const struct dm_stats *dms);
+
+/*
+ * Test whether region_id is present in this dm_stats handle.
+ */
+int dm_stats_region_present(const struct dm_stats *dms, uint64_t region_id);
+
+/*
+ * Returns the number of areas (counter sets) contained in the specified
+ * region_id of the supplied dm_stats handle.
+ */
+uint64_t dm_stats_get_region_nr_areas(const struct dm_stats *dms,
+				      uint64_t region_id);
+
+/*
+ * Returns the total number of areas (counter sets) in all regions of the
+ * given dm_stats object.
+ */
+uint64_t dm_stats_get_nr_areas(const struct dm_stats *dms);
+
+/*
+ * Destroy a dm_stats object and all associated regions and counter
+ * sets.
+ */
+void dm_stats_destroy(struct dm_stats *dms);
+
+/*
+ * Counter sampling interval
+ */
+
+/*
+ * Set the sampling interval for counter data to the specified value in
+ * either nanoseconds or milliseconds.
+ *
+ * The interval is used to calculate time-based metrics from the basic
+ * counter data: an interval must be set before calling any of the
+ * metric methods.
+ *
+ * For best accuracy the duration should be measured and updated at the
+ * end of each interval.
+ *
+ * All values are stored internally with nanosecond precision and are
+ * converted to or from ms when the millisecond interfaces are used.
+ */
+void dm_stats_set_sampling_interval_ns(struct dm_stats *dms,
+				       uint64_t interval_ns);
+
+void dm_stats_set_sampling_interval_ms(struct dm_stats *dms,
+				       uint64_t interval_ms);
+
+/*
+ * Retrieve the configured sampling interval in either nanoseconds or
+ * milliseconds.
+ */
+uint64_t dm_stats_get_sampling_interval_ns(const struct dm_stats *dms);
+uint64_t dm_stats_get_sampling_interval_ms(const struct dm_stats *dms);
+
+/*
+ * Override program_id. This may be used to change the default
+ * program_id value for an existing handle. If the allow_empty argument
+ * is non-zero a NULL or empty program_id is permitted.
+ *
+ * Use with caution! Most users of the library should set a valid,
+ * non-NULL program_id for every statistics region created. Failing to
+ * do so may result in confusing state when multiple programs are
+ * creating and managing statistics regions.
+ *
+ * All users of the library are encouraged to choose an unambiguous,
+ * unique program_id: this could be based on PID (for programs that
+ * create, report, and delete regions in a single process), session id,
+ * executable name, or some other distinguishing string.
+ *
+ * Use of the empty string as a program_id does not simplify use of the
+ * library or the command line tools and use of this value is strongly
+ * discouraged.
+ */
+int dm_stats_set_program_id(struct dm_stats *dms, int allow_empty,
+			    const char *program_id);
+
+/*
+ * Region properties: size, length & area_len.
+ *
+ * Region start and length are returned in units of 512b as specified
+ * at region creation time. The area_len value gives the size of areas
+ * into which the region has been subdivided. For regions with a single
+ * area spanning the range this value is equal to the region length.
+ *
+ * For regions created with a specified number of areas the value
+ * represents the size of the areas into which the kernel divided the
+ * region excluding any rounding of the last area size. The number of
+ * areas may be obtained using the dm_stats_nr_areas_region() call.
+ *
+ * All values are returned in units of 512b sectors.
+ */
+int dm_stats_get_region_start(const struct dm_stats *dms, uint64_t *start,
+			      uint64_t region_id);
+
+int dm_stats_get_region_len(const struct dm_stats *dms, uint64_t *len,
+			    uint64_t region_id);
+
+int dm_stats_get_region_area_len(const struct dm_stats *dms,
+				 uint64_t *len, uint64_t region_id);
+
+/*
+ * Area properties: start, offset and length.
+ *
+ * The area length is always equal to the area length of the region
+ * that contains it and is obtained from dm_stats_get_region_area_len().
+ *
+ * The start of an area is a function of the area_id and the containing
+ * region's start and area length: it gives the absolute offset into the
+ * containing device of the beginning of the area.
+ *
+ * The offset expresses the area's relative offset into the current
+ * region. I.e. the area start minus the start offset of the containing
+ * region.
+ *
+ * All values are returned in units of 512b sectors.
+ */
+int dm_stats_get_area_start(const struct dm_stats *dms, uint64_t *start,
+			    uint64_t region_id, uint64_t area_id);
+
+int dm_stats_get_area_offset(const struct dm_stats *dms, uint64_t *offset,
+			     uint64_t region_id, uint64_t area_id);
+
+/*
+ * Retrieve program_id and aux_data for a specific region. Only valid
+ * following a call to dm_stats_list(). The returned pointer does not
+ * need to be freed separately from the dm_stats handle but will become
+ * invalid after a dm_stats_destroy(), dm_stats_list(),
+ * dm_stats_populate(), or dm_stats_bind*() of the handle from which it
+ * was obtained.
+ */
+const char *dm_stats_get_region_program_id(const struct dm_stats *dms,
+					   uint64_t region_id);
+
+const char *dm_stats_get_region_aux_data(const struct dm_stats *dms,
+					 uint64_t region_id);
+
+/*
+ * Statistics cursor
+ *
+ * A dm_stats handle maintains an optional cursor into the statistics
+ * regions and areas that it stores. Iterators are provided to visit
+ * each region, or each area in a handle and accessor methods are
+ * provided to obtain properties and values for the region or area
+ * at the current cursor position.
+ *
+ * Using the cursor simplifies walking all regions or areas when the
+ * region table is sparse (i.e. contains some present and some
+ * non-present region_id values either due to program_id filtering
+ * or the ordering of region creation and deletion).
+ */
+
+/*
+ * Initialise the cursor of a dm_stats handle to address the first
+ * present region. It is valid to attempt to walk a NULL stats handle
+ * or a handle containing no present regions; in this case any call to
+ * dm_stats_walk_next() becomes a no-op and all calls to
+ * dm_stats_walk_end() return true.
+ */
+void dm_stats_walk_start(struct dm_stats *dms);
+
+/*
+ * Advance the statistics cursor to the next area, or to the next
+ * present region if at the end of the current region.
+ */
+void dm_stats_walk_next(struct dm_stats *dms);
+
+/*
+ * Advance the statistics cursor to the next region.
+ */
+void dm_stats_walk_next_region(struct dm_stats *dms);
+
+/*
+ * Test whether the end of a statistics walk has been reached.
+ */
+int dm_stats_walk_end(struct dm_stats *dms);
+
+/*
+ * Stats iterators
+ *
+ * C 'for' and 'do'/'while' style iterators for dm_stats data.
+ *
+ * It is not safe to call any function that modifies the region table
+ * within the loop body (i.e. dm_stats_list(), dm_stats_populate(),
+ * dm_stats_init(), or dm_stats_destroy()).
+ *
+ * All counter and property (dm_stats_get_*) access methods, as well as
+ * dm_stats_populate_region() can be safely called from loops.
+ *
+ */
+
+/*
+ * Iterate over the regions table visiting each region.
+ *
+ * If the region table is empty or unpopulated the loop body will not be
+ * executed.
+ */
+#define dm_stats_foreach_region(dms)				\
+for (dm_stats_walk_start((dms));				\
+     !dm_stats_walk_end((dms)); dm_stats_walk_next_region((dms)))
+
+/*
+ * Iterate over the regions table visiting each area.
+ *
+ * If the region table is empty or unpopulated the loop body will not
+ * be executed.
+ */
+#define dm_stats_foreach_area(dms)				\
+for (dm_stats_walk_start((dms));				\
+     !dm_stats_walk_end((dms)); dm_stats_walk_next((dms)))
+
+/*
+ * Start a walk iterating over the regions contained in dm_stats handle
+ * 'dms'.
+ *
+ * The body of the loop should call dm_stats_walk_next() or
+ * dm_stats_walk_next_region() to advance to the next element.
+ *
+ * The loop body is executed at least once even if the stats handle is
+ * empty.
+ */
+#define dm_stats_walk_do(dms)					\
+dm_stats_walk_start((dms));					\
+do
+
+/*
+ * Start a 'while' style loop or end a 'do..while' loop iterating over the
+ * regions contained in dm_stats handle 'dms'.
+ */
+#define dm_stats_walk_while(dms)				\
+while(!dm_stats_walk_end((dms)))
+
+/*
+ * Cursor relative property methods
+ *
+ * Calls with the prefix dm_stats_get_current_* operate relative to the
+ * current cursor location, returning properties for the current region
+ * or area of the supplied dm_stats handle.
+ *
+ */
+
+/*
+ * Returns the number of areas (counter sets) contained in the current
+ * region of the supplied dm_stats handle.
+ */
+uint64_t dm_stats_get_current_nr_areas(const struct dm_stats *dms);
+
+/*
+ * Retrieve the current values of the stats cursor.
+ */
+uint64_t dm_stats_get_current_region(const struct dm_stats *dms);
+uint64_t dm_stats_get_current_area(const struct dm_stats *dms);
+
+/*
+ * Current region properties: size, length & area_len.
+ *
+ * See the comments for the equivalent dm_stats_get_* versions for a
+ * complete description of these methods.
+ *
+ * All values are returned in units of 512b sectors.
+ */
+int dm_stats_get_current_region_start(const struct dm_stats *dms,
+				      uint64_t *start);
+
+int dm_stats_get_current_region_len(const struct dm_stats *dms,
+				    uint64_t *len);
+
+int dm_stats_get_current_region_area_len(const struct dm_stats *dms,
+					 uint64_t *area_len);
+
+/*
+ * Current area properties: start and length.
+ *
+ * See the comments for the equivalent dm_stats_get_* versions for a
+ * complete description of these methods.
+ *
+ * All values are returned in units of 512b sectors.
+ */
+int dm_stats_get_current_area_start(const struct dm_stats *dms,
+				    uint64_t *start);
+
+int dm_stats_get_current_area_offset(const struct dm_stats *dms,
+				     uint64_t *offset);
+
+int dm_stats_get_current_area_len(const struct dm_stats *dms,
+				       uint64_t *start);
+
+/*
+ * Return a pointer to the program_id string for region at the current
+ * cursor location.
+ */
+const char *dm_stats_get_current_region_program_id(const struct dm_stats *dms);
+
+/*
+ * Return a pointer to the aux_data string for the region at the current
+ * cursor location.
+ */
+const char *dm_stats_get_current_region_aux_data(const struct dm_stats *dms);
+
+/*
  * Call this to actually run the ioctl.
  */
 int dm_task_run(struct dm_task *dmt);
@@ -528,12 +1045,12 @@ struct dm_tree_node;
 /*
  * Initialise an empty dependency tree.
  *
- * The tree consists of a root node together with one node for each mapped 
+ * The tree consists of a root node together with one node for each mapped
  * device which has child nodes for each device referenced in its table.
  *
  * Every node in the tree has one or more children and one or more parents.
  *
- * The root node is the parent/child of every node that doesn't have other 
+ * The root node is the parent/child of every node that doesn't have other
  * parents/children.
  */
 struct dm_tree *dm_tree_create(void);
@@ -641,7 +1158,7 @@ int dm_tree_suspend_children(struct dm_tree_node *dnode,
  * Skip the filesystem sync when suspending.
  * Does nothing with other functions.
  * Use this when no snapshots are involved.
- */ 
+ */
 void dm_tree_skip_lockfs(struct dm_tree_node *dnode);
 
 /*
@@ -712,7 +1229,7 @@ int dm_tree_node_add_crypt_target(struct dm_tree_node *node,
 				  const char *key);
 int dm_tree_node_add_mirror_target(struct dm_tree_node *node,
 				   uint64_t size);
- 
+
 /* Mirror log flags */
 #define DM_NOSYNC		0x00000001	/* Known already in sync */
 #define DM_FORCESYNC		0x00000002	/* Force resync */
@@ -735,7 +1252,7 @@ int dm_tree_node_add_raid_target(struct dm_tree_node *node,
 				 uint64_t flags);
 
 /*
- * Defines bellow are based on kernel's dm-cache.c defines
+ * Defines below are based on kernel's dm-cache.c defines
  * DM_CACHE_MIN_DATA_BLOCK_SIZE (32 * 1024 >> SECTOR_SHIFT)
  * DM_CACHE_MAX_DATA_BLOCK_SIZE (1024 * 1024 * 1024 >> SECTOR_SHIFT)
  */
@@ -808,7 +1325,7 @@ int dm_tree_node_add_cache_target(struct dm_tree_node *node,
 				  const char *origin_uuid,
 				  const char *policy_name,
 				  const struct dm_config_node *policy_settings,
-				  uint32_t chunk_size);
+				  uint32_t data_block_size);
 
 /*
  * FIXME Add individual cache policy pairs  <key> = value, like:
@@ -903,6 +1420,9 @@ int dm_tree_node_set_thin_pool_discard(struct dm_tree_node *node,
  */
 int dm_tree_node_set_thin_pool_error_if_no_space(struct dm_tree_node *node,
 						 unsigned error_if_no_space);
+/* Start thin pool with metadata in read-only mode */
+int dm_tree_node_set_thin_pool_read_only(struct dm_tree_node *node,
+					 unsigned read_only);
 /*
  * FIXME: Defines bellow are based on kernel's dm-thin.c defines
  * MAX_DEV_ID ((1 << 24) - 1)
@@ -963,44 +1483,28 @@ uint32_t dm_tree_get_cookie(struct dm_tree_node *node);
  * Memory management
  *******************/
 
-void *dm_malloc_aux(size_t s, const char *file, int line)
+/*
+ * Never use these functions directly - use the macros following instead.
+ */
+void *dm_malloc_wrapper(size_t s, const char *file, int line)
 	__attribute__((__malloc__)) __attribute__((__warn_unused_result__));
-void *dm_malloc_aux_debug(size_t s, const char *file, int line)
-	__attribute__((__warn_unused_result__));
-void *dm_zalloc_aux(size_t s, const char *file, int line)
+void *dm_zalloc_wrapper(size_t s, const char *file, int line)
 	__attribute__((__malloc__)) __attribute__((__warn_unused_result__));
-void *dm_zalloc_aux_debug(size_t s, const char *file, int line)
+void *dm_realloc_wrapper(void *p, unsigned int s, const char *file, int line)
 	__attribute__((__warn_unused_result__));
-char *dm_strdup_aux(const char *str, const char *file, int line)
-	__attribute__((__malloc__)) __attribute__((__warn_unused_result__));
-void dm_free_aux(void *p);
-void *dm_realloc_aux(void *p, unsigned int s, const char *file, int line)
+void dm_free_wrapper(void *ptr);
+char *dm_strdup_wrapper(const char *s, const char *file, int line)
 	__attribute__((__warn_unused_result__));
-int dm_dump_memory_debug(void);
-void dm_bounds_check_debug(void);
+int dm_dump_memory_wrapper(void);
+void dm_bounds_check_wrapper(void);
 
-#ifdef DEBUG_MEM
-
-#  define dm_malloc(s) dm_malloc_aux_debug((s), __FILE__, __LINE__)
-#  define dm_zalloc(s) dm_zalloc_aux_debug((s), __FILE__, __LINE__)
-#  define dm_strdup(s) dm_strdup_aux((s), __FILE__, __LINE__)
-#  define dm_free(p) dm_free_aux(p)
-#  define dm_realloc(p, s) dm_realloc_aux(p, s, __FILE__, __LINE__)
-#  define dm_dump_memory() dm_dump_memory_debug()
-#  define dm_bounds_check() dm_bounds_check_debug()
-
-#else
-
-#  define dm_malloc(s) dm_malloc_aux((s), __FILE__, __LINE__)
-#  define dm_zalloc(s) dm_zalloc_aux((s), __FILE__, __LINE__)
-#  define dm_strdup(s) strdup(s)
-#  define dm_free(p) free(p)
-#  define dm_realloc(p, s) realloc(p, s)
-#  define dm_dump_memory() {}
-#  define dm_bounds_check() {}
-
-#endif
-
+#define dm_malloc(s) dm_malloc_wrapper((s), __FILE__, __LINE__)
+#define dm_zalloc(s) dm_zalloc_wrapper((s), __FILE__, __LINE__)
+#define dm_strdup(s) dm_strdup_wrapper((s), __FILE__, __LINE__)
+#define dm_free(p) dm_free_wrapper(p)
+#define dm_realloc(p, s) dm_realloc_wrapper((p), (s), __FILE__, __LINE__)
+#define dm_dump_memory() dm_dump_memory_wrapper()
+#define dm_bounds_check() dm_bounds_check_wrapper()
 
 /*
  * The pool allocator is useful when you are going to allocate
@@ -1301,7 +1805,7 @@ struct dm_list *dm_list_prev(const struct dm_list *head, const struct dm_list *e
 struct dm_list *dm_list_next(const struct dm_list *head, const struct dm_list *elem);
 
 /*
- * Given the address v of an instance of 'struct dm_list' called 'head' 
+ * Given the address v of an instance of 'struct dm_list' called 'head'
  * contained in a structure of type t, return the containing structure.
  */
 #define dm_list_struct_base(v, t, head) \
@@ -1333,7 +1837,7 @@ struct dm_list *dm_list_next(const struct dm_list *head, const struct dm_list *e
 	for (v = (head)->n; v != head; v = v->n)
 
 /*
- * Set v to each element in a list in turn, starting from the element 
+ * Set v to each element in a list in turn, starting from the element
  * in front of 'start'.
  * You can use this to 'unwind' a list_iterate and back out actions on
  * already-processed elements.
@@ -1388,7 +1892,7 @@ struct dm_list *dm_list_next(const struct dm_list *head, const struct dm_list *e
 	dm_list_iterate_items_gen_safe(v, t, (head), list)
 
 /*
- * Walk a list backwards, setting 'v' in turn to the containing structure 
+ * Walk a list backwards, setting 'v' in turn to the containing structure
  * of each item.
  * The containing structure should be the same type as 'v'.
  * The 'struct dm_list' variable within the containing structure is 'field'.
@@ -1399,7 +1903,7 @@ struct dm_list *dm_list_next(const struct dm_list *head, const struct dm_list *e
 	     v = dm_list_struct_base(v->field.p, __typeof__(*v), field))
 
 /*
- * Walk a list backwards, setting 'v' in turn to the containing structure 
+ * Walk a list backwards, setting 'v' in turn to the containing structure
  * of each item.
  * The containing structure should be the same type as 'v'.
  * The list should be 'struct dm_list list' within the containing structure.
@@ -1448,7 +1952,7 @@ int dm_split_words(char *buffer, unsigned max,
 		   unsigned ignore_comments, /* Not implemented */
 		   char **argv);
 
-/* 
+/*
  * Returns -1 if buffer too small
  */
 int dm_snprintf(char *buf, size_t bufsize, const char *format, ...)
@@ -1548,6 +2052,32 @@ int dm_strncpy(char *dest, const char *src, size_t n);
  */
 uint64_t dm_units_to_factor(const char *units, char *unit_type,
 			    int strict, const char **endptr);
+
+/*
+ * Type of unit specifier used by dm_size_to_string().
+ */
+typedef enum {
+	DM_SIZE_LONG = 0,	/* Megabyte */
+	DM_SIZE_SHORT = 1,	/* MB or MiB */
+	DM_SIZE_UNIT = 2	/* M or m */
+} dm_size_suffix_t;
+
+/*
+ * Convert a size (in 512-byte sectors) into a printable string using units of unit_type.
+ * An upper-case unit_type indicates output units based on powers of 1000 are
+ * required; a lower-case unit_type indicates powers of 1024.
+ * For correct operation, unit_factor must be one of:
+ * 	0 - the correct value will be calculated internally;
+ *   or the output from dm_units_to_factor() corresponding to unit_type;
+ *   or 'u' or 'U', an arbitrary number of bytes to use as the power base.
+ * Set include_suffix to 1 to include a suffix of suffix_type.
+ * Set use_si_units to 0 for suffixes that don't distinguish between 1000 and 1024.
+ * Set use_si_units to 1 for a suffix that does distinguish.
+ */
+const char *dm_size_to_string(struct dm_pool *mem, uint64_t size,
+			      char unit_type, int use_si_units,
+			      uint64_t unit_factor, int include_suffix,
+			      dm_size_suffix_t suffix_type);
 
 /**************************
  * file/stream manipulation
@@ -1655,6 +2185,48 @@ typedef int32_t dm_percent_t;
 float dm_percent_to_float(dm_percent_t percent);
 dm_percent_t dm_make_percent(uint64_t numerator, uint64_t denominator);
 
+/********************
+ * timestamp handling
+ ********************/
+
+/*
+ * Create a dm_timestamp object to use with dm_timestamp_get.
+ */
+struct dm_timestamp *dm_timestamp_alloc(void);
+
+/*
+ * Update dm_timestamp object to represent the current time.
+ */
+int dm_timestamp_get(struct dm_timestamp *ts);
+
+/*
+ * Copy a timestamp from ts_old to ts_new.
+ */
+void dm_timestamp_copy(struct dm_timestamp *ts_new, struct dm_timestamp *ts_old);
+
+/*
+ * Compare two timestamps.
+ *
+ * Return: -1 if ts1 is less than ts2
+ *  	    0 if ts1 is equal to ts2
+ *          1 if ts1 is greater than ts2
+ */
+int dm_timestamp_compare(struct dm_timestamp *ts1, struct dm_timestamp *ts2);
+
+/*
+ * Return the absolute difference in nanoseconds between
+ * the dm_timestamp objects ts1 and ts2.
+ *
+ * Callers that need to know whether ts1 is before, equal to, or after ts2
+ * in addition to the magnitude should use dm_timestamp_compare.
+ */
+uint64_t dm_timestamp_delta(struct dm_timestamp *ts1, struct dm_timestamp *ts2);
+
+/*
+ * Destroy a dm_timestamp object.
+ */
+void dm_timestamp_destroy(struct dm_timestamp *ts);
+
 /*********************
  * reporting functions
  *********************/
@@ -1672,17 +2244,25 @@ struct dm_report_field;
 /*
  * dm_report_field_type flags
  */
-#define DM_REPORT_FIELD_MASK			0x00000FFF
-#define DM_REPORT_FIELD_ALIGN_MASK		0x0000000F
-#define DM_REPORT_FIELD_ALIGN_LEFT		0x00000001
-#define DM_REPORT_FIELD_ALIGN_RIGHT		0x00000002
-#define DM_REPORT_FIELD_TYPE_MASK		0x00000FF0
-#define DM_REPORT_FIELD_TYPE_NONE		0x00000000
-#define DM_REPORT_FIELD_TYPE_STRING		0x00000010
-#define DM_REPORT_FIELD_TYPE_NUMBER		0x00000020
-#define DM_REPORT_FIELD_TYPE_SIZE		0x00000040
-#define DM_REPORT_FIELD_TYPE_PERCENT		0x00000080
-#define DM_REPORT_FIELD_TYPE_STRING_LIST	0x00000100
+#define DM_REPORT_FIELD_MASK				0x00000FFF
+#define DM_REPORT_FIELD_ALIGN_MASK			0x0000000F
+#define DM_REPORT_FIELD_ALIGN_LEFT			0x00000001
+#define DM_REPORT_FIELD_ALIGN_RIGHT			0x00000002
+#define DM_REPORT_FIELD_TYPE_MASK			0x00000FF0
+#define DM_REPORT_FIELD_TYPE_NONE			0x00000000
+#define DM_REPORT_FIELD_TYPE_STRING			0x00000010
+#define DM_REPORT_FIELD_TYPE_NUMBER			0x00000020
+#define DM_REPORT_FIELD_TYPE_SIZE			0x00000040
+#define DM_REPORT_FIELD_TYPE_PERCENT			0x00000080
+#define DM_REPORT_FIELD_TYPE_STRING_LIST		0x00000100
+#define DM_REPORT_FIELD_TYPE_TIME			0x00000200
+
+/* For use with reserved values only! */
+#define DM_REPORT_FIELD_RESERVED_VALUE_MASK		0x0000000F
+#define DM_REPORT_FIELD_RESERVED_VALUE_NAMED		0x00000001 /* only named value, less strict form of reservation */
+#define DM_REPORT_FIELD_RESERVED_VALUE_RANGE		0x00000002 /* value is range - low and high value defined */
+#define DM_REPORT_FIELD_RESERVED_VALUE_DYNAMIC_VALUE	0x00000004 /* value is computed in runtime */
+#define DM_REPORT_FIELD_RESERVED_VALUE_FUZZY_NAMES	0x00000008 /* value names are recognized in runtime */
 
 #define DM_REPORT_FIELD_TYPE_ID_LEN 32
 #define DM_REPORT_FIELD_TYPE_HEADING_LEN 32
@@ -1716,7 +2296,8 @@ struct dm_report_field_reserved_value {
 };
 
 /*
- * Reserved value is a 'value' that is used directly if any of the 'names' is hit.
+ * Reserved value is a 'value' that is used directly if any of the 'names' is hit
+ * or in case of fuzzy names, if such fuzzy name matches.
  *
  * If type is any of DM_REPORT_FIELD_TYPE_*, the reserved value is recognized
  * for all fields of that type.
@@ -1729,17 +2310,60 @@ struct dm_report_field_reserved_value {
  * selection enabled (see also dm_report_init_with_selection function).
  */
 struct dm_report_reserved_value {
-	const unsigned type;		/* DM_REPORT_FIELD_TYPE_* */
+	const uint32_t type;		/* DM_REPORT_FIELD_RESERVED_VALUE_* and DM_REPORT_FIELD_TYPE_*  */
 	const void *value;		/* reserved value:
-						struct dm_report_field_reserved_value for DM_REPORT_FIELD_TYPE_NONE
 						uint64_t for DM_REPORT_FIELD_TYPE_NUMBER
 						uint64_t for DM_REPORT_FIELD_TYPE_SIZE (number of 512-byte sectors)
 						uint64_t for DM_REPORT_FIELD_TYPE_PERCENT
-						const char * for DM_REPORT_FIELD_TYPE_STRING */
-	const char **names;		/* null-terminated array of names for this reserved value */
+						const char* for DM_REPORT_FIELD_TYPE_STRING
+						struct dm_report_field_reserved_value for DM_REPORT_FIELD_TYPE_NONE
+						dm_report_reserved_handler* if DM_REPORT_FIELD_RESERVED_VALUE_{DYNAMIC_VALUE,FUZZY_NAMES} is used */
+	const char **names;		/* null-terminated array of static names for this reserved value */
 	const char *description;	/* description of the reserved value */
 };
 
+/*
+ * Available actions for dm_report_reserved_value_handler.
+ */
+typedef enum {
+	DM_REPORT_RESERVED_PARSE_FUZZY_NAME,
+	DM_REPORT_RESERVED_GET_DYNAMIC_VALUE,
+} dm_report_reserved_action_t;
+
+/*
+ * Generic reserved value handler to process reserved value names and/or values.
+ *
+ * Actions and their input/output:
+ *
+ * 	DM_REPORT_RESERVED_PARSE_FUZZY_NAME
+ *		data_in:  const char *fuzzy_name
+ *		data_out: const char *canonical_name, NULL if fuzzy_name not recognized
+ *
+ * 	DM_REPORT_RESERVED_GET_DYNAMIC_VALUE
+ * 		data_in:  const char *canonical_name
+ * 		data_out: void *value, NULL if canonical_name not recognized
+ *
+ * All actions return:
+ *
+ *	-1 if action not implemented
+ * 	0 on error
+ * 	1 on success
+ */
+typedef int (*dm_report_reserved_handler) (struct dm_report *rh,
+					   struct dm_pool *mem,
+					   uint32_t field_num,
+					   dm_report_reserved_action_t action,
+					   const void *data_in,
+					   const void **data_out);
+
+/*
+ * The dm_report_value_cache_{set,get} are helper functions to store and retrieve
+ * various values used during reporting (dm_report_field_type.report_fn) and/or
+ * selection processing (dm_report_reserved_handler instances) to avoid
+ * recalculation of these values or to share values among calls.
+ */
+int dm_report_value_cache_set(struct dm_report *rh, const char *name, const void *data);
+const void *dm_report_value_cache_get(struct dm_report *rh, const char *name);
 /*
  * dm_report_init output_flags
  */
@@ -1789,7 +2413,20 @@ int dm_report_object_is_selected(struct dm_report *rh, void *object, int do_outp
  */
 int dm_report_compact_fields(struct dm_report *rh);
 
+/*
+ * Returns 1 if there is no data waiting to be output.
+ */
+int dm_report_is_empty(struct dm_report *rh);
+
 int dm_report_output(struct dm_report *rh);
+
+/*
+ * Output the report headings for a columns-based report, even if they
+ * have already been shown. Useful for repeating reports that wish to
+ * issue a periodic reminder of the column headings.
+ */
+int dm_report_column_headings(struct dm_report *rh);
+
 void dm_report_free(struct dm_report *rh);
 
 /*
@@ -1827,6 +2464,153 @@ int dm_report_field_percent(struct dm_report *rh, struct dm_report_field *field,
 void dm_report_field_set_value(struct dm_report_field *field, const void *value,
 			       const void *sortvalue);
 
+/*
+ * Stats counter access methods
+ *
+ * Each method returns the corresponding stats counter value from the
+ * supplied dm_stats handle for the specified region_id and area_id.
+ * If either region_id or area_id uses one of the special values
+ * DM_STATS_REGION_CURRENT or DM_STATS_AREA_CURRENT then the region
+ * or area is selected according to the current state of the dm_stats
+ * handle's embedded cursor.
+ *
+ * See the kernel documentation for complete descriptions of each
+ * counter field:
+ *
+ * Documentation/device-mapper/statistics.txt
+ * Documentation/iostats.txt
+ *
+ * reads: the number of reads completed
+ * reads_merged: the number of reads merged
+ * read_sectors: the number of sectors read
+ * read_nsecs: the number of nanoseconds spent reading
+ * writes: the number of writes completed
+ * writes_merged: the number of writes merged
+ * write_sectors: the number of sectors written
+ * write_nsecs: the number of nanoseconds spent writing
+ * io_in_progress: the number of I/Os currently in progress
+ * io_nsecs: the number of nanoseconds spent doing I/Os
+ * weighted_io_nsecs: the weighted number of nanoseconds spent doing I/Os
+ * total_read_nsecs: the total time spent reading in nanoseconds
+ * total_write_nsecs: the total time spent writing in nanoseconds
+ */
+
+#define DM_STATS_REGION_CURRENT UINT64_MAX
+#define DM_STATS_AREA_CURRENT UINT64_MAX
+
+uint64_t dm_stats_get_reads(const struct dm_stats *dms,
+			    uint64_t region_id, uint64_t area_id);
+
+uint64_t dm_stats_get_reads_merged(const struct dm_stats *dms,
+				   uint64_t region_id, uint64_t area_id);
+
+uint64_t dm_stats_get_read_sectors(const struct dm_stats *dms,
+				   uint64_t region_id, uint64_t area_id);
+
+uint64_t dm_stats_get_read_nsecs(const struct dm_stats *dms,
+				 uint64_t region_id, uint64_t area_id);
+
+uint64_t dm_stats_get_writes(const struct dm_stats *dms,
+			     uint64_t region_id, uint64_t area_id);
+
+uint64_t dm_stats_get_writes_merged(const struct dm_stats *dms,
+				    uint64_t region_id, uint64_t area_id);
+
+uint64_t dm_stats_get_write_sectors(const struct dm_stats *dms,
+				    uint64_t region_id, uint64_t area_id);
+
+uint64_t dm_stats_get_write_nsecs(const struct dm_stats *dms,
+				  uint64_t region_id, uint64_t area_id);
+
+uint64_t dm_stats_get_io_in_progress(const struct dm_stats *dms,
+				     uint64_t region_id, uint64_t area_id);
+
+uint64_t dm_stats_get_io_nsecs(const struct dm_stats *dms,
+			       uint64_t region_id, uint64_t area_id);
+
+uint64_t dm_stats_get_weighted_io_nsecs(const struct dm_stats *dms,
+					uint64_t region_id, uint64_t area_id);
+
+uint64_t dm_stats_get_total_read_nsecs(const struct dm_stats *dms,
+				       uint64_t region_id, uint64_t area_id);
+
+uint64_t dm_stats_get_total_write_nsecs(const struct dm_stats *dms,
+					uint64_t region_id, uint64_t area_id);
+
+/*
+ * Derived statistics access methods
+ *
+ * Each method returns the corresponding value calculated from the
+ * counters stored in the supplied dm_stats handle for the specified
+ * region_id and area_id. If either region_id or area_id uses one of the
+ * special values DM_STATS_REGION_CURRENT or DM_STATS_AREA_CURRENT then
+ * the region or area is selected according to the current state of the
+ * dm_stats handle's embedded cursor.
+ *
+ * The set of metrics is based on the fields provided by the Linux
+ * iostats program.
+ *
+ * rd_merges_per_sec: the number of reads merged per second
+ * wr_merges_per_sec: the number of writes merged per second
+ * reads_per_sec: the number of reads completed per second
+ * writes_per_sec: the number of writes completed per second
+ * read_sectors_per_sec: the number of sectors read per second
+ * write_sectors_per_sec: the number of sectors written per second
+ * average_request_size: the average size of requests submitted
+ * service_time: the average service time (in ns) for requests issued
+ * average_queue_size: the average queue length
+ * average_wait_time: the average time for requests to be served (in ns)
+ * average_rd_wait_time: the average read wait time
+ * average_wr_wait_time: the average write wait time
+ */
+
+int dm_stats_get_rd_merges_per_sec(const struct dm_stats *dms, double *rrqm,
+				   uint64_t region_id, uint64_t area_id);
+
+int dm_stats_get_wr_merges_per_sec(const struct dm_stats *dms, double *rrqm,
+				   uint64_t region_id, uint64_t area_id);
+
+int dm_stats_get_reads_per_sec(const struct dm_stats *dms, double *rd_s,
+			       uint64_t region_id, uint64_t area_id);
+
+int dm_stats_get_writes_per_sec(const struct dm_stats *dms, double *wr_s,
+				uint64_t region_id, uint64_t area_id);
+
+int dm_stats_get_read_sectors_per_sec(const struct dm_stats *dms,
+				      double *rsec_s, uint64_t region_id,
+				      uint64_t area_id);
+
+int dm_stats_get_write_sectors_per_sec(const struct dm_stats *dms,
+				       double *wr_s, uint64_t region_id,
+				       uint64_t area_id);
+
+int dm_stats_get_average_request_size(const struct dm_stats *dms,
+				      double *arqsz, uint64_t region_id,
+				      uint64_t area_id);
+
+int dm_stats_get_service_time(const struct dm_stats *dms, double *svctm,
+			      uint64_t region_id, uint64_t area_id);
+
+int dm_stats_get_average_queue_size(const struct dm_stats *dms, double *qusz,
+				    uint64_t region_id, uint64_t area_id);
+
+int dm_stats_get_average_wait_time(const struct dm_stats *dms, double *await,
+				   uint64_t region_id, uint64_t area_id);
+
+int dm_stats_get_average_rd_wait_time(const struct dm_stats *dms,
+				      double *await, uint64_t region_id,
+				      uint64_t area_id);
+
+int dm_stats_get_average_wr_wait_time(const struct dm_stats *dms,
+				      double *await, uint64_t region_id,
+				      uint64_t area_id);
+
+int dm_stats_get_throughput(const struct dm_stats *dms, double *tput,
+			    uint64_t region_id, uint64_t area_id);
+
+int dm_stats_get_utilization(const struct dm_stats *dms, dm_percent_t *util,
+			     uint64_t region_id, uint64_t area_id);
+
 /*************************
  * config file parse/print
  *************************/
@@ -1848,6 +2632,7 @@ struct dm_config_value {
 	} v;
 
 	struct dm_config_value *next;	/* For arrays */
+	uint32_t format_flags;
 };
 
 struct dm_config_node {
@@ -1949,6 +2734,24 @@ struct dm_config_node *dm_config_clone_node_with_mem(struct dm_pool *mem, const 
 struct dm_config_node *dm_config_create_node(struct dm_config_tree *cft, const char *key);
 struct dm_config_value *dm_config_create_value(struct dm_config_tree *cft);
 struct dm_config_node *dm_config_clone_node(struct dm_config_tree *cft, const struct dm_config_node *cn, int siblings);
+
+/*
+ * Common formatting flags applicable to all config node types (lower 16 bits).
+ */
+#define DM_CONFIG_VALUE_FMT_COMMON_ARRAY             0x00000001 /* value is array */
+#define DM_CONFIG_VALUE_FMT_COMMON_EXTRA_SPACES      0x00000002 /* add spaces in "key = value" pairs in constrast to "key=value" for better readability */
+
+/*
+ * Type-related config node formatting flags (higher 16 bits).
+ */
+/* int-related formatting flags */
+#define DM_CONFIG_VALUE_FMT_INT_OCTAL                0x00010000 /* print number in octal form */
+
+/* string-related formatting flags */
+#define DM_CONFIG_VALUE_FMT_STRING_NO_QUOTES         0x00010000 /* do not print quotes around string value */
+
+void dm_config_value_set_format_flags(struct dm_config_value *cv, uint32_t format_flags);
+uint32_t dm_config_value_get_format_flags(struct dm_config_value *cv);
 
 struct dm_pool *dm_config_memory(struct dm_config_tree *cft);
 

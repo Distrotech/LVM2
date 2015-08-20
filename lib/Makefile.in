@@ -82,7 +82,6 @@ SOURCES =\
 	format_text/format-text.c \
 	format_text/import.c \
 	format_text/import_vsn1.c \
-	format_text/tags.c \
 	format_text/text_label.c \
 	freeseg/freeseg.c \
 	label/label.c \
@@ -122,11 +121,6 @@ SOURCES =\
 	striped/striped.c \
 	uuid/uuid.c \
 	zero/zero.c
-
-ifeq ("@HAVE_REALTIME@", "yes")
-  SOURCES +=\
-	misc/timestamp.c
-endif
 
 ifeq ("@LVM1@", "internal")
   SOURCES +=\
@@ -199,6 +193,11 @@ endif
 ifeq ("@BUILD_LVMPOLLD@", "yes")
   SOURCES +=\
 	lvmpolld/lvmpolld-client.c
+endif
+
+ifeq ("@BUILD_LVMLOCKD@", "yes")
+  SOURCES +=\
+	locking/lvmlockd.c
 endif
 
 ifeq ("@DMEVENTD@", "yes")

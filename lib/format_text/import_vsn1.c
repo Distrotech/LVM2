@@ -20,11 +20,13 @@
 #include "toolcontext.h"
 #include "lvmcache.h"
 #include "lvmetad.h"
+#include "lvmlockd.h"
 #include "lv_alloc.h"
 #include "pv_alloc.h"
 #include "segtype.h"
 #include "text_import.h"
 #include "defaults.h"
+#include "str_list.h"
 
 typedef int (*section_fn) (struct format_instance * fid,
 			   struct volume_group * vg, const struct dm_config_node * pvn,
@@ -153,6 +155,26 @@ static int _read_flag_config(const struct dm_config_node *n, uint64_t *status, i
 	return 1;
 }
 
+static int _read_str_list(struct dm_pool *mem, struct dm_list *list, const struct dm_config_value *cv)
+{
+	if (cv->type == DM_CFG_EMPTY_ARRAY)
+		return 1;
+
+	while (cv) {
+		if (cv->type != DM_CFG_STRING) {
+			log_error("Found an item that is not a string");
+			return 0;
+		}
+
+		if (!str_list_add(mem, list, dm_pool_strdup(mem, cv->v.str)))
+			return_0;
+
+		cv = cv->next;
+	}
+
+	return 1;
+}
+
 static int _read_pv(struct format_instance *fid,
 		    struct volume_group *vg, const struct dm_config_node *pvn,
 		    const struct dm_config_node *vgn __attribute__((unused)),
@@ -269,7 +291,7 @@ static int _read_pv(struct format_instance *fid,
 
 	/* Optional tags */
 	if (dm_config_get_list(pvn, "tags", &cv) &&
-	    !(read_tags(mem, &pv->tags, cv))) {
+	    !(_read_str_list(mem, &pv->tags, cv))) {
 		log_error("Couldn't read tags for physical volume %s in %s.",
 			  pv_dev_name(pv), vg->name);
 		return 0;
@@ -384,7 +406,7 @@ static int _read_segment(struct logical_volume *lv, const struct dm_config_node 
 
 	/* Optional tags */
 	if (dm_config_get_list(sn_child, "tags", &cv) &&
-	    !(read_tags(mem, &seg->tags, cv))) {
+	    !(_read_str_list(mem, &seg->tags, cv))) {
 		log_error("Couldn't read tags for a segment of %s/%s.",
 			  lv->vg->name, lv->name);
 		return 0;
@@ -583,6 +605,30 @@ static int _read_lvnames(struct format_instance *fid __attribute__((unused)),
 		return 0;
 	}
 
+	/*
+	 * The LV lock_args string is generated in lvmlockd, and the content
+	 * depends on the lock_type.
+	 *
+	 * lock_type dlm does not use LV lock_args, so the LV lock_args field
+	 * is just set to "dlm".
+	 *
+	 * lock_type sanlock uses the LV lock_args field to save the
+	 * location on disk of that LV's sanlock lock.  The disk name is
+	 * specified in the VG lock_args.  The lock_args string begins
+	 * with a version number, e.g. 1.0.0, followed by a colon, followed
+	 * by a number.  The number is the offset on disk where sanlock is
+	 * told to find the LV's lock.
+	 * e.g. lock_args = 1.0.0:70254592
+	 * means that the lock is located at offset 70254592.
+	 *
+	 * The lvmlockd code for each specific lock manager also validates
+	 * the lock_args before using it to access the lock manager.
+	 */
+	if (dm_config_get_str(lvn, "lock_args", &str)) {
+		if (!(lv->lock_args = dm_pool_strdup(mem, str)))
+			return_0;
+	}
+
 	lv->alloc = ALLOC_INHERIT;
 	if (dm_config_get_str(lvn, "allocation_policy", &str)) {
 		lv->alloc = get_alloc_from_string(str);
@@ -621,7 +667,7 @@ static int _read_lvnames(struct format_instance *fid __attribute__((unused)),
 
 	/* Optional tags */
 	if (dm_config_get_list(lvn, "tags", &cv) &&
-	    !(read_tags(mem, &lv->tags, cv))) {
+	    !(_read_str_list(mem, &lv->tags, cv))) {
 		log_error("Couldn't read tags for logical volume %s/%s.",
 			  vg->name, lv->name);
 		return 0;
@@ -646,6 +692,12 @@ static int _read_lvnames(struct format_instance *fid __attribute__((unused)),
 				   lv->name);
 		lv->status |= POOL_METADATA_SPARE;
 		vg->pool_metadata_spare_lv = lv;
+	}
+
+	if (!lv_is_visible(lv) && !strcmp(lv->name, LOCKD_SANLOCK_LV_NAME)) {
+		log_debug_metadata("Logical volume %s is sanlock lv.", lv->name);
+		lv->status |= LOCKD_SANLOCK_LV;
+		vg->sanlock_lv = lv;
 	}
 
 	return 1;
@@ -745,7 +797,8 @@ static int _read_sections(struct format_instance *fid,
 
 static struct volume_group *_read_vg(struct format_instance *fid,
 				     const struct dm_config_tree *cft,
-				     unsigned use_cached_pvs)
+				     unsigned use_cached_pvs,
+				     unsigned allow_lvmetad_extensions)
 {
 	const struct dm_config_node *vgn;
 	const struct dm_config_value *cv;
@@ -796,6 +849,32 @@ static struct volume_group *_read_vg(struct format_instance *fid,
 
 	if (dm_config_get_str(vgn, "lock_type", &str)) {
 		if (!(vg->lock_type = dm_pool_strdup(vg->vgmem, str)))
+			goto bad;
+	}
+
+	/*
+	 * The VG lock_args string is generated in lvmlockd, and the content
+	 * depends on the lock_type.  lvmlockd begins the lock_args string
+	 * with a version number, e.g. 1.0.0, followed by a colon, followed
+	 * by a string that depends on the lock manager.  The string after
+	 * the colon is information needed to use the lock manager for the VG.
+	 *
+	 * For sanlock, the string is the name of the internal LV used to store
+	 * sanlock locks.  lvmlockd needs to know where the locks are located
+	 * so it can pass that location to sanlock which needs to access the locks.
+	 * e.g. lock_args = 1.0.0:lvmlock
+	 * means that the locks are located on the the LV "lvmlock".
+	 *
+	 * For dlm, the string is the dlm cluster name.  lvmlockd needs to use
+	 * a dlm lockspace in this cluster to use the VG.
+	 * e.g. lock_args = 1.0.0:foo
+	 * means that the host needs to be a member of the cluster "foo".
+	 *
+	 * The lvmlockd code for each specific lock manager also validates
+	 * the lock_args before using it to access the lock manager.
+	 */
+	if (dm_config_get_str(vgn, "lock_args", &str)) {
+		if (!(vg->lock_args = dm_pool_strdup(vg->vgmem, str)))
 			goto bad;
 	}
 
@@ -887,12 +966,15 @@ static struct volume_group *_read_vg(struct format_instance *fid,
 		goto bad;
 	}
 
-	_read_sections(fid, "outdated_pvs", _read_pv, vg,
-		       vgn, pv_hash, lv_hash, 1, &scan_done_once);
+	if (allow_lvmetad_extensions)
+		_read_sections(fid, "outdated_pvs", _read_pv, vg,
+			       vgn, pv_hash, lv_hash, 1, &scan_done_once);
+	else if (dm_config_has_node(vgn, "outdated_pvs"))
+		log_error(INTERNAL_ERROR "Unexpected outdated_pvs section in metadata of VG %s.", vg->name);
 
 	/* Optional tags */
 	if (dm_config_get_list(vgn, "tags", &cv) &&
-	    !(read_tags(vg->vgmem, &vg->tags, cv))) {
+	    !(_read_str_list(vg->vgmem, &vg->tags, cv))) {
 		log_error("Couldn't read tags for volume group %s.", vg->name);
 		goto bad;
 	}
@@ -954,6 +1036,11 @@ static void _read_desc(struct dm_pool *mem,
 	*when = u;
 }
 
+/*
+ * It would be more accurate to call this _read_vgsummary().
+ * It is used to read vgsummary information about a VG
+ * before locking and reading the VG via vg_read().
+ */
 static int _read_vgname(const struct format_type *fmt, const struct dm_config_tree *cft, 
 			struct lvmcache_vgsummary *vgsummary)
 {
@@ -989,6 +1076,8 @@ static int _read_vgname(const struct format_type *fmt, const struct dm_config_tr
 			  vgsummary->vgname);
 		return 0;
 	}
+
+	dm_config_get_str(vgn, "lock_type", &vgsummary->lock_type);
 
 	return 1;
 }

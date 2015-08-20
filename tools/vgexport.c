@@ -28,6 +28,24 @@ static int vgexport_single(struct cmd_context *cmd __attribute__((unused)),
 		goto bad;
 	}
 
+	if (is_lockd_type(vg->lock_type)) {
+		struct lv_list *lvl;
+		dm_list_iterate_items(lvl, &vg->lvs) {
+			if (!lockd_lv_uses_lock(lvl->lv))
+				continue;
+
+			if (!lockd_lv(cmd, lvl->lv, "ex", 0)) {
+				log_error("LV %s/%s must be inactive on all hosts before vgexport.",
+					  vg->name, display_lvname(lvl->lv));
+				goto bad;
+			}
+
+			if (!lockd_lv(cmd, lvl->lv, "un", 0))
+				goto bad;
+		}
+	}
+
+
 	if (!archive(vg))
 		goto_bad;
 

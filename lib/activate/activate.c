@@ -180,7 +180,7 @@ int lv_passes_auto_activation_filter(struct cmd_context *cmd, struct logical_vol
 {
 	const struct dm_config_node *cn;
 
-	if (!(cn = find_config_tree_node(cmd, activation_auto_activation_volume_list_CFG, NULL))) {
+	if (!(cn = find_config_tree_array(cmd, activation_auto_activation_volume_list_CFG, NULL))) {
 		log_verbose("activation/auto_activation_volume_list configuration setting "
 			    "not defined: All logical volumes will be auto-activated.");
 		return 1;
@@ -473,7 +473,7 @@ static int _passes_activation_filter(struct cmd_context *cmd,
 {
 	const struct dm_config_node *cn;
 
-	if (!(cn = find_config_tree_node(cmd, activation_volume_list_CFG, NULL))) {
+	if (!(cn = find_config_tree_array(cmd, activation_volume_list_CFG, NULL))) {
 		log_verbose("activation/volume_list configuration setting "
 			    "not defined: Checking only host tags for %s/%s",
 			    lv->vg->name, lv->name);
@@ -502,7 +502,7 @@ static int _passes_readonly_filter(struct cmd_context *cmd,
 {
 	const struct dm_config_node *cn;
 
-	if (!(cn = find_config_tree_node(cmd, activation_read_only_volume_list_CFG, NULL)))
+	if (!(cn = find_config_tree_array(cmd, activation_read_only_volume_list_CFG, NULL)))
 		return 0;
 
 	return _lv_passes_volumes_filter(cmd, lv, cn, activation_read_only_volume_list_CFG);
@@ -654,8 +654,8 @@ static int _lv_info(struct cmd_context *cmd, const struct logical_volume *lv,
 	 * in progress - as only those could lead to opened files
 	 */
 	if (with_open_count) {
-		if (locking_is_clustered())
-			sync_local_dev_names(cmd); /* Wait to have udev in sync */
+		if (locking_is_clustered() && !sync_local_dev_names(cmd)) /* Wait to have udev in sync */
+			return_0;
 		else if (fs_has_non_delete_ops())
 			fs_unlock(); /* For non clustered - wait if there are non-delete ops */
 	}
@@ -1875,7 +1875,9 @@ static int _lv_suspend(struct cmd_context *cmd, const char *lvid_s,
 		goto_out;
 
 	/* Ignore origin_only unless LV is origin in both old and new metadata */
-	if (!lv_is_thin_volume(ondisk_lv) && !(lv_is_origin(ondisk_lv) && lv_is_origin(incore_lv)))
+	/* or LV is thin or thin pool volume */
+	if (!lv_is_thin_volume(ondisk_lv) && !lv_is_thin_pool(ondisk_lv) &&
+	    !(lv_is_origin(ondisk_lv) && lv_is_origin(incore_lv)))
 		laopts->origin_only = 0;
 
 	if (test_mode()) {
@@ -2049,7 +2051,6 @@ static int _lv_resume(struct cmd_context *cmd, const char *lvid_s,
 	const struct logical_volume *lv_to_free = NULL;
 	struct lvinfo info;
 	int r = 0;
-	int messages_only = 0;
 
 	if (!activation())
 		return 1;
@@ -2057,10 +2058,7 @@ static int _lv_resume(struct cmd_context *cmd, const char *lvid_s,
 	if (!lv && !(lv_to_free = lv = lv_from_lvid(cmd, lvid_s, 0)))
 		goto_out;
 
-	if (lv_is_thin_pool(lv) && laopts->origin_only)
-		messages_only = 1;
-
-	if (!lv_is_origin(lv) && !lv_is_thin_volume(lv))
+	if (!lv_is_origin(lv) && !lv_is_thin_volume(lv) && !lv_is_thin_pool(lv))
 		laopts->origin_only = 0;
 
 	if (test_mode()) {
@@ -2072,13 +2070,15 @@ static int _lv_resume(struct cmd_context *cmd, const char *lvid_s,
 
 	log_debug_activation("Resuming LV %s/%s%s%s%s.", lv->vg->name, lv->name,
 			     error_if_not_active ? "" : " if active",
-			     laopts->origin_only ? " without snapshots" : "",
+			     laopts->origin_only ?
+			     (lv_is_thin_pool(lv) ? " pool only" :
+			      lv_is_thin_volume(lv) ? " thin only" : " without snapshots") : "",
 			     laopts->revert ? " (reverting)" : "");
 
 	if (!lv_info(cmd, lv, laopts->origin_only, &info, 0, 0))
 		goto_out;
 
-	if (!info.exists || !(info.suspended || messages_only)) {
+	if (!info.exists || !info.suspended) {
 		if (error_if_not_active)
 			goto_out;
 		r = 1;
@@ -2334,6 +2334,7 @@ static int _lv_activate(struct cmd_context *cmd, const char *lvid_s,
 	if (info.exists && !info.suspended && info.live_table &&
 	    (info.read_only == read_only_lv(lv, laopts))) {
 		r = 1;
+		log_debug_activation("Volume is already active.");
 		goto out;
 	}
 

@@ -16,26 +16,21 @@
  * dmeventd - dm event daemon to monitor active mapped devices
  */
 
-#define _GNU_SOURCE
-#define _FILE_OFFSET_BITS 64
+#include "tool.h"
 
-#include "configure.h"
-#include "libdevmapper.h"
-#include "libdevmapper-event.h"
-#include "dmeventd.h"
 //#include "libmultilog.h"
 #include "dm-logging.h"
 
-#include <stdarg.h>
+#include "libdevmapper-event.h"
+#include "dmeventd.h"
+
 #include <dlfcn.h>
-#include <errno.h>
 #include <pthread.h>
 #include <sys/file.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <sys/time.h>
 #include <sys/resource.h>
-#include <unistd.h>
 #include <signal.h>
 #include <arpa/inet.h>		/* for htonl, ntohl */
 #include <fcntl.h>		/* for musl libc */
@@ -133,51 +128,20 @@ void debuglog(const char *fmt, ...)
 
 static const char *decode_cmd(uint32_t cmd)
 {
-	static char buf[128];
-	const char *command;
-
 	switch (cmd) {
-	case DM_EVENT_CMD_ACTIVE:
-		command = "ACTIVE";
-		break;
-	case DM_EVENT_CMD_REGISTER_FOR_EVENT:
-		command = "REGISTER_FOR_EVENT";
-		break;
-	case DM_EVENT_CMD_UNREGISTER_FOR_EVENT:
-		command = "UNREGISTER_FOR_EVENT";
-		break;
-	case DM_EVENT_CMD_GET_REGISTERED_DEVICE:
-		command = "GET_REGISTERED_DEVICE";
-		break;
-	case DM_EVENT_CMD_GET_NEXT_REGISTERED_DEVICE:
-		command = "GET_NEXT_REGISTERED_DEVICE";
-		break;
-	case DM_EVENT_CMD_SET_TIMEOUT:
-		command = "SET_TIMEOUT";
-		break;
-	case DM_EVENT_CMD_GET_TIMEOUT:
-		command = "GET_TIMEOUT";
-		break;
-	case DM_EVENT_CMD_HELLO:
-		command = "HELLO";
-		break;
-	case DM_EVENT_CMD_DIE:
-		command = "DIE";
-		break;
-	case DM_EVENT_CMD_GET_STATUS:
-		command = "GET_STATUS";
-		break;
-	case DM_EVENT_CMD_GET_PARAMETERS:
-		command = "GET_PARAMETERS";
-		break;
-	default:
-		command = "unknown";
-		break;
+	case DM_EVENT_CMD_ACTIVE:			return "ACTIVE";
+	case DM_EVENT_CMD_REGISTER_FOR_EVENT:		return "REGISTER_FOR_EVENT";
+	case DM_EVENT_CMD_UNREGISTER_FOR_EVENT:		return "UNREGISTER_FOR_EVENT";
+	case DM_EVENT_CMD_GET_REGISTERED_DEVICE:	return "GET_REGISTERED_DEVICE";
+	case DM_EVENT_CMD_GET_NEXT_REGISTERED_DEVICE:	return "GET_NEXT_REGISTERED_DEVICE";
+	case DM_EVENT_CMD_SET_TIMEOUT:			return "SET_TIMEOUT";
+	case DM_EVENT_CMD_GET_TIMEOUT:			return "GET_TIMEOUT";
+	case DM_EVENT_CMD_HELLO:			return "HELLO";
+	case DM_EVENT_CMD_DIE:				return "DIE";
+	case DM_EVENT_CMD_GET_STATUS:			return "GET_STATUS";
+	case DM_EVENT_CMD_GET_PARAMETERS:		return "GET_PARAMETERS";
+	default:					return "unknown";
 	}
-
-	snprintf(buf, sizeof(buf), "%s (0x%x)", command, cmd);
-
-	return buf;
 }
 
 #else
@@ -1598,9 +1562,6 @@ static void _process_request(struct dm_event_fifos *fifos)
 {
 	int die;
 	struct dm_event_daemon_message msg = { 0 };
-#ifdef DEBUG
-	const char *cmd;
-#endif
 
 	/*
 	 * Read the request from the client (client_read, client_write
@@ -1609,7 +1570,8 @@ static void _process_request(struct dm_event_fifos *fifos)
 	if (!_client_read(fifos, &msg))
 		return;
 
-	DEBUGLOG("%s processing...", cmd = decode_cmd(msg.cmd));
+	DEBUGLOG("%s (0x%x) processing...", decode_cmd(msg.cmd), msg.cmd);
+
 	die = (msg.cmd == DM_EVENT_CMD_DIE) ? 1 : 0;
 
 	/* _do_process_request fills in msg (if memory allows for
@@ -1621,7 +1583,7 @@ static void _process_request(struct dm_event_fifos *fifos)
 
 	dm_free(msg.data);
 
-	DEBUGLOG("%s completed.", cmd);
+	DEBUGLOG("%s (0x%x) completed.", decode_cmd(msg.cmd), msg.cmd);
 
 	if (die) {
 		if (unlink(DMEVENTD_PIDFILE))
@@ -1671,10 +1633,8 @@ static void _cleanup_unused_threads(void)
 				if (ret == ESRCH) {
 					thread->status = DM_THREAD_DONE;
 				} else if (ret) {
-					syslog(LOG_ERR,
-					       "Unable to terminate thread: %s\n",
-					       strerror(-ret));
-					stack;
+					syslog(LOG_ERR, "Unable to terminate thread: %s",
+					       strerror(ret));
 				}
 				break;
 			}
@@ -1706,8 +1666,7 @@ static void _cleanup_unused_threads(void)
 
 static void _sig_alarm(int signum __attribute__((unused)))
 {
-	DEBUGLOG("Received SIGALRM.");
-	pthread_testcancel();
+	/* empty SIG_IGN */;
 }
 
 /* Init thread signal handling. */

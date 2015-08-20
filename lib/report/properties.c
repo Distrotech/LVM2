@@ -342,7 +342,7 @@ GET_LV_NUM_PROPERTY_FN(metadata_percent, _metadata_percent(lv))
 #define _metadata_percent_set prop_not_implemented_set
 GET_LV_NUM_PROPERTY_FN(lv_metadata_size, lv_metadata_size(lv) * SECTOR_SIZE)
 #define _lv_metadata_size_set prop_not_implemented_set
-GET_LV_STR_PROPERTY_FN(lv_time, lv_time_dup(lv->vg->vgmem, lv))
+GET_LV_STR_PROPERTY_FN(lv_time, lv_time_dup(lv->vg->vgmem, lv, 0))
 #define _lv_time_set prop_not_implemented_set
 GET_LV_STR_PROPERTY_FN(lv_host, lv_host_dup(lv->vg->vgmem, lv))
 #define _lv_host_set prop_not_implemented_set
@@ -350,6 +350,8 @@ GET_LV_STR_PROPERTY_FN(lv_active, lv_active_dup(lv->vg->vgmem, lv))
 #define _lv_active_set prop_not_implemented_set
 GET_LV_STR_PROPERTY_FN(lv_profile, lv_profile_dup(lv->vg->vgmem, lv))
 #define _lv_profile_set prop_not_implemented_set
+GET_LV_STR_PROPERTY_FN(lv_lockargs, lv_lock_args_dup(lv->vg->vgmem, lv))
+#define _lv_lockargs_set prop_not_implemented_set
 
 /* VG */
 GET_VG_STR_PROPERTY_FN(vg_fmt, vg_fmt_dup(vg))
@@ -368,6 +370,10 @@ GET_VG_STR_PROPERTY_FN(vg_sysid, vg_system_id_dup(vg))
 #define _vg_sysid_set prop_not_implemented_set
 GET_VG_STR_PROPERTY_FN(vg_systemid, vg_system_id_dup(vg))
 #define _vg_systemid_set prop_not_implemented_set
+GET_VG_STR_PROPERTY_FN(vg_locktype, vg_lock_type_dup(vg))
+#define _vg_locktype_set prop_not_implemented_set
+GET_VG_STR_PROPERTY_FN(vg_lockargs, vg_lock_args_dup(vg))
+#define _vg_lockargs_set prop_not_implemented_set
 GET_VG_NUM_PROPERTY_FN(vg_extent_size, (SECTOR_SIZE * vg->extent_size))
 #define _vg_extent_size_set prop_not_implemented_set
 GET_VG_NUM_PROPERTY_FN(vg_extent_count, vg->extent_count)

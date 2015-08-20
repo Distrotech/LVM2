@@ -529,7 +529,7 @@ static response progress_info(client_handle h, struct lvmpolld_state *ls, reques
 		if (st.polling_finished)
 			r = daemon_reply_simple(LVMPD_RESP_FINISHED,
 						"reason = %s", st.cmd_state.signal ? LVMPD_REAS_SIGNAL : LVMPD_REAS_RETCODE,
-						LVMPD_PARM_VALUE " = %d", st.cmd_state.signal ?: st.cmd_state.retcode,
+						LVMPD_PARM_VALUE " = %d", (int64_t)(st.cmd_state.signal ?: st.cmd_state.retcode),
 						NULL);
 		else
 			r = daemon_reply_simple(LVMPD_RESP_IN_PROGRESS, NULL);
@@ -566,6 +566,8 @@ static struct lvmpolld_lv *construct_pdlv(request req, struct lvmpolld_state *ls
 		return NULL;
 	}
 
+	pdlv->cmdargv = cmdargv;
+
 	cmdenvp = cmdenvp_ctr(pdlv);
 	if (!cmdenvp) {
 		pdlv_destroy(pdlv);
@@ -573,7 +575,6 @@ static struct lvmpolld_lv *construct_pdlv(request req, struct lvmpolld_state *ls
 		return NULL;
 	}
 
-	pdlv->cmdargv = cmdargv;
 	pdlv->cmdenvp = cmdenvp;
 
 	return pdlv;
@@ -584,12 +585,16 @@ static int spawn_detached_thread(struct lvmpolld_lv *pdlv)
 	int r;
 	pthread_attr_t attr;
 
-	pthread_attr_init(&attr);
-	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+	if (pthread_attr_init(&attr) != 0)
+		return 0;
+
+	if (pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED) != 0)
+		return 0;
 
 	r = pthread_create(&pdlv->tid, &attr, fork_and_poll, (void *)pdlv);
 
-	pthread_attr_destroy(&attr);
+	if (pthread_attr_destroy(&attr) != 0)
+		return 0;
 
 	return !r;
 }
@@ -852,7 +857,7 @@ enum action_index {
 	ACTION_MAX /* keep at the end */
 };
 
-static const action_fn_t const actions[] = { [ACTION_DUMP] = action_dump };
+static const action_fn_t actions[ACTION_MAX] = { [ACTION_DUMP] = action_dump };
 
 static int _make_action(enum action_index idx, void *args)
 {

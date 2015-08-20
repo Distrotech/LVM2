@@ -20,6 +20,7 @@
 #include "toolcontext.h"
 #include "segtype.h"
 #include "str_list.h"
+#include "lvmlockd.h"
 
 #include <time.h>
 #include <sys/utsname.h>
@@ -87,7 +88,7 @@ static char *_format_pvsegs(struct dm_pool *mem, const struct lv_segment *seg,
 
 		if (range_format) {
 			if (dm_snprintf(extent_str, sizeof(extent_str),
-					"%" PRIu32, extent + seg->area_len - 1) < 0) {
+					FMTu32, extent + seg->area_len - 1) < 0) {
 				log_error("Extent number dm_snprintf failed");
 				return NULL;
 			}
@@ -139,7 +140,7 @@ char *lvseg_discards_dup(struct dm_pool *mem, const struct lv_segment *seg)
 
 char *lvseg_cachemode_dup(struct dm_pool *mem, const struct lv_segment *seg)
 {
-	const char *name = get_cache_pool_cachemode_name(seg);
+	const char *name = get_cache_mode_name(seg);
 
 	if (!name)
 		return_NULL;
@@ -883,17 +884,16 @@ int lv_set_creation(struct logical_volume *lv,
 	return 1;
 }
 
-char *lv_time_dup(struct dm_pool *mem, const struct logical_volume *lv)
+char *lv_time_dup(struct dm_pool *mem, const struct logical_volume *lv, int iso_mode)
 {
-	char buffer[50];
+	char buffer[4096];
 	struct tm *local_tm;
 	time_t ts = (time_t)lv->timestamp;
+	const char *format = iso_mode ? DEFAULT_TIME_FORMAT : lv->vg->cmd->time_format;
 
 	if (!ts ||
 	    !(local_tm = localtime(&ts)) ||
-	    /* FIXME: make this lvm.conf configurable */
-	    !strftime(buffer, sizeof(buffer),
-		      "%Y-%m-%d %T %z", local_tm))
+	    !strftime(buffer, sizeof(buffer), format, local_tm))
 		buffer[0] = 0;
 
 	return dm_pool_strdup(mem, buffer);
@@ -921,9 +921,22 @@ static int _lv_is_exclusive(struct logical_volume *lv)
 int lv_active_change(struct cmd_context *cmd, struct logical_volume *lv,
 		     enum activation_change activate, int needs_exclusive)
 {
-PFLA("activate=%x", activate);
+	const char *ay_with_mode = NULL;
+
+	if (activate == CHANGE_ASY)
+		ay_with_mode = "sh";
+	if (activate == CHANGE_AEY)
+		ay_with_mode = "ex";
+	
+	if (is_change_activating(activate) &&
+	    !lockd_lv(cmd, lv, ay_with_mode, LDLV_PERSISTENT)) {
+		log_error("Failed to lock logical volume %s/%s", lv->vg->name, lv->name);
+		return 0;
+	}
+
 	switch (activate) {
 	case CHANGE_AN:
+PFLA("activate=%x", activate);
 deactivate:
 PFL();
 		log_verbose("Deactivating logical volume \"%s\"", lv->name);
@@ -968,14 +981,19 @@ PFL();
 		if (!activate_lv_excl(cmd, lv))
 			return_0;
 		break;
-	default: /* CHANGE_AY */
-PFL();
+	case CHANGE_ASY:
+	case CHANGE_AY:
+	default:
 		if (needs_exclusive || _lv_is_exclusive(lv))
 			goto exclusive;
 		log_verbose("Activating logical volume \"%s\".", lv->name);
 		if (!activate_lv(cmd, lv))
 			return_0;
 	}
+
+	if (!is_change_activating(activate) &&
+	    !lockd_lv(cmd, lv, "un", LDLV_PERSISTENT))
+		log_error("Failed to unlock logical volume %s/%s", lv->vg->name, lv->name);
 
 	return 1;
 }
@@ -1014,6 +1032,12 @@ char *lv_profile_dup(struct dm_pool *mem, const struct logical_volume *lv)
 {
 	const char *profile_name = lv->profile ? lv->profile->name : "";
 	return dm_pool_strdup(mem, profile_name);
+}
+
+char *lv_lock_args_dup(struct dm_pool *mem, const struct logical_volume *lv)
+{
+	const char *lock_args = lv->lock_args ? lv->lock_args : "";
+	return dm_pool_strdup(mem, lock_args);
 }
 
 /* For given LV find recursively the LV which holds lock for it */

@@ -106,7 +106,7 @@ static int _auto_activation_handler(struct cmd_context *cmd,
 		return_0;
 
 	/* NB. This is safe because we know lvmetad is running and we won't hit disk. */
-	vg = vg_read(cmd, vgname, (const char *)&vgid_raw, 0);
+	vg = vg_read(cmd, vgname, (const char *)&vgid_raw, 0, 0);
 	if (vg_read_error(vg)) {
 		log_error("Failed to read Volume Group \"%s\" (%s) during autoactivation.", vgname, vgid);
 		release_vg(vg);
@@ -166,7 +166,7 @@ static int _clear_dev_from_lvmetad_cache(dev_t devno, int32_t major, int32_t min
 {
 	char buf[24];
 
-	(void) dm_snprintf(buf, sizeof(buf), "%" PRIi32 ":%" PRIi32, major, minor);
+	(void) dm_snprintf(buf, sizeof(buf), FMTi32 ":" FMTi32, major, minor);
 
 	if (!lvmetad_pv_gone(devno, buf, handler))
 		return_0;
@@ -319,9 +319,9 @@ static int _pvscan_lvmetad(struct cmd_context *cmd, int argc, char **argv)
 	}
 
 out:
-	sync_local_dev_names(cmd);
+	if (!sync_local_dev_names(cmd))
+		stack;
 	unlock_vg(cmd, VG_GLOBAL);
-
 	return ret;
 }
 
@@ -370,6 +370,10 @@ int pvscan(struct cmd_context *cmd, int argc, char **argv)
 		log_error("Unable to obtain global lock.");
 		return ECMD_FAILED;
 	}
+
+	/* Needed for a current listing of the global VG namespace. */
+	if (!lockd_gl(cmd, "sh", 0))
+		return_ECMD_FAILED;
 
 	if (cmd->full_filter->wipe)
 		cmd->full_filter->wipe(cmd->full_filter);

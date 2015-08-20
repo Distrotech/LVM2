@@ -30,10 +30,10 @@ xx(e2fsadm,
 
 xx(config,
    "Display and manipulate configuration information",
-   PERMITTED_READ_ONLY,
+   PERMITTED_READ_ONLY | NO_METADATA_PROCESSING,
    "config\n"
    "\t[-f|--file filename]\n"
-   "\t[--type {current|default|diff|list|missing|new|profilable|profilable-command|profilable-metadata}\n"
+   "\t[--type {current|default|diff|full|list|missing|new|profilable|profilable-command|profilable-metadata}\n"
    "\t[--atversion version]]\n"
    "\t[--ignoreadvanced]\n"
    "\t[--ignoreunsupported]\n"
@@ -49,17 +49,18 @@ xx(config,
    "\t[--validate]\n"
    "\t[--withsummary]\n"
    "\t[--withcomments]\n"
+   "\t[--withspaces]\n"
    "\t[--unconfigured]\n"
    "\t[--withversions]\n"
    "\t[ConfigurationNode...]\n",
    atversion_ARG, configtype_ARG, file_ARG, ignoreadvanced_ARG,
    ignoreunsupported_ARG, ignorelocal_ARG, list_ARG, mergedconfig_ARG, metadataprofile_ARG,
    showdeprecated_ARG, showunsupported_ARG, validate_ARG, withsummary_ARG, withcomments_ARG,
-   unconfigured_ARG, withversions_ARG)
+   withspaces_ARG, unconfigured_ARG, withversions_ARG)
 
 xx(devtypes,
    "Display recognised built-in block device types",
-   PERMITTED_READ_ONLY,
+   PERMITTED_READ_ONLY | NO_METADATA_PROCESSING,
    "devtypes\n"
    "\t[--aligned]\n"
    "\t[--binary]\n"
@@ -85,10 +86,10 @@ xx(devtypes,
 
 xx(dumpconfig,
    "Display and manipulate configuration information",
-   PERMITTED_READ_ONLY,
+   PERMITTED_READ_ONLY | NO_METADATA_PROCESSING,
    "dumpconfig\n"
    "\t[-f|--file filename]\n"
-   "\t[--type {current|default|diff|list|missing|new|profilable|profilable-command|profilable-metadata}\n"
+   "\t[--type {current|default|diff|full|list|missing|new|profilable|profilable-command|profilable-metadata}\n"
    "\t[--atversion version]]\n"
    "\t[--ignoreadvanced]\n"
    "\t[--ignoreunsupported]\n"
@@ -104,22 +105,23 @@ xx(dumpconfig,
    "\t[--validate]\n"
    "\t[--withsummary]\n"
    "\t[--withcomments]\n"
+   "\t[--withspaces]\n"
    "\t[--unconfigured]\n"
    "\t[--withversions]\n"
    "\t[ConfigurationNode...]\n",
    atversion_ARG, configtype_ARG, file_ARG, ignoreadvanced_ARG,
    ignoreunsupported_ARG, ignorelocal_ARG, list_ARG, mergedconfig_ARG, metadataprofile_ARG,
    showdeprecated_ARG, showunsupported_ARG, validate_ARG, withsummary_ARG, withcomments_ARG,
-   unconfigured_ARG, withversions_ARG)
+   withspaces_ARG, unconfigured_ARG, withversions_ARG)
 
 xx(formats,
    "List available metadata formats",
-   PERMITTED_READ_ONLY,
+   PERMITTED_READ_ONLY | NO_METADATA_PROCESSING,
    "formats\n")
 
 xx(help,
    "Display help for commands",
-   PERMITTED_READ_ONLY,
+   PERMITTED_READ_ONLY | NO_METADATA_PROCESSING,
    "help <command>\n")
 
 /*********
@@ -392,7 +394,7 @@ xx(lvcreate,
 
 xx(lvdisplay,
    "Display information about a logical volume",
-   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT | ENABLE_FOREIGN_VGS,
+   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT | LOCKD_VG_SH,
    "lvdisplay\n"
    "\t[-a|--all]\n"
    "\t[-c|--colon]\n"
@@ -440,7 +442,7 @@ xx(lvdisplay,
     aligned_ARG, all_ARG, binary_ARG, colon_ARG, columns_ARG, foreign_ARG,
     ignorelockingfailure_ARG, ignoreskippedcluster_ARG, maps_ARG,
     noheadings_ARG, nosuffix_ARG, options_ARG, sort_ARG, partial_ARG,
-    readonly_ARG, segments_ARG, select_ARG, separator_ARG,
+    readonly_ARG, segments_ARG, select_ARG, separator_ARG, shared_ARG,
     unbuffered_ARG, units_ARG)
 
 xx(lvextend,
@@ -489,10 +491,10 @@ xx(lvmchange,
 
 xx(lvmconfig,
    "Display and manipulate configuration information",
-   PERMITTED_READ_ONLY,
+   PERMITTED_READ_ONLY | NO_METADATA_PROCESSING,
    "lvmconfig\n"
    "\t[-f|--file filename]\n"
-   "\t[--type {current|default|diff|list|missing|new|profilable|profilable-command|profilable-metadata}\n"
+   "\t[--type {current|default|diff|full|list|missing|new|profilable|profilable-command|profilable-metadata}\n"
    "\t[--atversion version]]\n"
    "\t[--ignoreadvanced]\n"
    "\t[--ignoreunsupported]\n"
@@ -508,13 +510,14 @@ xx(lvmconfig,
    "\t[--validate]\n"
    "\t[--withsummary]\n"
    "\t[--withcomments]\n"
+   "\t[--withspaces]\n"
    "\t[--unconfigured]\n"
    "\t[--withversions]\n"
    "\t[ConfigurationNode...]\n",
    atversion_ARG, configtype_ARG, file_ARG, ignoreadvanced_ARG,
    ignoreunsupported_ARG, ignorelocal_ARG, list_ARG, mergedconfig_ARG, metadataprofile_ARG,
    showdeprecated_ARG, showunsupported_ARG, validate_ARG, withsummary_ARG, withcomments_ARG,
-   unconfigured_ARG, withversions_ARG)
+   withspaces_ARG, unconfigured_ARG, withversions_ARG)
 
 xx(lvmdiskscan,
    "List devices that may be used as physical volumes",
@@ -643,7 +646,7 @@ xx(lvresize,
 
 xx(lvs,
    "Display information about logical volumes",
-   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT | ENABLE_FOREIGN_VGS,
+   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT | LOCKD_VG_SH,
    "lvs\n"
    "\t[-a|--all]\n"
    "\t[--aligned]\n"
@@ -676,12 +679,12 @@ xx(lvs,
    aligned_ARG, all_ARG, binary_ARG, foreign_ARG, ignorelockingfailure_ARG,
    ignoreskippedcluster_ARG, nameprefixes_ARG, noheadings_ARG,
    nolocking_ARG, nosuffix_ARG, options_ARG, partial_ARG,
-   readonly_ARG, rows_ARG, segments_ARG, select_ARG, separator_ARG,
+   readonly_ARG, rows_ARG, segments_ARG, select_ARG, separator_ARG, shared_ARG,
    sort_ARG, trustcache_ARG, unbuffered_ARG, units_ARG, unquoted_ARG)
 
 xx(lvscan,
    "List all logical volumes in all volume groups",
-   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT,
+   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT | LOCKD_VG_SH,
    "lvscan\n"
    "\t[-a|--all]\n"
    "\t[-b|--blockdevice]\n"
@@ -741,7 +744,7 @@ xx(pvresize,
 
 xx(pvck,
    "Check the consistency of physical volume(s)",
-   0,
+   LOCKD_VG_SH,
    "pvck "
    "\t[--commandprofile ProfileName]\n"
    "\t[-d|--debug]\n"
@@ -807,7 +810,7 @@ xx(pvdata,
 
 xx(pvdisplay,
    "Display various attributes of physical volume(s)",
-   CACHE_VGMETADATA | PERMITTED_READ_ONLY | ENABLE_ALL_DEVS | ENABLE_FOREIGN_VGS,
+   CACHE_VGMETADATA | PERMITTED_READ_ONLY | ENABLE_ALL_DEVS | LOCKD_VG_SH,
    "pvdisplay\n"
    "\t[-c|--colon]\n"
    "\t[--commandprofile ProfileName]\n"
@@ -852,7 +855,7 @@ xx(pvdisplay,
    aligned_ARG, all_ARG, binary_ARG, colon_ARG, columns_ARG, foreign_ARG,
    ignorelockingfailure_ARG, ignoreskippedcluster_ARG, maps_ARG,
    noheadings_ARG, nosuffix_ARG, options_ARG, readonly_ARG,
-   select_ARG, separator_ARG, short_ARG, sort_ARG, unbuffered_ARG,
+   select_ARG, separator_ARG, shared_ARG, short_ARG, sort_ARG, unbuffered_ARG,
    units_ARG)
 
 xx(pvmove,
@@ -916,7 +919,7 @@ xx(pvremove,
 
 xx(pvs,
    "Display information about physical volumes",
-   CACHE_VGMETADATA | PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT | ENABLE_ALL_DEVS | ENABLE_FOREIGN_VGS,
+   CACHE_VGMETADATA | PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT | ENABLE_ALL_DEVS | LOCKD_VG_SH,
    "pvs\n"
    "\t[-a|--all]\n"
    "\t[--aligned]\n"
@@ -949,12 +952,12 @@ xx(pvs,
    aligned_ARG, all_ARG, binary_ARG, foreign_ARG, ignorelockingfailure_ARG,
    ignoreskippedcluster_ARG, nameprefixes_ARG, noheadings_ARG, nolocking_ARG,
    nosuffix_ARG, options_ARG, partial_ARG, readonly_ARG, rows_ARG,
-   segments_ARG, select_ARG, separator_ARG, sort_ARG, trustcache_ARG,
+   segments_ARG, select_ARG, separator_ARG, shared_ARG, sort_ARG, trustcache_ARG,
    unbuffered_ARG, units_ARG, unquoted_ARG)
 
 xx(pvscan,
    "List all physical volumes",
-   PERMITTED_READ_ONLY | ENABLE_FOREIGN_VGS,
+   PERMITTED_READ_ONLY | LOCKD_VG_SH,
    "pvscan\n"
    "\t[-b|--background]\n"
    "\t[--cache [-a|--activate ay] [ DevicePath | -j|--major major --minor minor]...]\n"
@@ -976,22 +979,22 @@ xx(pvscan,
 
 xx(segtypes,
    "List available segment types",
-   PERMITTED_READ_ONLY,
+   PERMITTED_READ_ONLY | NO_METADATA_PROCESSING,
    "segtypes\n")
 
 xx(systemid,
    "Display the system ID, if any, currently set on this host",
-   PERMITTED_READ_ONLY,
+   PERMITTED_READ_ONLY | NO_METADATA_PROCESSING,
    "systemid\n")
 
 xx(tags,
    "List tags defined on this host",
-   PERMITTED_READ_ONLY,
+   PERMITTED_READ_ONLY | NO_METADATA_PROCESSING,
    "tags\n")
 
 xx(vgcfgbackup,
    "Backup volume group configuration(s)",
-   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT | ENABLE_FOREIGN_VGS,
+   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT | LOCKD_VG_SH,
    "vgcfgbackup\n"
    "\t[--commandprofile ProfileName]\n"
    "\t[-d|--debug]\n"
@@ -1071,11 +1074,12 @@ xx(vgchange,
    metadataprofile_ARG, monitor_ARG, noudevsync_ARG, metadatacopies_ARG,
    vgmetadatacopies_ARG, partial_ARG, physicalextentsize_ARG, poll_ARG,
    refresh_ARG, resizeable_ARG, resizable_ARG, select_ARG, sysinit_ARG,
-   systemid_ARG, test_ARG, uuid_ARG)
+   systemid_ARG, test_ARG, uuid_ARG, lockstart_ARG, lockstop_ARG, locktype_ARG, lockopt_ARG,
+   force_ARG)
 
 xx(vgck,
    "Check the consistency of volume group(s)",
-   ALL_VGS_IS_DEFAULT,
+   ALL_VGS_IS_DEFAULT | LOCKD_VG_SH,
    "vgck "
    "\t[--commandprofile ProfileName]\n"
    "\t[-d|--debug]\n"
@@ -1135,11 +1139,11 @@ xx(vgcreate,
    physicalextentsize_ARG, test_ARG, force_ARG, zero_ARG, labelsector_ARG,
    metadatasize_ARG, pvmetadatacopies_ARG, metadatacopies_ARG,
    vgmetadatacopies_ARG, dataalignment_ARG, dataalignmentoffset_ARG,
-   systemid_ARG)
+   shared_ARG, systemid_ARG, locktype_ARG, lockopt_ARG)
 
 xx(vgdisplay,
    "Display volume group information",
-   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT | ENABLE_FOREIGN_VGS,
+   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT | LOCKD_VG_SH,
    "vgdisplay\n"
    "\t[-A|--activevolumegroups]\n"
    "\t[-c|--colon | -s|--short | -v|--verbose]\n"
@@ -1183,7 +1187,7 @@ xx(vgdisplay,
    activevolumegroups_ARG, aligned_ARG, binary_ARG, colon_ARG, columns_ARG,
    foreign_ARG, ignorelockingfailure_ARG, ignoreskippedcluster_ARG,
    noheadings_ARG, nosuffix_ARG, options_ARG, partial_ARG, readonly_ARG,
-   select_ARG, short_ARG, separator_ARG, sort_ARG, unbuffered_ARG, units_ARG)
+   select_ARG, shared_ARG, short_ARG, separator_ARG, sort_ARG, unbuffered_ARG, units_ARG)
 
 xx(vgexport,
    "Unregister volume group(s) from the system",
@@ -1327,7 +1331,7 @@ xx(vgrename,
 
 xx(vgs,
    "Display information about volume groups",
-   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT | ENABLE_FOREIGN_VGS,
+   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT | LOCKD_VG_SH,
    "vgs\n"
    "\t[--aligned]\n"
    "\t[--binary]\n"
@@ -1359,12 +1363,12 @@ xx(vgs,
    aligned_ARG, all_ARG, binary_ARG, foreign_ARG, ignorelockingfailure_ARG,
    ignoreskippedcluster_ARG, nameprefixes_ARG, noheadings_ARG,
    nolocking_ARG, nosuffix_ARG, options_ARG, partial_ARG,
-   readonly_ARG, rows_ARG, select_ARG, separator_ARG, sort_ARG,
+   readonly_ARG, rows_ARG, select_ARG, separator_ARG, shared_ARG, sort_ARG,
    trustcache_ARG, unbuffered_ARG, units_ARG, unquoted_ARG)
 
 xx(vgscan,
    "Search for all volume groups",
-   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT | ENABLE_FOREIGN_VGS,
+   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT | LOCKD_VG_SH,
    "vgscan "
    "\t[--cache]\n"
    "\t[--commandprofile ProfileName]\n"
@@ -1405,5 +1409,5 @@ xx(vgsplit,
 
 xx(version,
    "Display software and driver version information",
-   PERMITTED_READ_ONLY,
+   PERMITTED_READ_ONLY | NO_METADATA_PROCESSING,
    "version\n")

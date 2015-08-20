@@ -12,13 +12,15 @@
  * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
+#define _REENTRANT
+
+#include "tool.h"
+
 #include "daemon-io.h"
 #include "dm-logging.h"
 
-#include <errno.h>
-#include <stdio.h>
-#include <string.h>
-#include <unistd.h>
+#include <math.h>  /* fabs() */
+#include <float.h> /* DBL_EPSILON */
 
 int buffer_append_vf(struct buffer *buf, va_list ap)
 {
@@ -36,7 +38,7 @@ int buffer_append_vf(struct buffer *buf, va_list ap)
 			goto fail;
 		}
 		keylen = strchr(next, '=') - next;
-		if (strstr(next, "%d") || strstr(next, "%" PRId64)) {
+		if (strstr(next, "%d") || strstr(next, FMTd64)) {
 			value = va_arg(ap, int64_t);
 			if (dm_asprintf(&append, "%.*s= %" PRId64 "\n", keylen, next, value) < 0)
 				goto fail;
@@ -206,6 +208,10 @@ struct dm_config_node *make_int_node(struct dm_config_tree *cft,
 	return cn;
 }
 
+/*
+ * FIXME: return 1 even if VA list is empty and return the
+ *        dm_config_node* result as output parameter
+ */
 struct dm_config_node *config_make_nodes_v(struct dm_config_tree *cft,
 					   struct dm_config_node *parent,
 					   struct dm_config_node *pre_sib,
@@ -234,7 +240,7 @@ struct dm_config_node *config_make_nodes_v(struct dm_config_tree *cft,
 		key[fmt - next] = '\0';
 		fmt += 2;
 
-		if (!strcmp(fmt, "%d") || !strcmp(fmt, "%" PRId64)) {
+		if (!strcmp(fmt, "%d") || !strcmp(fmt, FMTd64)) {
 			int64_t value = va_arg(ap, int64_t);
 			if (!(cn = make_int_node(cft, key, value, parent, pre_sib)))
 				return 0;
@@ -275,6 +281,60 @@ struct dm_config_node *config_make_nodes(struct dm_config_tree *cft,
 	va_end(ap);
 
 	return res;
+}
+
+/* Test if the doubles are close enough to be considered equal */
+static int close_enough(double d1, double d2)
+{
+	return fabs(d1 - d2) < DBL_EPSILON;
+}
+
+static int compare_value(struct dm_config_value *a, struct dm_config_value *b)
+{
+	int r = 0;
+
+	if (a->type > b->type)
+		return 1;
+	if (a->type < b->type)
+		return -1;
+
+	switch (a->type) {
+	case DM_CFG_STRING: r = strcmp(a->v.str, b->v.str); break;
+	case DM_CFG_FLOAT: r = close_enough(a->v.f, b->v.f) ? 0 : (a->v.f > b->v.f) ? 1 : -1; break;
+	case DM_CFG_INT: r = (a->v.i == b->v.i) ? 0 : (a->v.i > b->v.i) ? 1 : -1; break;
+	case DM_CFG_EMPTY_ARRAY: return 0;
+	}
+
+	if (r == 0 && a->next && b->next)
+		r = compare_value(a->next, b->next);
+	return r;
+}
+
+int compare_config(struct dm_config_node *a, struct dm_config_node *b)
+{
+	int result = 0;
+	if (a->v && b->v)
+		result = compare_value(a->v, b->v);
+	if (a->v && !b->v)
+		result = 1;
+	if (!a->v && b->v)
+		result = -1;
+	if (a->child && b->child)
+		result = compare_config(a->child, b->child);
+
+	if (result) {
+		// DEBUGLOG("config inequality at %s / %s", a->key, b->key);
+		return result;
+	}
+
+	if (a->sib && b->sib)
+		result = compare_config(a->sib, b->sib);
+	if (a->sib && !b->sib)
+		result = 1;
+	if (!a->sib && b->sib)
+		result = -1;
+
+	return result;
 }
 
 int buffer_realloc(struct buffer *buf, int needed)

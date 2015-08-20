@@ -6,7 +6,7 @@ lvmconfig, lvm dumpconfig, lvm config \(em Display LVM configuration
 .RB [ \-f | \-\-file
 .IR filename ]
 .RB [ \-\-type
-.RI { current | default | diff | list | missing | new | profilable | profilable-command | profilable-metadata }
+.RI { current | default | diff | full | list | missing | new | profilable | profilable-command | profilable-metadata }
 .RB [ \-\-atversion
 .IR version ]
 .RB [ \-\-ignoreadvanced ]
@@ -27,6 +27,7 @@ lvmconfig, lvm dumpconfig, lvm config \(em Display LVM configuration
 .RB [ \-\-validate ]
 .RB [ \-\-withsummary ]
 .RB [ \-\-withcomments ]
+.RB [ \-\-withspaces ]
 .RB [ \-\-withversions ]
 .RB [ ConfigurationNode... ]
 
@@ -46,7 +47,7 @@ List configuration settings with summarizing comment. This is the same as using
 \fBlvmconfig --type list --withsummary\fP.
 
 .TP
-.IR \fB\-\-type " {" current | default | diff | missing | new | profilable }
+.IR \fB\-\-type " {" current | default | diff | full | missing | new | profilable | profilable-command | profilable-metadata }
 Select the type of configuration to display. The configuration settings
 displayed have either default values or currently-used values assigned based on
 the type selected. If no type is selected, \fB\-\-type current\fP is used
@@ -66,6 +67,15 @@ Display all configuration settings for which the values used differ from default
 The value assigned for each configuration setting is the value currently used.
 This is actually minimal LVM configuration which can be used without
 a change to current configured behaviour.
+.IP full 3
+Display full configuration tree - a combination of current configuration tree
+(\fB\-\-type current\fP) and tree of settings for which default values are
+used (\fB\-\-type missing\fP). This is exactly the configuration tree that
+LVM2 uses during command execution. Using this type also implies
+the use of \fB\-\-mergedconfig\fP option. If comments are displayed
+(see \fB\-\-withcomments\fP and \fB\-\-withsummary\fP options), then
+for each setting found in existing configuration and for which defaults
+are not used, there's an extra comment line printed to denote this.
 .IP list 3
 Display plain list of configuration settings.
 .IP missing 3
@@ -184,6 +194,10 @@ Display a one line comment for each configuration node.
 .B \-\-withcomments
 Display a full comment for each configuration node. For deprecated
 settings, also display comments about deprecation in addition.
+
+.TP
+.B \-\-withspaces
+Where appropriate, add more spaces in output for better readability.
 
 .TP
 .B \-\-withversions

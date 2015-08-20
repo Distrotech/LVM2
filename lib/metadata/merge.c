@@ -218,6 +218,26 @@ PFLA("segtype=%s seg->area_len=%u seg->area_count=%u parity_devs=%u area_multipl
 				}
 
 			}
+			if (seg_is_cache_pool(seg) &&
+			    !dm_list_empty(&seg->lv->segs_using_this_lv)) {
+				switch (seg->feature_flags &
+					(DM_CACHE_FEATURE_PASSTHROUGH |
+					 DM_CACHE_FEATURE_WRITETHROUGH |
+					 DM_CACHE_FEATURE_WRITEBACK)) {
+					 case DM_CACHE_FEATURE_PASSTHROUGH:
+					 case DM_CACHE_FEATURE_WRITETHROUGH:
+					 case DM_CACHE_FEATURE_WRITEBACK:
+						 break;
+					 default:
+						 log_error("LV %s has invalid cache's feature flag.",
+							   lv->name);
+						 inc_error_count;
+				}
+				if (!seg->policy_name) {
+					log_error("LV %s is missing cache policy name.", lv->name);
+					inc_error_count;
+				}
+			}
 			if (seg_is_pool(seg)) {
 				if (seg->area_count != 1 ||
 				    seg_type(seg, 0) != AREA_LV) {
@@ -241,8 +261,7 @@ PFLA("segtype=%s seg->area_len=%u seg->area_count=%u parity_devs=%u area_multipl
 					inc_error_count;
 				}
 
-				if (seg_is_pool(seg) &&
-				    !validate_pool_chunk_size(lv->vg->cmd, seg->segtype, seg->chunk_size)) {
+				if (!validate_pool_chunk_size(lv->vg->cmd, seg->segtype, seg->chunk_size)) {
 					log_error("LV %s: %s segment %u has invalid chunk size %u.",
 						  lv->name, seg->segtype->name, seg_count, seg->chunk_size);
 					inc_error_count;

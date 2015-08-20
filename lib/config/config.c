@@ -581,8 +581,11 @@ int config_file_read(struct dm_config_tree *cft)
 		if (!(cf->dev = dev_create_file(filename, NULL, NULL, 1)))
 			return_0;
 
-		if (!dev_open_readonly_buffered(cf->dev))
+		if (!dev_open_readonly_buffered(cf->dev)) {
+			dev_destroy_file(cf->dev);
+			cf->dev = NULL;
 			return_0;
+		}
 	}
 
 	r = config_file_read_fd(cft, cf->dev, 0, (size_t) info.st_size, 0, 0,
@@ -666,22 +669,28 @@ static void _log_type_error(const char *path, cfg_def_type_t actual,
 					     actual_type_name, expected_type_name);
 }
 
-static struct dm_config_value *_get_def_array_values(struct dm_config_tree *cft,
-						     const cfg_def_item_t *def)
+static struct dm_config_value *_get_def_array_values(struct cmd_context *cmd,
+						     struct dm_config_tree *cft,
+						     const cfg_def_item_t *def,
+						     uint32_t format_flags)
 {
+	const char *def_enc_value;
 	char *enc_value, *token, *p, *r;
 	struct dm_config_value *array = NULL, *v = NULL, *oldv = NULL;
 
-	if (!def->default_value.v_CFG_TYPE_STRING) {
+	def_enc_value = cfg_def_get_default_value(cmd, def, CFG_TYPE_ARRAY, NULL);
+
+	if (!def_enc_value) {
 		if (!(array = dm_config_create_value(cft))) {
 			log_error("Failed to create default empty array for %s.", def->name);
 			return NULL;
 		}
 		array->type = DM_CFG_EMPTY_ARRAY;
+		dm_config_value_set_format_flags(array, format_flags);
 		return array;
 	}
 
-	if (!(p = token = enc_value = dm_strdup(def->default_value.v_CFG_TYPE_STRING))) {
+	if (!(p = token = enc_value = dm_strdup(def_enc_value))) {
 		log_error("_get_def_array_values: dm_strdup failed");
 		return NULL;
 	}
@@ -710,6 +719,9 @@ static struct dm_config_value *_get_def_array_values(struct dm_config_tree *cft,
 			dm_free(enc_value);
 			return NULL;
 		}
+
+		dm_config_value_set_format_flags(v, format_flags);
+
 		if (oldv)
 			oldv->next = v;
 		if (!array)
@@ -839,7 +851,7 @@ static int _check_value_differs_from_default(struct cft_check_handle *handle,
 	}
 
 	if (!v_def && (def->type & CFG_TYPE_ARRAY)) {
-		if (!(v_def_array = v_def_iter = _get_def_array_values(handle->cft, def)))
+		if (!(v_def_array = v_def_iter = _get_def_array_values(handle->cmd, handle->cft, def, 0)))
 			return_0;
 		do {
 			/* iterate over each element of the array and check its value */
@@ -1031,8 +1043,13 @@ static int _config_def_check_tree(struct cft_check_handle *handle,
 				  size_t buf_size, struct dm_config_node *root)
 {
 	struct dm_config_node *cn;
+	cfg_def_item_t *def;
 	int valid, r = 1;
 	size_t len;
+
+	def = cfg_def_get_item_p(root->id);
+	if (def->flags & CFG_SECTION_NO_CHECK)
+		return 1;
 
 	for (cn = root->child; cn; cn = cn->sib) {
 		if ((valid = _config_def_check_node(handle, vp, pvp, rp, prp,
@@ -1355,6 +1372,106 @@ int find_config_tree_bool(struct cmd_context *cmd, int id, struct profile *profi
 	return b;
 }
 
+static struct dm_config_node *_get_array_def_node(struct cmd_context *cmd,
+						  cfg_def_item_t *def,
+						  struct profile *profile)
+{
+	struct dm_config_node *cn;
+
+	if (def->flags & CFG_DEFAULT_UNDEFINED)
+		return NULL;
+
+	if (!(cn = dm_config_create_node(cmd->cft, def->name))) {
+		log_error("Failed to create default array node for %s.", def->name);
+		return NULL;
+	}
+
+	if (!(cn->v = _get_def_array_values(cmd, cmd->cft, def, 0))) {
+		dm_pool_free(cmd->cft->mem, cn);
+		return_NULL;
+	}
+
+	return cn;
+}
+
+struct _config_array_out_handle {
+	struct dm_pool *mem;
+	char *str;
+};
+
+static int _config_array_line(const struct dm_config_node *cn, const char *line, void *baton)
+{
+	struct _config_array_out_handle *handle = (struct _config_array_out_handle *) baton;
+
+	if (!(handle->str = dm_pool_strdup(handle->mem, line))) {
+		log_error("_config_array_line: dm_pool_strdup failed");
+		return 0;
+	}
+
+	return 1;
+}
+
+static void _log_array_value_used(struct dm_pool *mem, const struct dm_config_node *cn,
+				  const char *path, int default_used)
+{
+	struct _config_array_out_handle out_handle = { 0 };
+	struct dm_config_node_out_spec out_spec = { 0 };
+	uint32_t old_format_flags;
+
+	out_handle.mem = mem;
+	out_spec.line_fn = _config_array_line;
+
+	old_format_flags = dm_config_value_get_format_flags(cn->v);
+	dm_config_value_set_format_flags(cn->v,
+		DM_CONFIG_VALUE_FMT_COMMON_EXTRA_SPACES |
+		DM_CONFIG_VALUE_FMT_COMMON_ARRAY);
+
+	if (!dm_config_write_one_node_out(cn, &out_spec, &out_handle)) {
+		log_error("_log_array_value_used: failed to write node value");
+		out_handle.mem = NULL;
+	}
+
+	if (default_used)
+		log_very_verbose("%s not found in config: defaulting to %s",
+				 path, out_handle.mem ? out_handle.str : "<unknown>");
+	else
+		log_very_verbose("Setting %s to %s",
+				 path, out_handle.mem ? out_handle.str : "<unknown>");
+
+	if (out_handle.mem)
+		dm_pool_free(out_handle.mem, out_handle.str);
+	dm_config_value_set_format_flags(cn->v, old_format_flags);
+}
+
+const struct dm_config_node *find_config_tree_array(struct cmd_context *cmd, int id, struct profile *profile)
+{
+	cfg_def_item_t *item = cfg_def_get_item_p(id);
+	char path[CFG_PATH_MAX_LEN];
+	int profile_applied;
+	const struct dm_config_node *cn = NULL, *cn_def = NULL;
+	profile_applied = _apply_local_profile(cmd, profile);
+	_cfg_def_make_path(path, sizeof(path), item->id, item, 0);
+
+	if (!(item->type & CFG_TYPE_ARRAY))
+		log_error(INTERNAL_ERROR "%s cfg tree element not declared as array.", path);
+
+	if (_config_disabled(cmd, item, path) ||
+	    !(cn = find_config_tree_node(cmd, id, profile)))
+		cn_def = _get_array_def_node(cmd, item, profile);
+
+	if (cn)
+		_log_array_value_used(cmd->cft->mem, cn, path, 0);
+	else if (cn_def) {
+		_log_array_value_used(cmd->cft->mem, cn_def, path, 1);
+		cn = cn_def;
+	}
+
+	if (profile_applied)
+		remove_config_tree_by_source(cmd, profile->source);
+
+	return cn;
+}
+
 /* Insert cn2 after cn1 */
 static void _insert_config_node(struct dm_config_node **cn1,
 				struct dm_config_node *cn2)
@@ -1553,13 +1670,8 @@ static int _out_prefix_fn(const struct dm_config_node *cn, const char *line, voi
 	char path[CFG_PATH_MAX_LEN];
 	char commentline[MAX_COMMENT_LINE+1];
 
-	if (cn->id < 0)
+	if (cn->id <= 0)
 		return 1;
-
-	if (!cn->id) {
-		log_error(INTERNAL_ERROR "Configuration node %s has invalid id.", cn->key);
-		return 0;
-	}
 
 	if (out->tree_spec->type == CFG_DEF_TREE_LIST)
 		return 1;
@@ -1582,6 +1694,11 @@ static int _out_prefix_fn(const struct dm_config_node *cn, const char *line, voi
 		if (cfg_def->comment) {
 			int pos = 0;
 			while (_copy_one_line(cfg_def->comment, commentline, &pos, strlen(cfg_def->comment))) {
+				if ((commentline[0] == '#') && (strlen(commentline) == 1)) {
+					if (!out->tree_spec->withspaces)
+						continue;
+					commentline[0] = '\0';
+				}
 				fprintf(out->fp, "%s# %s\n", line, commentline);
 				/* withsummary prints only the first comment line. */
 				if (!out->tree_spec->withcomments)
@@ -1603,6 +1720,13 @@ static int _out_prefix_fn(const struct dm_config_node *cn, const char *line, voi
 
 		if (cfg_def->flags & CFG_DEFAULT_UNDEFINED)
 			fprintf(out->fp, "%s# This configuration %s does not have a default value defined.\n", line, node_type_name);
+
+		if (cfg_def->flags & CFG_DEFAULT_COMMENTED)
+			fprintf(out->fp, "%s# This configuration %s has an automatic default value.\n", line, node_type_name);
+
+		if ((out->tree_spec->type == CFG_DEF_TREE_FULL) &&
+		    (out->tree_spec->check_status[cn->id] & CFG_USED))
+			fprintf(out->fp, "%s# Value defined in existing configuration has been used for this setting.\n", line);
 	}
 
 	if (out->tree_spec->withversions) {
@@ -1618,6 +1742,16 @@ static int _out_prefix_fn(const struct dm_config_node *cn, const char *line, voi
 	}
 
 	return 1;
+}
+
+static int _should_print_cfg_with_undef_def_val(struct out_baton *out, cfg_def_item_t *cfg_def,
+						const struct dm_config_node *cn)
+{
+	if (!(cfg_def->flags & CFG_DEFAULT_UNDEFINED))
+		return 1;
+
+	/* print it only if the value is directly defined in some config = it's used */
+	return out->tree_spec->check_status && (out->tree_spec->check_status[cn->id] & CFG_USED);
 }
 
 static int _out_line_fn(const struct dm_config_node *cn, const char *line, void *baton)
@@ -1662,14 +1796,23 @@ static int _out_line_fn(const struct dm_config_node *cn, const char *line, void 
 	}
 
 	/* Usual tree view with nodes and their values. */
+
 	if ((out->tree_spec->type != CFG_DEF_TREE_CURRENT) &&
 	    (out->tree_spec->type != CFG_DEF_TREE_DIFF) &&
+	    (out->tree_spec->type != CFG_DEF_TREE_FULL) &&
 	    (cfg_def->flags & (CFG_DEFAULT_UNDEFINED | CFG_DEFAULT_COMMENTED))) {
-		space_prefix = ((len = strspn(line, "\t "))) ? dm_pool_strndup(out->mem, line, len) : NULL;
-		fprintf(out->fp, "%s%s%s\n", space_prefix ? : "", "# ", line + len);
-		if (space_prefix)
-			dm_pool_free(out->mem, space_prefix);
-	} else
+		/* print with # at the front to comment out the line */
+		if (_should_print_cfg_with_undef_def_val(out, cfg_def, cn)) {
+			space_prefix = ((len = strspn(line, "\t "))) ? dm_pool_strndup(out->mem, line, len) : NULL;
+			fprintf(out->fp, "%s%s%s\n", space_prefix ? : "", "# ", line + len);
+			if (space_prefix)
+				dm_pool_free(out->mem, space_prefix);
+		}
+		return 1;
+	}
+
+	/* print the line as it is */
+	if (_should_print_cfg_with_undef_def_val(out, cfg_def, cn))
 		fprintf(out->fp, "%s\n", line);
 
 	return 1;
@@ -1739,15 +1882,20 @@ static struct dm_config_node *_add_def_node(struct dm_config_tree *cft,
 {
 	struct dm_config_node *cn;
 	const char *str;
+	uint32_t format_flags = 0;
 
 	if (!(cn = dm_config_create_node(cft, def->name))) {
 		log_error("Failed to create default config setting node.");
 		return NULL;
 	}
 
-	if (!(def->type & CFG_TYPE_SECTION) && (!(cn->v = dm_config_create_value(cft)))) {
-		log_error("Failed to create default config setting node value.");
-		return NULL;
+	if (!(def->type & CFG_TYPE_SECTION) && !(def->type & CFG_TYPE_ARRAY)) {
+		if (!(cn->v = dm_config_create_value(cft))) {
+			log_error("Failed to create default config setting node value.");
+			return NULL;
+		}
+		if (spec->withspaces)
+			format_flags |= DM_CONFIG_VALUE_FMT_COMMON_EXTRA_SPACES;
 	}
 
 	cn->id = def->id;
@@ -1755,6 +1903,9 @@ static struct dm_config_node *_add_def_node(struct dm_config_tree *cft,
 	if (spec->unconfigured && def->default_unconfigured_value.v_UNCONFIGURED) {
 		cn->v->type = DM_CFG_STRING;
 		cn->v->v.str = cfg_def_get_default_unconfigured_value_hint(spec->cmd, def);
+		if (def->type != CFG_TYPE_STRING)
+			format_flags |= DM_CONFIG_VALUE_FMT_STRING_NO_QUOTES;
+		dm_config_value_set_format_flags(cn->v, format_flags);
 	} else if (!(def->type & CFG_TYPE_ARRAY)) {
 		switch (def->type) {
 			case CFG_TYPE_SECTION:
@@ -1767,6 +1918,8 @@ static struct dm_config_node *_add_def_node(struct dm_config_tree *cft,
 			case CFG_TYPE_INT:
 				cn->v->type = DM_CFG_INT;
 				cn->v->v.i = cfg_def_get_default_value_hint(spec->cmd, def, CFG_TYPE_INT, NULL);
+				if (def->flags & CFG_FORMAT_INT_OCTAL)
+					format_flags |= DM_CONFIG_VALUE_FMT_INT_OCTAL;
 				break;
 			case CFG_TYPE_FLOAT:
 				cn->v->type = DM_CFG_FLOAT;
@@ -1783,8 +1936,13 @@ static struct dm_config_node *_add_def_node(struct dm_config_tree *cft,
 				return NULL;
 				break;
 		}
-	} else
-		cn->v = _get_def_array_values(cft, def);
+		dm_config_value_set_format_flags(cn->v, format_flags);
+	} else {
+		if (spec->withspaces)
+			format_flags |= DM_CONFIG_VALUE_FMT_COMMON_EXTRA_SPACES;
+		format_flags |= DM_CONFIG_VALUE_FMT_COMMON_ARRAY;
+		cn->v = _get_def_array_values(spec->cmd, cft, def, format_flags);
+	}
 
 	cn->child = NULL;
 	if (parent) {
@@ -1816,6 +1974,8 @@ static int _should_skip_def_node(struct config_def_tree_spec *spec, int section_
 		return 1;
 
 	switch (spec->type) {
+		case CFG_DEF_TREE_FULL:
+			/* fall through */
 		case CFG_DEF_TREE_MISSING:
 			if (!spec->check_status) {
 				log_error_once(INTERNAL_ERROR "couldn't determine missing "
@@ -1823,9 +1983,12 @@ static int _should_skip_def_node(struct config_def_tree_spec *spec, int section_
 				return 1;
 			}
 			if ((spec->check_status[id] & CFG_USED) ||
-			    (def->flags & CFG_NAME_VARIABLE) ||
-			    (def->since_version > spec->version) ||
-			    _should_skip_deprecated_def_node(def, spec))
+			    (def->flags & CFG_NAME_VARIABLE))
+				return 1;
+
+			if ((spec->type == CFG_DEF_TREE_MISSING) &&
+			    ((def->since_version > spec->version) ||
+			     _should_skip_deprecated_def_node(def, spec)))
 				return 1;
 			break;
 		case CFG_DEF_TREE_NEW:
@@ -1834,7 +1997,9 @@ static int _should_skip_def_node(struct config_def_tree_spec *spec, int section_
 				return 1;
 			break;
 		case CFG_DEF_TREE_PROFILABLE:
+			/* fall through */
 		case CFG_DEF_TREE_PROFILABLE_CMD:
+			/* fall through */
 		case CFG_DEF_TREE_PROFILABLE_MDA:
 			if (!(def->flags & CFG_PROFILABLE) ||
 			    (def->since_version > spec->version) ||
@@ -1890,7 +2055,7 @@ bad:
 
 struct dm_config_tree *config_def_create_tree(struct config_def_tree_spec *spec)
 {
-	struct dm_config_tree *cft;
+	struct dm_config_tree *cft = NULL, *tmp_cft = NULL;
 	struct dm_config_node *root = NULL, *relay = NULL, *tmp;
 	int id;
 
@@ -1914,7 +2079,33 @@ struct dm_config_tree *config_def_create_tree(struct config_def_tree_spec *spec)
 	}
 
 	cft->root = root;
+
+	if (spec->type == CFG_DEF_TREE_FULL) {
+		if (!(tmp_cft = dm_config_create())) {
+			log_error("Failed to create temporary config tree while creating full tree.");
+			goto bad;
+		}
+
+		if (!(tmp_cft->root = dm_config_clone_node_with_mem(cft->mem, spec->current_cft->root, 1))) {
+			log_error("Failed to clone current config tree.");
+			goto bad;
+		}
+
+		if (!merge_config_tree(spec->cmd, cft, tmp_cft, CONFIG_MERGE_TYPE_RAW)) {
+			log_error("Failed to merge default and current config tree.");
+			goto bad;
+		}
+
+		dm_config_destroy(tmp_cft);
+	}
+
 	return cft;
+bad:
+	if (cft)
+		dm_config_destroy(cft);
+	if (tmp_cft)
+		dm_config_destroy(tmp_cft);
+	return NULL;
 }
 
 static int _check_profile(struct cmd_context *cmd, struct profile *profile)

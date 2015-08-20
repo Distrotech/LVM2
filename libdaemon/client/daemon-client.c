@@ -12,17 +12,16 @@
  * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
+#define _REENTRANT
+
+#include "tool.h"
+
 #include "daemon-io.h"
 #include "daemon-client.h"
 #include "dm-logging.h"
 
 #include <sys/un.h>
 #include <sys/socket.h>
-#include <string.h>
-#include <stdio.h>
-#include <unistd.h>
-#include <assert.h>
-#include <errno.h> // ENOMEM
 
 daemon_handle daemon_open(daemon_info i)
 {
@@ -100,7 +99,13 @@ daemon_reply daemon_send(daemon_handle h, daemon_request rq)
 {
 	struct buffer buffer;
 	daemon_reply reply = { 0 };
-	assert(h.socket_fd >= 0);
+
+	if (h.socket_fd < 0) {
+		log_error(INTERNAL_ERROR "Daemon send: socket fd cannot be negative %d", h.socket_fd);
+		reply.error = EINVAL;
+		return reply;
+	}
+
 	buffer = rq.buffer;
 
 	if (!buffer.mem)
@@ -109,7 +114,12 @@ daemon_reply daemon_send(daemon_handle h, daemon_request rq)
 			return reply;
 		}
 
-	assert(buffer.mem);
+	if (!buffer.mem) {
+		log_error(INTERNAL_ERROR "Daemon send: no memory available");
+		reply.error = ENOMEM;
+		return reply;
+	}
+
 	if (!buffer_write(h.socket_fd, &buffer))
 		reply.error = errno;
 

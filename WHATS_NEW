@@ -1,14 +1,99 @@
-Version 2.02.121 - 
+Version 2.02.129 -
+===================================
+  Support for raid types raid0 and raid0_meta
+
+Version 2.02.128 - 17th August 2015
+===================================
+  Allocation setting cache_pool_cachemode is replaced by cache_mode.
+  Don't attempt to close config file that couldn't be opened.
+  Check for valid cache mode in validation of cache segment.
+  Change internal interface handling cache mode and policy.
+  When no cache policy specified, prefer smq (if available) over mq.
+  Add demo cache-mq and cache-smq profiles.
+  Add cmd profilable allocation/cache_policy,cache_settings,cache_mode.
+  Require cache_check 0.5.4 for use of --clear-needs-check-flag.
+  Fix lvmetad udev rules to not override SYSTEMD_WANTS, add the service instead.
+
+Version 2.02.127 - 10th August 2015
+===================================
+  Do not init filters, locking, lvmetad, lvmpolld if command doesn't use it.
+  Order fields in struct cmd_context more logically.
+  Add lock_type to lvmcache VG summary and info structs.
+  Fix regression in cache causing some PVs to bypass filters (2.02.105).
+  Make configure --enable-realtime the default now.
+  Update .gitignore and configure.in files to reflect usage of current tree.
+
+Version 2.02.126 - 24th July 2015
+=================================
+  Fix long option hyphen removal. (2.02.122)
+  Fix clvmd freeze if client disappears without first releasing its locks.
+  Fix lvconvert segfaults while performing snapshots merge.
+  Ignore errors during detection if use_blkid_wiping=1 and --force is used.
+  Recognise DM_ABORT_ON_INTERNAL_ERRORS env var override in lvm logging fn.
+  Fix alloc segfault when extending LV with fewer stripes than in first seg.
+  Fix handling of cache policy name.
+  Set cache policy before with the first lvm2 cache pool metadata commit.
+  Fix detection of thin-pool overprovisioning (2.02.124).
+  Fix lvmpolld segfaults on 32 bit architectures.
+  Add lvmlockd lock_args validation to vg_validate.
+  Fix ignored --startstopservices option if running lvmconf with systemd.
+  Hide sanlock LVs when processing LVs in VG unless named or --all used.
+
+Version 2.02.125 - 7th July 2015
 ================================
+  Fix getline memory usage in lvmpolld.
+  Add support --clear-needs-check-flag for cache_check of cache pool metadata.
+  Add lvmetactl for developer use only.
+  Rename global/lock_retries to lvmlockd_retries.
+  Replace --enable-lvmlockd by --enable-lockd-sanlock and --enable-lockd-dlm.
+
+Version 2.02.124 - 3rd July 2015
+================================
+  Move sending thin pool messages from resume to suspend phase.
+  Report warning when pool is overprovisioned and not auto resized.
+  Recognize free-form date/time values for lv_time field in selection criteria.
+  Added experimental lvmlockd with configure --enable-lvmlockd.
+  Fix regression in select to match string fields if using synonyms (2.02.123).
+  Fix regression when printing more lv names via display_lvname (2.02.122).
+  Add missing error logging to unlock_vg and sync_local_dev_names callers.
+
+Version 2.02.123 - 30th June 2015
+=================================
+  Add report/time_format lvm.conf option to define time format for report.
+  Fix makefile shell compare == when building lvmetad lvmpolld (2.02.120).
+  Add --type full to lvmconfig for full configuration tree view.
+  Add undocumented environment variables to lvm man page. (2.02.119)
+  Add device synchronization point before activating a new snapshot.
+  Add --withspaces to lvmconfig to add spaces in output for better readability.
+  Add custom main function to libdaemon.
+  Use lvmetad to track out-of-date metadata discovered.
+
+Version 2.02.122 - 20th June 2015
+=================================
+  Flush stdout before printing to stderr.
+  Use pre-allocated buffer for printed LV names in display_lvname.
+  Support thins with size of external origin unaligned with thin pool chunk.
+  Allow extension of reduced thin volumes with external origins.
+  Consider snapshot and origin LV as unusable if component devices suspended.
+  Fix lvmconfig segfault on settings with undefined default value (2.02.120).
+  Add explicit 's' (shared) LV activation mode.
+  Ignore hyphens in long options names (i.e. --long-option == --longoption).
+
+Version 2.02.121 - 12th June 2015
+=================================
+  Distinguish between on-disk and lvmetad versions of text metadata.
+  Remove DL_LIBS from Makefiles for daemons that don't need them.
   Zero errno in before strtoul call in dmsetup if tested after the call.
   Zero errno in before strtoul call in lvmpolld.
   Fix a segfault in pvscan --cache --background command.
   Fix test for AREA_PV when checking for failed mirrors.
   Do not use --sysinit in lvm2-activation{-early,-net}.service if lvmpolld used.
+  Maintain outdated PV info in lvmetad till all old metadata is gone from disk.
   Do not fail polling when poll LV not found (already finished or removed).
   Replace poll_get_copy_vg/lv fns with vg_read() and find_lv() in polldaemon.
   Close all device fds only in before sleep call in polldaemon.
-  Support for raid types raid0 and raid0_meta
+  Simplify Makefile targets that generate exported symbols.
+  Move various -D settings from Makefiles to configure.h.
 
 Version 2.02.120 - 15th May 2015
 ================================

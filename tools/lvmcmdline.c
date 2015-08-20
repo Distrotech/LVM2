@@ -14,9 +14,11 @@
  */
 
 #include "tools.h"
+
 #include "lvm2cmdline.h"
 #include "label.h"
 #include "lvm-version.h"
+#include "lvmlockd.h"
 
 #include "stub.h"
 #include "last-path-component.h"
@@ -284,6 +286,12 @@ int activation_arg(struct cmd_context *cmd __attribute__((unused)), struct arg_v
 	    !strcmp(av->value, "ye")) {
 		av->i_value = CHANGE_AEY;
 		av->ui_value = CHANGE_AEY;
+	}
+
+	else if (!strcmp(av->value, "s") || !strcmp(av->value, "sy") ||
+		 !strcmp(av->value, "ys")) {
+		av->i_value = CHANGE_ASY;
+		av->ui_value = CHANGE_ASY;
 	}
 
 	else if (!strcmp(av->value, "y")) {
@@ -615,6 +623,19 @@ int alloc_arg(struct cmd_context *cmd __attribute__((unused)), struct arg_values
 		return 0;
 
 	av->ui_value = (uint32_t) alloc;
+
+	return 1;
+}
+
+int locktype_arg(struct cmd_context *cmd __attribute__((unused)), struct arg_values *av)
+{
+	lock_type_t lock_type;
+
+	av->sign = SIGN_NONE;
+
+	lock_type = get_lock_type_from_string(av->value);
+	if (lock_type == LOCK_TYPE_INVALID)
+		return 0;
 
 	return 1;
 }
@@ -1039,6 +1060,9 @@ static int _get_settings(struct cmd_context *cmd)
 		cmd->current_settings.backup = 0;
 	}
 
+	if (cmd->command->flags & LOCKD_VG_SH)
+		cmd->lockd_vg_default_sh = 1;
+
 	cmd->partial_activation = 0;
 	cmd->degraded_activation = 0;
 	activation_mode = find_config_tree_str(cmd, activation_mode_CFG, NULL);
@@ -1075,9 +1099,14 @@ static int _get_settings(struct cmd_context *cmd)
 		init_ignorelockingfailure(0);
 
 	cmd->ignore_clustered_vgs = arg_is_set(cmd, ignoreskippedcluster_ARG);
-	cmd->error_foreign_vgs = cmd->command->flags & ENABLE_FOREIGN_VGS ? 0 : 1;
 	cmd->include_foreign_vgs = arg_is_set(cmd, foreign_ARG) ? 1 : 0;
-	cmd->include_active_foreign_vgs = cmd->command->flags & ENABLE_FOREIGN_VGS ? 1 : 0;
+	cmd->include_shared_vgs = arg_is_set(cmd, shared_ARG) ? 1 : 0;
+
+	/*
+	 * This is set to zero by process_each which wants to print errors
+	 * itself rather than having them printed in vg_read.
+	 */
+	cmd->vg_read_print_access_error = 1;
 		
 	if (!arg_count(cmd, sysinit_ARG))
 		lvmetad_connect_or_warn();
@@ -1401,6 +1430,44 @@ static int _prepare_profiles(struct cmd_context *cmd)
 	return 1;
 }
 
+static int _init_lvmlockd(struct cmd_context *cmd)
+{
+	const char *lvmlockd_socket;
+	int use_lvmlockd = find_config_tree_bool(cmd, global_use_lvmlockd_CFG, NULL);
+
+	if (use_lvmlockd && arg_count(cmd, nolocking_ARG)) {
+		/* --nolocking is only allowed with vgs/lvs/pvs commands */
+		cmd->lockd_gl_disable = 1;
+		cmd->lockd_vg_disable = 1;
+		cmd->lockd_lv_disable = 1;
+		return 1;
+	}
+
+	if (use_lvmlockd && locking_is_clustered()) {
+		log_error("ERROR: configuration setting use_lvmlockd cannot be used with clustered locking_type 3.");
+		return 0;
+	}
+
+	lvmlockd_disconnect(); /* start over when tool context is refreshed */
+	lvmlockd_socket = getenv("LVM_LVMLOCKD_SOCKET");
+	if (!lvmlockd_socket)
+		lvmlockd_socket = DEFAULT_RUN_DIR "/lvmlockd.socket";
+
+	lvmlockd_set_socket(lvmlockd_socket);
+	lvmlockd_set_use(use_lvmlockd);
+	if (use_lvmlockd) {
+		lvmlockd_init(cmd);
+		lvmlockd_connect();
+	}
+
+	return 1;
+}
+
+static int _cmd_no_meta_proc(struct cmd_context *cmd)
+{
+	return cmd->command->flags & NO_METADATA_PROCESSING;
+}
+
 int lvm_run_command(struct cmd_context *cmd, int argc, char **argv)
 {
 	struct dm_config_tree *config_string_cft;
@@ -1408,11 +1475,47 @@ int lvm_run_command(struct cmd_context *cmd, int argc, char **argv)
 	int ret = 0;
 	int locking_type;
 	int monitoring;
+	char *arg_new, *arg;
+	int i;
+	int skip_hyphens;
 
 	init_error_message_produced(0);
 
 	/* each command should start out with sigint flag cleared */
 	sigint_clear();
+
+	/* eliminate '-' from all options starting with -- */
+	for (i = 1; i < argc; i++) {
+
+		arg = argv[i];
+
+		if (*arg++ != '-' || *arg++ != '-')
+			continue;
+
+		/* If we reach "--" then stop. */
+		if (!*arg)
+			break;
+
+		arg_new = arg;
+		skip_hyphens = 1;
+		while (*arg) {
+			/* If we encounter '=', stop any further hyphen removal. */
+			if (*arg == '=')
+				skip_hyphens = 0;
+
+			/* Do we need to keep the next character? */
+			if (*arg != '-' || !skip_hyphens) {
+				if (arg_new != arg)
+					*arg_new = *arg;
+				++arg_new;
+			}
+			arg++;
+		}
+
+		/* Terminate a shortened arg */
+		if (arg_new != arg)
+			*arg_new = '\0';
+	}
 
 	if (!(cmd->cmd_line = _copy_command_line(cmd, argc, argv)))
 		return_ECMD_FAILED;
@@ -1443,7 +1546,7 @@ int lvm_run_command(struct cmd_context *cmd, int argc, char **argv)
 			goto_out;
 		}
 
-	if (arg_count(cmd, config_ARG) || !cmd->config_initialized || config_files_changed(cmd)) {
+	if (arg_count(cmd, config_ARG) || !cmd->initialized.config || config_files_changed(cmd)) {
 		/* Reinitialise various settings inc. logging, filters */
 		if (!refresh_toolcontext(cmd)) {
 			if ((config_string_cft = remove_config_tree_by_source(cmd, CONFIG_STRING)))
@@ -1454,6 +1557,12 @@ int lvm_run_command(struct cmd_context *cmd, int argc, char **argv)
 	}
 
 	if (!_prepare_profiles(cmd))
+		return_ECMD_FAILED;
+
+	if (!cmd->initialized.connections && !_cmd_no_meta_proc(cmd) && !init_connections(cmd))
+		return_ECMD_FAILED;
+
+	if (!cmd->initialized.filters && !_cmd_no_meta_proc(cmd) && !init_filters(cmd, 1))
 		return_ECMD_FAILED;
 
 	if (arg_count(cmd, readonly_ARG))
@@ -1489,8 +1598,22 @@ int lvm_run_command(struct cmd_context *cmd, int argc, char **argv)
 		goto out;
 	}
 
-	if (arg_count(cmd, readonly_ARG)) {
-		locking_type = 5;
+	if (_cmd_no_meta_proc(cmd))
+		locking_type = 0;
+	else if (arg_count(cmd, readonly_ARG)) {
+		if (find_config_tree_bool(cmd, global_use_lvmlockd_CFG, NULL)) {
+			/*
+			 * FIXME: we could use locking_type 5 here if that didn't
+			 * cause CLUSTERED to be set, which conflicts with using lvmlockd.
+			 */
+			locking_type = 1;
+			cmd->lockd_gl_disable = 1;
+			cmd->lockd_vg_disable = 1;
+			cmd->lockd_lv_disable = 1;
+		} else {
+			locking_type = 5;
+		}
+
 		if (lvmetad_used()) {
 			lvmetad_set_active(cmd, 0);
 			log_verbose("Disabling use of lvmetad because read-only is set.");
@@ -1500,7 +1623,12 @@ int lvm_run_command(struct cmd_context *cmd, int argc, char **argv)
 	else
 		locking_type = -1;
 
-	if (!init_locking(locking_type, cmd, arg_count(cmd, sysinit_ARG))) {
+	if (!init_locking(locking_type, cmd, _cmd_no_meta_proc(cmd) || arg_count(cmd, sysinit_ARG))) {
+		ret = ECMD_FAILED;
+		goto_out;
+	}
+
+	if (!_cmd_no_meta_proc(cmd) && !_init_lvmlockd(cmd)) {
 		ret = ECMD_FAILED;
 		goto_out;
 	}
@@ -1520,6 +1648,7 @@ int lvm_run_command(struct cmd_context *cmd, int argc, char **argv)
 	 */
 	ret = cmd->command->fn(cmd, argc, argv);
 
+	lvmlockd_disconnect();
 	fin_locking();
 
       out:
@@ -1757,7 +1886,7 @@ static int _close_stray_fds(const char *command)
 	return 1;
 }
 
-struct cmd_context *init_lvm(void)
+struct cmd_context *init_lvm(unsigned set_connections, unsigned set_filters)
 {
 	struct cmd_context *cmd;
 
@@ -1771,7 +1900,8 @@ struct cmd_context *init_lvm(void)
 	 */
 	dm_set_name_mangling_mode(DM_STRING_MANGLING_NONE);
 
-	if (!(cmd = create_toolcontext(0, NULL, 1, 0))) {
+	if (!(cmd = create_toolcontext(0, NULL, 1, 0,
+			set_connections, set_filters))) {
 		udev_fin_library_context();
 		return_NULL;
 	}
@@ -1939,7 +2069,7 @@ int lvm2_main(int argc, char **argv)
 	if (!alias && argc > 1 && !strcmp(argv[1], "version"))
 		return lvm_return_code(version(NULL, argc, argv));
 
-	if (!(cmd = init_lvm()))
+	if (!(cmd = init_lvm(0, 0)))
 		return -1;
 
 	cmd->argv = argv;

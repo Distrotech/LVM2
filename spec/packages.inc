@@ -164,10 +164,11 @@ fi
 %config(noreplace) %verify(not md5 mtime size) %{_sysconfdir}/lvm/profile/metadata_profile_template.profile
 %config(noreplace) %verify(not md5 mtime size) %{_sysconfdir}/lvm/profile/thin-generic.profile
 %config(noreplace) %verify(not md5 mtime size) %{_sysconfdir}/lvm/profile/thin-performance.profile
+%config(noreplace) %verify(not md5 mtime size) %{_sysconfdir}/lvm/profile/cache-mq.profile
+%config(noreplace) %verify(not md5 mtime size) %{_sysconfdir}/lvm/profile/cache-smq.profile
 %dir %{_sysconfdir}/lvm/backup
 %dir %{_sysconfdir}/lvm/cache
 %dir %{_sysconfdir}/lvm/archive
-%dir %{_default_locking_dir}
 %dir %{_default_run_dir}
 %if %{enable_systemd}
  %config(noreplace) %{_prefix}/lib/tmpfiles.d/%{name}.conf
@@ -247,6 +248,46 @@ This package contains shared lvm2 libraries for applications.
 %{_libdir}/libdevmapper-event-lvm2mirror.so
 %{_libdir}/libdevmapper-event-lvm2snapshot.so
 %{_libdir}/libdevmapper-event-lvm2raid.so
+
+
+##############################################################################
+# LVM locking daemon
+##############################################################################
+%if %{have_service lvmlockd}
+%package lockd
+Summary: LVM locking daemon
+Group: System Environment/Base
+Requires: lvm2 = %{version}-%{release}
+%if %{enable_lockd_dlm}
+Requires: dlm-lib >= %{dlm_version}
+%endif
+%if %{enable_lockd_sanlock}
+Requires: sanlock-lib >= %{sanlock_version}
+%endif
+Requires(post): systemd-units
+Requires(preun): systemd-units
+Requires(postun): systemd-units
+
+%description lockd
+LVM commands use lvmlockd to coordinate access to shared storage.
+
+%post lockd
+%systemd_post lvm2-lvmlockd.service lvm2-lvmlocking.service
+
+%preun lockd
+%systemd_preun lvm2-lvmlockd.service lvm2-lvmlocking.service
+
+%postun lockd
+%systemd_postun lvm2-lvmlockd.service lvm2-lvmlocking.service
+
+%files lockd
+%{_sbindir}/lvmlockd
+%{_sbindir}/lvmlockctl
+%{_mandir}/man8/lvmlockd.8.gz
+%dir %{_default_locking_dir}
+%{_unitdir}/lvm2-lvmlockd.service
+%{_unitdir}/lvm2-lvmlocking.service
+%endif
 
 ##############################################################################
 # Cluster subpackage
@@ -359,7 +400,9 @@ for the kernel device-mapper.
 %defattr(-,root,root,-)
 %doc COPYING COPYING.LIB WHATS_NEW_DM VERSION_DM README INSTALL
 %attr(755,root,root) %{_sbindir}/dmsetup
+%{_sbindir}/dmstats
 %{_mandir}/man8/dmsetup.8.gz
+%{_mandir}/man8/dmstats.8.gz
 %if %{enable_udev}
 %doc udev/12-dm-permissions.rules
 %dir %{_udevbasedir}

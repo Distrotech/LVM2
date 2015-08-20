@@ -510,7 +510,7 @@ int do_lock_lv(unsigned char command, unsigned char lock_flags, char *resource)
 	DEBUGLOG("do_lock_lv: resource '%s', cmd = %s, flags = %s, critical_section = %d\n",
 		 resource, decode_locking_cmd(command), decode_flags(lock_flags), critical_section());
 
-	if (!cmd->config_initialized || config_files_changed(cmd)) {
+	if (!cmd->initialized.config || config_files_changed(cmd)) {
 		/* Reinitialise various settings inc. logging, filters */
 		if (do_refresh_cache()) {
 			log_error("Updated config file invalid. Aborting.");
@@ -899,7 +899,7 @@ int init_clvm(struct dm_hash_table *excl_uuid)
 	if (!get_initial_state(excl_uuid))
 		log_error("Cannot load initial lock states.");
 
-	if (!(cmd = create_toolcontext(1, NULL, 0, 1))) {
+	if (!(cmd = create_toolcontext(1, NULL, 0, 1, 1, 1))) {
 		log_error("Failed to allocate command context");
 		return 0;
 	}
