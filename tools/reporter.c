@@ -399,7 +399,8 @@ static int _pvsegs_in_vg(struct cmd_context *cmd, const char *vg_name,
 	return process_each_pv_in_vg(cmd, vg, handle, &_pvsegs_single);
 }
 
-static int _get_final_report_type(int args_are_pvs,
+static int _get_final_report_type(struct cmd_context *cmd,
+				  int args_are_pvs,
 				  report_type_t report_type,
 				  int *lv_info_needed,
 				  int *lv_segment_status_needed,
@@ -434,6 +435,11 @@ static int _get_final_report_type(int args_are_pvs,
 	else if (report_type & (LVS | LVSINFO | LVSSTATUS | LVSINFOSTATUS))
 		report_type = LVS;
 
+	if (cmd->include_dead_entities && (report_type & (SEGS | PVSEGS))) {
+		log_error("Can't report segments and removed entries at the same time");
+		return 0;
+	}
+
 	*final_report_type = report_type;
 	return 1;
 }
@@ -450,7 +456,7 @@ int report_for_selection(struct cmd_context *cmd,
 	struct processing_handle *handle;
 	int r = 0;
 
-	if (!_get_final_report_type(args_are_pvs,
+	if (!_get_final_report_type(cmd, args_are_pvs,
 				    sh->orig_report_type | sh->report_type,
 				    &do_lv_info,
 				    &do_lv_seg_status,
@@ -742,7 +748,7 @@ static int _report(struct cmd_context *cmd, int argc, char **argv,
 					  columns_as_rows, selection)))
 		return_ECMD_FAILED;
 
-	if (!_get_final_report_type(args_are_pvs,
+	if (!_get_final_report_type(cmd, args_are_pvs,
 				    report_type, &lv_info_needed,
 				    &lv_segment_status_needed,
 				    &report_type)) {
