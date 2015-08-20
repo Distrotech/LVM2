@@ -17,15 +17,6 @@
 
 #include <fcntl.h>
 
-/* HM FIXME: REMOVEME: devel output */
-#ifdef USE_PFL
-#define PFL() printf("%s %u\n", __func__, __LINE__);
-#define PFLA(format, arg...) printf("%s %u " format "\n", __func__, __LINE__, arg);
-#else
-#define PFL()
-#define PFLA(format, arg...)
-#endif
-
 struct lvcreate_cmdline_params {
 	percent_type_t percent;
 	uint64_t size;

@@ -29,15 +29,6 @@
 #include <limits.h>
 #include <unistd.h>
 
-/* HM FIXME: REMOVEME: devel output */
-#ifdef USE_PFL
-#define PFL() printf("%s %u\n", __func__, __LINE__);
-#define PFLA(format, arg...) printf("%s %u " format "\n", __func__, __LINE__, arg);
-#else
-#define PFL()
-#define PFLA(format, arg...)
-#endif
-
 static struct locking_type _locking;
 
 static int _vg_lock_count = 0;		/* Number of locks held */

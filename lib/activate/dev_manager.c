@@ -30,14 +30,6 @@
 #include <limits.h>
 #include <dirent.h>
 
-#ifdef USE_PFL
-#define PFL() printf("%s %u\n", __func__, __LINE__);
-#define PFLA(format, arg...) printf("%s %u " format "\n", __func__, __LINE__, arg);
-#else
-#define PFL()
-#define PFLA(format, arg...)
-#endif
-
 #define MAX_TARGET_PARAMSIZE 50000
 #define LVM_UDEV_NOSCAN_FLAG DM_SUBSYSTEM_UDEV_FLAG0
 

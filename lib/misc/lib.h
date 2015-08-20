@@ -21,16 +21,11 @@
 
 /* HM FIXME: REMOVEME: devel output */
 #if 0
-#define	USE_PFL
-#endif
-
-/* HM FIXME: REMOVEME: devel output */
-#if 0
 #include "dump.h"
 #endif
 
 /* HM FIXME: REMOVEME: devel output */
-#ifdef USE_PFL
+#if 1
 #define PFL() printf("%s %u\n", __func__, __LINE__);
 #define PFLA(format, arg...) printf("%s %u " format "\n", __func__, __LINE__, arg);
 #else

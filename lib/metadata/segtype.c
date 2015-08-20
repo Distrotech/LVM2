@@ -22,6 +22,9 @@ struct segment_type *get_segtype_from_string(struct cmd_context *cmd,
 {
 	struct segment_type *segtype;
 
+	if (!strcmp(str, "linear"))
+		str = "striped";
+
 	dm_list_iterate_items(segtype, &cmd->segtypes)
 		if (!strcmp(segtype->name, str))
 			return segtype;

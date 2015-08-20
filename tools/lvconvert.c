@@ -18,15 +18,6 @@
 #include "lv_alloc.h"
 #include "lvconvert_poll.h"
 
-/* HM FIXME: REMOVEME: devel output */
-#ifdef USE_PFL
-#define PFL() printf("%s %u\n", __func__, __LINE__);
-#define PFLA(format, arg...) printf("%s %u " format "\n", __func__, __LINE__, arg);
-#else
-#define PFL()
-#define PFLA(format, arg...)
-#endif
-
 struct lvconvert_params {
 	int cache;
 	int force;

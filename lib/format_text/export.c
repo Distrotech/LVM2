@@ -27,15 +27,6 @@
 #include <time.h>
 #include <sys/utsname.h>
 
-/* HM FIXME: REMOVEME: devel output */
-#ifdef USE_PFL
-#define PFL() printf("%s %u\n", __func__, __LINE__);
-#define PFLA(format, arg...) printf("%s %u " format "\n", __func__, __LINE__, arg);
-#else
-#define PFL()
-#define PFLA(format, arg...)
-#endif
-
 struct formatter;
 __attribute__((format(printf, 3, 0)))
 typedef int (*out_with_comment_fn) (struct formatter * f, const char *comment,

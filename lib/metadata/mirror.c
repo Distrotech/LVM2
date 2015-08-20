@@ -27,16 +27,6 @@
 
 #include "defaults.h" /* FIXME: should this be defaults.h? */
 
-/* HM FIXME: REMOVEME: devel output */
-#ifdef USE_PFL
-#define PFL() printf("%s %u\n", __func__, __LINE__);
-#define PFLA(format, arg...) printf("%s %u " format "\n", __func__, __LINE__, arg);
-#else
-#define PFL()
-#define PFLA(format, arg...)
-#endif
-
-
 /* These are necessary for _write_log_header() */
 #include "xlate.h"
 #define MIRROR_MAGIC 0x4D695272
