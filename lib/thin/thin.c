@@ -484,6 +484,26 @@ static int _thin_text_import(struct lv_segment *seg,
 			return SEG_LOG_ERROR("Unknown origin %s in", lv_name);
 	}
 
+	if (dm_config_has_node(sn, "indirect_origin")) {
+		if (!dm_config_get_str(sn, "indirect_origin", &lv_name))
+			return SEG_LOG_ERROR("Indirect origin must be a string in");
+
+		if (!strncmp(lv_name, DEAD_LV_PREFIX, strlen(DEAD_LV_PREFIX))) {
+			if (!(indirect_origin = find_dead_glv(seg->lv->vg, lv_name + strlen(DEAD_LV_PREFIX), NULL)))
+				return SEG_LOG_ERROR("Unknown indirect origin %s in", lv_name);
+		} else {
+			if (!(tmp_lv = find_lv(seg->lv->vg, lv_name)))
+				return SEG_LOG_ERROR("Unknown indirect origin %s in", lv_name);
+
+			if (!(indirect_origin = tmp_lv->this_glv)) {
+				if (!(indirect_origin = dm_pool_zalloc(seg->lv->vg->vgmem, sizeof(struct generic_logical_volume))))
+					return SEG_LOG_ERROR("Failed to allocate indirect origin wrapper in");
+				indirect_origin->live = tmp_lv;
+			}
+		}
+
+	}
+
 	if (dm_config_has_node(sn, "merge")) {
 		if (!dm_config_get_str(sn, "merge", &lv_name))
 			return SEG_LOG_ERROR("Merge lv must be a string in");
