@@ -464,7 +464,8 @@ static int _thin_text_import(struct lv_segment *seg,
 			     struct dm_hash_table *pv_hash __attribute__((unused)))
 {
 	const char *lv_name;
-	struct logical_volume *pool_lv, *origin = NULL, *external_lv = NULL, *merge_lv = NULL;
+	struct logical_volume *pool_lv, *origin = NULL, *external_lv = NULL, *merge_lv = NULL, *tmp_lv;
+	struct generic_logical_volume *indirect_origin = NULL;
 
 	if (!dm_config_get_str(sn, "thin_pool", &lv_name))
 		return SEG_LOG_ERROR("Thin pool must be a string in");
@@ -505,7 +506,7 @@ static int _thin_text_import(struct lv_segment *seg,
 			return SEG_LOG_ERROR("Unknown external origin %s in", lv_name);
 	}
 
-	if (!attach_pool_lv(seg, pool_lv, origin, merge_lv))
+	if (!attach_pool_lv(seg, pool_lv, origin, indirect_origin, merge_lv))
 		return_0;
 
 	if (!attach_thin_external_origin(seg, external_lv))
