@@ -1995,6 +1995,32 @@ struct logical_volume *find_lv(const struct volume_group *vg,
 	return lvl ? lvl->lv : NULL;
 }
 
+struct generic_logical_volume *find_dead_glv(const struct volume_group *vg,
+					     const char *dead_lv_name,
+					     struct glv_list **glvl_found)
+{
+	struct glv_list *glvl;
+	const char *ptr;
+
+	/* Use last component */
+	if ((ptr = strrchr(dead_lv_name, '/')))
+		ptr++;
+	else
+		ptr = dead_lv_name;
+
+	dm_list_iterate_items(glvl, &vg->dead_lvs) {
+		if (!strcmp(glvl->glv->dead->dname, ptr)) {
+			if (glvl_found)
+				*glvl_found = glvl;
+			return glvl->glv;
+		}
+	}
+
+	if (glvl_found)
+		*glvl_found = NULL;
+	return NULL;
+}
+
 struct physical_volume *find_pv(struct volume_group *vg, struct device *dev)
 {
 	struct pv_list *pvl;

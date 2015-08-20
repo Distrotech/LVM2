@@ -990,6 +990,11 @@ struct lv_list *find_lv_in_vg(const struct volume_group *vg,
 /* FIXME Merge these functions with ones above */
 struct logical_volume *find_lv(const struct volume_group *vg,
 			       const char *lv_name);
+
+struct generic_logical_volume *find_dead_glv(const struct volume_group *vg,
+					     const char *dead_lv_name,
+					     struct glv_list **glvl_found);
+
 struct physical_volume *find_pv_by_name(struct cmd_context *cmd,
 					const char *pv_name,
 					int allow_orphan, int allow_unformatted);
