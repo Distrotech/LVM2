@@ -126,6 +126,7 @@ struct cmd_context {
 	unsigned threaded:1;			/* set if running within a thread e.g. clvmd */
 	unsigned independent_metadata_areas:1;	/* active formats have MDAs outside PVs */
 	unsigned unknown_system_id:1;
+	unsigned record_dead_entities:1;	/* record dead entities */
 	unsigned include_dead_entities:1;	/* also process/report/display dead entities */
 	unsigned include_foreign_vgs:1;		/* report/display cmds can reveal foreign VGs */
 	unsigned include_shared_vgs:1;		/* report/display cmds can reveal lockd VGs */
