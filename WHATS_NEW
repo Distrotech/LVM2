@@ -1,6 +1,7 @@
 Version 2.02.129 -
 ===================================
-  Support for raid types raid0 and raid0_meta
+  Fix debug buffer overflows in cmirrord logging.
+  Add --foreground and --help to cmirrord.
 
 Version 2.02.128 - 17th August 2015
 ===================================
