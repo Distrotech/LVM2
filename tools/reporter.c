@@ -65,6 +65,10 @@ static int _do_info_and_status(struct cmd_context *cmd,
 	unsigned use_layer = lv_is_thin_pool(lv) ? 1 : 0;
 
 	status->lv = lv;
+
+	if (lv_is_dead(lv))
+		return 1;
+
 	if (do_status) {
 		if (!(status->seg_status.mem = dm_pool_create("reporter_pool", 1024)))
 			return_0;
@@ -761,6 +765,7 @@ static int _report(struct cmd_context *cmd, int argc, char **argv,
 	}
 
 	handle.internal_report_for_select = 0;
+	handle.include_dead_entities = cmd->include_dead_entities;
 	handle.custom_handle = report_handle;
 
 	switch (report_type) {
