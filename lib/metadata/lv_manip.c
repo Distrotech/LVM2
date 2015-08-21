@@ -5311,6 +5311,11 @@ static int _lvresize_check_type(struct cmd_context *cmd, const struct logical_vo
 		}
 	}
 
+	if ((lp->resize == LV_REDUCE) && lv_is_thin_pool_metadata(lv)) {
+		log_error("Thin pool metadata volumes cannot be reduced.");
+		return 0;
+	}
+
 	if (lv_is_thin_volume(lv) && first_seg(lv)->external_lv &&
 	    (lp->resize == LV_EXTEND)) {
 		/* Validate thin target supports bigger size of thin volume then external origin */
@@ -5502,7 +5507,7 @@ int lv_resize(struct cmd_context *cmd, struct logical_volume *lv,
 		 */
 		inactive = 1;
 		if (!activate_lv_excl(cmd, lock_lv)) {
-			log_error("Failed to activate %s.", lock_lv->name);
+			log_error("Failed to activate %s.", display_lvname(lock_lv));
 			return 0;
 		}
 	}
@@ -5523,12 +5528,12 @@ int lv_resize(struct cmd_context *cmd, struct logical_volume *lv,
 		backup(vg);
 
 		if (inactive && !deactivate_lv(cmd, lock_lv)) {
-			log_error("Problem deactivating %s.", lock_lv->name);
+			log_error("Problem deactivating %s.", display_lvname(lock_lv));
 			return 0;
 		}
 	}
 
-	log_print_unless_silent("Logical volume %s successfully resized", lp->lv_name);
+	log_print_unless_silent("Logical volume %s successfully resized.", lp->lv_name);
 
 	if (lp->resizefs && (lp->resize == LV_EXTEND) &&
 	    !_fsadm_cmd(cmd, vg, lp, FSADM_CMD_RESIZE, NULL))
