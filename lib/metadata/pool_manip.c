@@ -274,8 +274,17 @@ int detach_pool_lv(struct lv_segment *seg)
 		}
 	}
 
-	if (!(previous_glv = _create_dead_glv(seg)))
-		return_0;
+	if (seg->lv->vg->cmd->record_dead_entities) {
+		if (!(previous_glv = _create_dead_glv(seg)))
+			return_0;
+	} else if (seg->origin) {
+		if (!(previous_glv = get_or_create_glv(seg->origin->vg->vgmem, seg->origin, NULL)))
+			return_0;
+	} else if (seg->indirect_origin) {
+		if (!remove_glv_from_indirect_user_list(seg->indirect_origin, seg->lv->this_glv))
+			return_0;
+		previous_glv = seg->indirect_origin;
+	}
 
 	if (!detach_thin_external_origin(seg))
 		return_0;
