@@ -255,41 +255,34 @@ static int _lock_vol(struct cmd_context *cmd, const char *resource,
 	_lock_memory(cmd, lv_op);
 
 	assert(resource);
-PFLA("resource=%s", resource);
 
 	if (!*resource) {
 		log_error(INTERNAL_ERROR "Use of P_orphans is deprecated.");
 		goto out;
 	}
 
-PFL();
 	if ((is_orphan_vg(resource) || is_global_vg(resource)) && (flags & LCK_CACHE)) {
 		log_error(INTERNAL_ERROR "P_%s referenced", resource);
 		goto out;
 	}
 
-PFL();
 	if (cmd->metadata_read_only && lck_type == LCK_WRITE &&
 	    strcmp(resource, VG_GLOBAL)) {
 		log_error("Operation prohibited while global/metadata_read_only is set.");
 		goto out;
 	}
 
-PFL();
 	if ((ret = _locking.lock_resource(cmd, resource, flags, lv))) {
 		if (lck_scope == LCK_VG && !(flags & LCK_CACHE)) {
-PFL();
 			if (lck_type != LCK_UNLOCK)
 				lvmcache_lock_vgname(resource, lck_type == LCK_READ);
 			dev_reset_error_count(cmd);
 		}
 
-PFL();
 		_update_vg_lock_count(resource, flags);
 	} else
 		stack;
 
-PFL();
 	/* If unlocking, always remove lock from lvmcache even if operation failed. */
 	if (lck_scope == LCK_VG && !(flags & LCK_CACHE) && lck_type == LCK_UNLOCK) {
 		lvmcache_unlock_vgname(resource);
@@ -297,7 +290,6 @@ PFL();
 			_update_vg_lock_count(resource, flags);
 	}
 out:
-PFLA("ret=%d", ret);
 	_unlock_memory(cmd, lv_op);
 	_unblock_signals();
 
@@ -309,7 +301,7 @@ int lock_vol(struct cmd_context *cmd, const char *vol, uint32_t flags, const str
 	char resource[258] __attribute__((aligned(8)));
 	lv_operation_t lv_op;
 	int lck_type = flags & LCK_TYPE_MASK;
-PFL();
+
 	switch (flags & (LCK_SCOPE_MASK | LCK_TYPE_MASK)) {
 		case LCK_LV_SUSPEND:
 				lv_op = LV_SUSPEND;
@@ -328,10 +320,8 @@ PFL();
 
 	switch (flags & LCK_SCOPE_MASK) {
 	case LCK_ACTIVATION:
-PFL();
 		break;
 	case LCK_VG:
-PFL();
 		if (!_blocking_supported)
 			flags |= LCK_NONBLOCK;
 
@@ -350,12 +340,10 @@ PFL();
 			return_0;
 		break;
 	case LCK_LV:
-PFL();
 		/* All LV locks are non-blocking. */
 		flags |= LCK_NONBLOCK;
 		break;
 	default:
-PFL();
 		log_error("Unrecognised lock scope: %d",
 			  flags & LCK_SCOPE_MASK);
 		return 0;
@@ -364,10 +352,8 @@ PFL();
 	strncpy(resource, vol, sizeof(resource) - 1);
 	resource[sizeof(resource) - 1] = '\0';
 
-PFL();
 	if (!_lock_vol(cmd, resource, flags, lv_op, lv))
 		return_0;
-PFL();
 
 	/*
 	 * If a real lock was acquired (i.e. not LCK_CACHE),
@@ -377,11 +363,9 @@ PFL();
 	    (flags & (LCK_CACHE | LCK_HOLD)))
 		return 1;
 
-PFL();
 	if (!_lock_vol(cmd, resource, (flags & ~LCK_TYPE_MASK) | LCK_UNLOCK, lv_op, lv))
 		return_0;
 
-PFL();
 	return 1;
 }
 
