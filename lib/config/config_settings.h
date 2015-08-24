@@ -1352,6 +1352,13 @@ cfg_array(activation_auto_lock_start_list_CFG, "auto_lock_start_list", activatio
 	"Locking is auto-started only for VGs selected by this list.\n"
 	"The rules are the same as those for auto_activation_volume_list.\n")
 
+cfg(metadata_record_removed_entities_CFG, "record_removed_entities", metadata_CFG_SECTION, CFG_DEFAULT_COMMENTED, CFG_TYPE_BOOL, DEFAULT_RECORD_REMOVED_ENTITIES, vsn(2, 2, 130), NULL, 0, NULL,
+	"When enabled, LVM keeps history records about removed entities in\n"
+	"metadata. The information that is recorded in metadata for removed\n"
+	"entities is reduced when compared to original information kept in\n"
+	"metadata for live entities. Currently, this feature is supported\n"
+	"for thin and thin snapshot LVs only.\n")
+
 cfg(metadata_pvmetadatacopies_CFG, "pvmetadatacopies", metadata_CFG_SECTION, CFG_ADVANCED | CFG_DEFAULT_COMMENTED, CFG_TYPE_INT, DEFAULT_PVMETADATACOPIES, vsn(1, 0, 0), NULL, 0, NULL,
 	"Number of copies of metadata to store on each PV.\n"
 	"The --pvmetadatacopies option overrides this setting.\n"

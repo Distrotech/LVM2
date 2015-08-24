@@ -1102,7 +1102,8 @@ static int _get_settings(struct cmd_context *cmd)
 	cmd->include_foreign_vgs = arg_is_set(cmd, foreign_ARG) ? 1 : 0;
 	cmd->include_shared_vgs = arg_is_set(cmd, shared_ARG) ? 1 : 0;
 	cmd->include_dead_entities = arg_is_set(cmd, removed_ARG) ? 1 : 0;
-	cmd->record_dead_entities = arg_is_set(cmd, nohistory_ARG) ? 0 : 1;
+	cmd->record_dead_entities = find_config_tree_bool(cmd, metadata_record_removed_entities_CFG, NULL) ?
+					(arg_is_set(cmd, nohistory_ARG) ? 0 : 1) : 0;
 
 	/*
 	 * This is set to zero by process_each which wants to print errors
