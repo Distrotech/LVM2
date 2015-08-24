@@ -1210,6 +1210,8 @@ char *generate_lv_name(struct volume_group *vg, const char *format,
 		       char *buffer, size_t len);
 char *generate_dead_lv_name(struct volume_group *vg, const char *format,
 			    char *buffer, size_t len);
+struct generic_logical_volume *get_or_create_glv(struct dm_pool *mem, struct logical_volume *lv, int *glv_created);
+struct glv_list *get_or_create_glvl(struct dm_pool *mem, struct logical_volume *lv, int *glv_created);
 
 /*
 * Begin skeleton for external LVM library
