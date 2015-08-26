@@ -5419,6 +5419,66 @@ struct glv_list *get_or_create_glvl(struct dm_pool *mem, struct logical_volume *
 	return glvl;
 }
 
+int add_glv_to_indirect_user_list(struct dm_pool *mem,
+				  struct generic_logical_volume *origin_glv,
+				  struct generic_logical_volume *user_glv)
+{
+	struct glv_list *user_glvl;
+
+	if (!(user_glvl = dm_pool_zalloc(mem, sizeof(struct glv_list)))) {
+		log_error("Failed to allocate generic volume list item "
+			  "for indirect user %s", user_glv->is_dead ? user_glv->dead->dname
+								    : user_glv->live->name);
+		return 0;
+	}
+
+	user_glvl->glv = user_glv;
+
+	if (user_glv->is_dead)
+		user_glv->dead->indirect_origin = origin_glv;
+	else
+		first_seg(user_glv->live)->indirect_origin = origin_glv;
+
+	if (origin_glv) {
+		if (origin_glv->is_dead)
+			dm_list_add(&origin_glv->dead->indirect_users, &user_glvl->list);
+		else
+			dm_list_add(&origin_glv->live->indirect_users, &user_glvl->list);
+	}
+
+	return 1;
+}
+
+int remove_glv_from_indirect_user_list(struct generic_logical_volume *glv,
+				       struct generic_logical_volume *user_glv)
+{
+	struct glv_list *glvl, *tglvl;
+	struct dm_list *list = glv->is_dead ? &glv->dead->indirect_users
+					    : &glv->live->indirect_users;
+
+	dm_list_iterate_items_safe(glvl, tglvl, list) {
+		if (glvl->glv != user_glv)
+			continue;
+
+		dm_list_del(&glvl->list);
+
+		if (glvl->glv->is_dead)
+			glvl->glv->dead->indirect_origin = NULL;
+		else
+			first_seg(glvl->glv->live)->indirect_origin = NULL;
+
+		return 1;
+	}
+
+	log_error(INTERNAL_ERROR "%s logical volume %s is not a user of %s.",
+		  user_glv->is_dead ? "Dead" : "Live",
+		  user_glv->is_dead ? user_glv->dead->dname : user_glv->live->name,
+		  glv->is_dead ? glv->dead->dname : glv->live->name);
+	return 0;
+}
+
+
+
 int vg_max_lv_reached(struct volume_group *vg)
 {
 	if (!vg->max_lv)
