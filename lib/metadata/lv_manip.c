@@ -5779,7 +5779,7 @@ int lv_remove_single(struct cmd_context *cmd, struct logical_volume *lv,
 	struct volume_group *vg;
 	struct logical_volume *format1_origin = NULL;
 	int format1_reload_required = 0;
-	int visible;
+	int visible, dead;
 	struct logical_volume *pool_lv = NULL;
 	struct logical_volume *lock_lv = lv;
 	struct lv_segment *cache_seg = NULL;
@@ -5952,10 +5952,17 @@ int lv_remove_single(struct cmd_context *cmd, struct logical_volume *lv,
 	}
 
 	visible = lv_is_visible(lv);
+	dead = lv_is_dead(lv);
 
-	log_verbose("Releasing logical volume \"%s\"", lv->name);
+	if (dead)
+		log_verbose("Releasing %slogical volume \"%s\"",
+			    dead ? "dead " : "",
+			    dead ? lv->this_glv->dead->dname : lv->name);
 	if (!lv_remove(lv)) {
-		log_error("Error releasing logical volume \"%s\"", lv->name);
+		if (dead)
+			log_error("Error releasing %slogical volume \"%s\"",
+				  dead ? "dead ": "",
+				  dead ? lv->this_glv->dead->dname : lv->name);
 		return 0;
 	}
 
@@ -6018,8 +6025,10 @@ int lv_remove_single(struct cmd_context *cmd, struct logical_volume *lv,
 	lockd_lv(cmd, lock_lv, "un", LDLV_PERSISTENT);
 	lockd_free_lv(cmd, vg, lv->name, &lv->lvid.id[1], lv->lock_args);
 
-	if (!suppress_remove_message && visible)
-		log_print_unless_silent("Logical volume \"%s\" successfully removed", lv->name);
+	if (!suppress_remove_message && (visible || dead))
+		log_print_unless_silent("%sogical volume \"%s\" successfully removed",
+					dead ? "Dead l" : "L",
+					dead ? lv->this_glv->dead->dname : lv->name);
 
 	return 1;
 }
