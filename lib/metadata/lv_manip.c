@@ -1439,11 +1439,40 @@ int lv_reduce(struct logical_volume *lv, uint32_t extents)
 	return _lv_reduce(lv, extents, 1);
 }
 
+int dead_glv_remove(struct generic_logical_volume *glv)
+{
+	struct generic_logical_volume *origin_glv;
+	struct glv_list *glvl, *user_glvl;
+
+	if (!glv || !glv->is_dead)
+		return_0;
+
+	if (!(glv = find_dead_glv(glv->dead->vg, glv->dead->dname, &glvl))) {
+		log_error(INTERNAL_ERROR "dead_glv_remove: dead LV %s/-%s not found ",
+			  glv->dead->vg->name, glv->dead->dname);
+		return 0;
+	}
+
+	if ((origin_glv = glv->dead->indirect_origin) &&
+	    !remove_glv_from_indirect_user_list(origin_glv, glv))
+		return_0;
+
+	dm_list_iterate_items(user_glvl, &glv->dead->indirect_users) {
+		if (!add_glv_to_indirect_user_list(glv->dead->vg->vgmem, origin_glv, user_glvl->glv))
+			return_0;
+	}
+
+	dm_list_move(&glv->dead->vg->removed_dead_lvs, &glvl->list);
+	return 1;
+}
+
 /*
  * Completely remove an LV.
  */
 int lv_remove(struct logical_volume *lv)
 {
+	if (lv_is_dead(lv))
+		return dead_glv_remove(lv->this_glv);
 
 	if (!lv_reduce(lv, lv->le_count))
 		return_0;
@@ -5859,9 +5888,9 @@ int lv_remove_single(struct cmd_context *cmd, struct logical_volume *lv,
 		is_last_pool = 1;
 	}
 
-	/* Used cache pool or COW cannot be activated */
+	/* Used cache pool, COW or dead LV cannot be activated */
 	if ((!lv_is_cache_pool(lv) || dm_list_empty(&lv->segs_using_this_lv)) &&
-	    !lv_is_cow(lv) &&
+	    !lv_is_cow(lv) && !lv_is_dead(lv) &&
 	    !deactivate_lv(cmd, lv)) {
 		/* FIXME Review and fix the snapshot error paths! */
 		log_error("Unable to deactivate logical volume %s.",

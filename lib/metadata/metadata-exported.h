@@ -771,6 +771,9 @@ int lv_extend(struct logical_volume *lv,
 /* lv must be part of lv->vg->lvs */
 int lv_remove(struct logical_volume *lv);
 
+/* dead_glv must be part of lv->vg->dead_lvs */
+int dead_glv_remove(struct generic_logical_volume *dead_glv);
+
 int lv_remove_single(struct cmd_context *cmd, struct logical_volume *lv,
 		     force_t force, int suppress_remove_message);
 

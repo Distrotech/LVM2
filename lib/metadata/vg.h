@@ -139,6 +139,11 @@ struct volume_group {
 	struct dm_list removed_lvs;
 
 	/*
+	 * List of removed dead logical volumes by dead_glv_remove.
+	 */
+	struct dm_list removed_dead_lvs;
+
+	/*
 	 * List of removed physical volumes by pvreduce.
 	 * They have to get cleared on vg_commit.
 	 */
