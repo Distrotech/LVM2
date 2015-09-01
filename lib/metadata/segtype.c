@@ -47,7 +47,5 @@ struct segment_type *get_segtype_from_flag(struct cmd_context *cmd,
 		if (flag & segtype->flags)
 			return segtype;
 
-	log_warn("WARNING: Unrecognised segment type flag %lX", flag);
-
-	return NULL;
+	return get_segtype_from_string(cmd, "");
 }

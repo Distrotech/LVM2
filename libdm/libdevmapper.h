@@ -1299,6 +1299,7 @@ struct dm_tree_node_raid_params {
 	uint32_t sync_daemon_sleep; /* ms (kernel default = 5sec) */
 	uint32_t max_recovery_rate; /* kB/sec/disk */
 	uint32_t min_recovery_rate; /* kB/sec/disk */
+	uint32_t data_copies;       /* raid10 data copies */
 	uint32_t stripe_cache;      /* sectors */
 
 	uint64_t flags;             /* [no]sync */

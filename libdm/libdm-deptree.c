@@ -45,7 +45,9 @@ enum {
 	SEG_RAID0,
 	SEG_RAID0_META,
 	SEG_RAID1,
-	SEG_RAID10,
+	SEG_RAID10_NEAR,
+	SEG_RAID10_FAR,
+	SEG_RAID10_OFFSET,
 	SEG_RAID4,
 	SEG_RAID5_N,
 	SEG_RAID5_LA,
@@ -85,7 +87,9 @@ static const struct {
 	{ SEG_RAID0, "raid0"},
 	{ SEG_RAID0_META, "raid0_meta"},
 	{ SEG_RAID1, "raid1"},
-	{ SEG_RAID10, "raid10"},
+	{ SEG_RAID10_NEAR, "raid10"},
+	{ SEG_RAID10_FAR, "raid10_far"},
+	{ SEG_RAID10_OFFSET, "raid10_offset"},
 	{ SEG_RAID4, "raid4"},
 	{ SEG_RAID5_N, "raid5_n"},
 	{ SEG_RAID5_LA, "raid5_la"},
@@ -108,6 +112,7 @@ static const struct {
 	{ SEG_RAID5_LS, "raid5"}, /* same as "raid5_ls" (default for MD also) */
 	{ SEG_RAID6_ZR, "raid6"}, /* same as "raid6_zr" */
 };
+
 
 /* Some segment types have a list of areas of other devices attached */
 struct seg_area {
@@ -211,6 +216,7 @@ struct load_segment {
 	uint32_t writebehind;		/* raid */
 	uint32_t max_recovery_rate;	/* raid kB/sec/disk */
 	uint32_t min_recovery_rate;	/* raid kB/sec/disk */
+	uint32_t data_copies;		/* raid10 data_copies */
 
 	struct dm_tree_node *metadata;	/* Thin_pool + Cache */
 	struct dm_tree_node *pool;	/* Thin_pool, Thin */
@@ -2153,7 +2159,9 @@ static int _emit_areas_line(struct dm_task *dmt __attribute__((unused)),
 		case SEG_RAID0:
 		case SEG_RAID0_META:
 		case SEG_RAID1:
-		case SEG_RAID10:
+		case SEG_RAID10_NEAR:
+		case SEG_RAID10_FAR:
+		case SEG_RAID10_OFFSET:
 		case SEG_RAID4:
 		case SEG_RAID5_N:
 		case SEG_RAID5_LA:
@@ -2400,7 +2408,8 @@ PFLA("seg->area_count=%u", seg->area_count);
 		       _2_if_value(seg->region_size) +
 		       _2_if_value(seg->writebehind) +
 		       _2_if_value(seg->min_recovery_rate) +
-		       _2_if_value(seg->max_recovery_rate);
+		       _2_if_value(seg->max_recovery_rate) +
+		       _2_if_value(seg->data_copies);
 
 	/* rebuilds and writemostly are 4 * 64 bits */
 	param_count += _get_params_count(seg->rebuilds);
@@ -2413,24 +2422,29 @@ PFLA("seg->area_count=%u", seg->area_count);
 	type = seg->type;
 	if (type == SEG_RAID0_META)
 		type = SEG_RAID0;
+	/* Kernel only expects "raid10", not "raid10_{far,offset}" */
+	else if (type == SEG_RAID10_FAR ||
+		 type == SEG_RAID10_OFFSET) {
+		param_count += 2;
+		type = SEG_RAID10_NEAR;
+	}
 
 PFLA("param_count=%u", param_count);
 	EMIT_PARAMS(pos, "%s %d %u", _dm_segtypes[type].target,
 		    param_count, seg->stripe_size);
 
+	if (seg->type == SEG_RAID10_FAR)
+		EMIT_PARAMS(pos, " raid10_format far");
+	else if (seg->type == SEG_RAID10_OFFSET)
+		EMIT_PARAMS(pos, " raid10_format offset");
+
+	if (seg->data_copies)
+		EMIT_PARAMS(pos, " raid10_copies %u", seg->data_copies);
+
 	if (seg->flags & DM_NOSYNC)
 		EMIT_PARAMS(pos, " nosync");
 	else if (seg->flags & DM_FORCESYNC)
 		EMIT_PARAMS(pos, " sync");
-
-#if 0
-	/* HM FIXME: support raid10 format and copies */
-	if (seg->raid10_format)
-		EMIT_PARAMS(pos, " %s", seg->raid10_format);
-
-	if (seg->raid10_copies)
-		EMIT_PARAMS(pos, " raid10_copies %u", seg->raid_copies);
-#endif
 
 	if (seg->region_size)
 		EMIT_PARAMS(pos, " region_size %u", seg->region_size);
@@ -2640,7 +2654,9 @@ PFL()
 	case SEG_RAID0:
 	case SEG_RAID0_META:
 	case SEG_RAID1:
-	case SEG_RAID10:
+	case SEG_RAID10_NEAR:
+	case SEG_RAID10_FAR:
+	case SEG_RAID10_OFFSET:
 	case SEG_RAID4:
 	case SEG_RAID5_N:
 	case SEG_RAID5_LA:
@@ -3325,6 +3341,7 @@ PFL();
 	seg->writebehind = p->writebehind;
 	seg->min_recovery_rate = p->min_recovery_rate;
 	seg->max_recovery_rate = p->max_recovery_rate;
+	seg->data_copies = p->data_copies;
 	seg->flags = p->flags;
 
 	return 1;

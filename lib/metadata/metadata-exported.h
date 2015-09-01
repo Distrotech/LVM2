@@ -452,7 +452,8 @@ struct lv_segment {
 	struct logical_volume *cow;
 	struct dm_list origin_list;
 	uint32_t region_size;	/* For mirrors, raid, replicators - in sectors */
-	uint32_t stripes;	/* For RAID10 near */
+	uint32_t stripes;	/* For RAID10 near/far/offset */
+	uint32_t mirrors;	/* For RAID10 near */
 	uint32_t extents_copied;
 	struct logical_volume *log_lv;
 	struct lv_segment *pvmove_source_seg;
@@ -1148,7 +1149,7 @@ int lv_raid_split_and_track(struct logical_volume *lv,
 int lv_raid_merge(struct logical_volume *lv);
 int lv_raid_convert(struct logical_volume *lv,
 		    const struct segment_type *new_segtype,
-		    int yes, int force,
+		    int yes, int force, int duplicate,
 		    const unsigned image_count,
 		    const unsigned stripes,
 		    const unsigned new_stripe_size,

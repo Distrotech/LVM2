@@ -50,14 +50,13 @@ struct dev_manager;
 #define SEG_RAID0		UINT64_C(0x0000000000040000)
 #define SEG_RAID0_META		UINT64_C(0x0000000000080000)
 #define SEG_RAID1		UINT64_C(0x0000000000100000)
-#define SEG_RAID10		UINT64_C(0x0000000000200000)
+#define SEG_RAID10_NEAR		UINT64_C(0x0000000000200000)
 #define SEG_RAID4		UINT64_C(0x0000000000400000)
 #define SEG_RAID5_N		UINT64_C(0x0000000000800000)
 #define SEG_RAID5_LA		UINT64_C(0x0000000001000000)
 #define SEG_RAID5_LS		UINT64_C(0x0000000002000000)
 #define SEG_RAID5_RA		UINT64_C(0x0000000004000000)
 #define SEG_RAID5_RS		UINT64_C(0x0000000008000000)
-#define SEG_RAID5		SEG_RAID5_LS
 #define SEG_RAID6_NC		UINT64_C(0x0000000010000000)
 #define SEG_RAID6_NR		UINT64_C(0x0000000020000000)
 #define SEG_RAID6_ZR		UINT64_C(0x0000000040000000)
@@ -66,7 +65,12 @@ struct dev_manager;
 #define SEG_RAID6_RA_6		UINT64_C(0x0000000200000000)
 #define SEG_RAID6_RS_6		UINT64_C(0x0000000400000000)
 #define SEG_RAID6_N_6		UINT64_C(0x0000000800000000)
+#define SEG_RAID10_FAR		UINT64_C(0x0000001000000000)
+#define SEG_RAID10_OFFSET	UINT64_C(0x0000002000000000)
+
+#define SEG_RAID5		SEG_RAID5_LS
 #define SEG_RAID6		SEG_RAID6_ZR
+#define SEG_RAID10		SEG_RAID10_NEAR
 
 #define SEG_UNKNOWN		UINT64_C(0x8000000000000000)
 
@@ -194,6 +198,9 @@ int init_raid_segtypes(struct cmd_context *cmd, struct segtype_library *seglib);
 #define SEG_TYPE_NAME_RAID0_META	"raid0_meta"
 #define SEG_TYPE_NAME_RAID1		"raid1"
 #define SEG_TYPE_NAME_RAID10		"raid10"
+#define SEG_TYPE_NAME_RAID10_NEAR	"raid10_near"
+#define SEG_TYPE_NAME_RAID10_FAR	"raid10_far"
+#define SEG_TYPE_NAME_RAID10_OFFSET	"raid10_offset"
 #define SEG_TYPE_NAME_RAID4		"raid4"
 #define SEG_TYPE_NAME_RAID5		"raid5"
 #define SEG_TYPE_NAME_RAID5_N		"raid5_n"
@@ -215,7 +222,12 @@ int init_raid_segtypes(struct cmd_context *cmd, struct segtype_library *seglib);
 #define segtype_is_raid0_meta(segtype)	(((segtype)->flags & SEG_RAID0_META) ? 1 : 0)
 #define segtype_is_any_raid0(segtype)	(((segtype)->flags & (SEG_RAID0|SEG_RAID0_META)) ? 1 : 0)
 #define segtype_is_raid1(segtype)	(((segtype)->flags & SEG_RAID1) ? 1 : 0)
-#define segtype_is_raid10(segtype)	(((segtype)->flags & SEG_RAID10) ? 1 : 0)
+#define segtype_is_raid10(segtype)	(((segtype)->flags & SEG_RAID10_NEAR) ? 1 : 0)
+#define segtype_is_raid10_near(segtype)	segtype_is_raid10(segtype)
+#define segtype_is_raid10_far(segtype)	(((segtype)->flags & SEG_RAID10_FAR) ? 1 : 0)
+#define segtype_is_raid10_offset(segtype) (((segtype)->flags & SEG_RAID10_OFFSET) ? 1 : 0)
+#define segtype_is_any_raid10(segtype)	(((segtype)->flags & \
+					 (SEG_RAID10_NEAR|SEG_RAID10_FAR|SEG_RAID10_OFFSET)) ? 1 : 0)
 #define segtype_is_raid4(segtype)	(((segtype)->flags & SEG_RAID4) ? 1 : 0)
 #define segtype_is_raid5_ls(segtype)	(((segtype)->flags & SEG_RAID5_LS) ? 1 : 0)
 #define segtype_is_raid5_rs(segtype)	(((segtype)->flags & SEG_RAID5_RS) ? 1 : 0)
@@ -236,13 +248,17 @@ int init_raid_segtypes(struct cmd_context *cmd, struct segtype_library *seglib);
 					 (SEG_RAID6_ZR|SEG_RAID6_NC|SEG_RAID6_NR| \
 					  SEG_RAID6_LS_6|SEG_RAID6_LA_6|SEG_RAID6_RS_6|SEG_RAID6_RA_6|SEG_RAID6_N_6)) ? 1 : 0)
 #define segtype_is_striped_raid(segtype)	(segtype_is_raid(segtype) && !segtype_is_raid1(segtype))
-#define segtype_is_reshapable_raid(segtype)	(segtype_is_striped_raid(segtype) && !segtype_is_raid0(segtype) && !segtype_is_raid10(segtype))
+#define segtype_is_reshapable_raid(segtype)	(segtype_is_striped_raid(segtype) && !segtype_is_raid0(segtype) && !segtype_is_any_raid10(segtype))
 
 #define seg_is_raid0(seg)		segtype_is_raid0((seg)->segtype)
 #define seg_is_raid0_meta(seg)		segtype_is_raid0_meta((seg)->segtype)
 #define seg_is_any_raid0(seg)		segtype_is_any_raid0((seg)->segtype)
 #define seg_is_raid1(seg)		segtype_is_raid1((seg)->segtype)
-#define seg_is_raid10(seg)		segtype_is_raid10((seg)->segtype)
+#define seg_is_raid10_near(seg)		segtype_is_raid10_near((seg)->segtype)
+#define seg_is_raid10(seg)		seg_is_raid10_near((seg))
+#define seg_is_raid10_far(seg)		segtype_is_raid10_far((seg)->segtype)
+#define seg_is_raid10_offset(seg)	segtype_is_raid10_offset((seg)->segtype)
+#define seg_is_any_raid10(seg)		segtype_is_any_raid10((seg)->segtype)
 #define seg_is_raid4(seg)		segtype_is_raid4((seg)->segtype)
 #define seg_is_any_raid5(seg)		segtype_is_any_raid5((seg)->segtype)
 #define seg_is_raid5_ls(seg)		segtype_is_raid5_ls((seg)->segtype)

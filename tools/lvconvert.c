@@ -1806,10 +1806,19 @@ PFLA("lp->segtype=%s\n", lp->segtype->name);
 			}
 		}
 
+		/* Special case "linear", which is no individual segtype */
+		if (arg_count(cmd, type_ARG) &&
+		    !strcmp(arg_str_value(cmd, type_ARG, NULL), "linear")) {
+			image_count = stripes = 1;
+			stripe_size = 0;
+		}
+
+		/* HM FIXME: get region size from config */
 		if (seg_is_reshapable_raid(seg) || seg_is_raid1(seg))
 			seg->region_size = lp->region_size ?: 1024;
 
-		return lv_raid_convert(lv, lp->segtype, lp->yes, lp->force, image_count, stripes, stripe_size, lp->pvh);
+		return lv_raid_convert(lv, lp->segtype, lp->yes, lp->force, arg_count(cmd, duplicate_ARG),
+				       image_count, stripes, stripe_size, lp->pvh);
 	}
 
 	if (arg_count(cmd, replace_ARG))

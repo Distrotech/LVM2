@@ -453,30 +453,35 @@ static int _read_mirror_params(struct cmd_context *cmd,
 static int _read_raid_params(struct cmd_context *cmd,
 			     struct lvcreate_params *lp)
 {
-	if ((lp->stripes < 2) && segtype_is_raid10(lp->segtype)) {
-		if (arg_count(cmd, stripes_ARG)) {
-			/* User supplied the bad argument */
-			log_error("Segment type 'raid10' requires 2 or more stripes.");
-			return 0;
+	if (segtype_is_raid10_near(lp->segtype)) {
+		if (lp->stripes * lp->mirrors < 2) {
+			if (arg_count(cmd, stripes_ARG) || arg_count(cmd, mirrors_ARG)) {
+				/* User supplied the bad argument */
+				log_error("Segment type '%s' requires 3 or more devices.", lp->segtype->name);
+				return 0;
+			}
+
+			/* No stripe argument was given - default to 3 */
+			lp->stripes = 3;
 		}
-		/* No stripe argument was given - default to 2 */
-		lp->stripes = 2;
-		lp->stripe_size = find_config_tree_int(cmd, metadata_stripesize_CFG, NULL) * 2;
 	}
+
+	if (!lp->stripe_size && !segtype_is_raid1(lp->segtype))
+		lp->stripe_size = find_config_tree_int(cmd, metadata_stripesize_CFG, NULL) * 2;
 
 	/*
 	 * RAID1 does not take a stripe arg
 	 */
 	if ((lp->stripes > 1) &&
 	    (seg_is_mirrored(lp) || segtype_is_raid1(lp->segtype)) &&
-	    !segtype_is_raid10(lp->segtype)) {
+	    !segtype_is_any_raid10(lp->segtype)) {
 		log_error("Stripe argument cannot be used with segment type, %s",
 			  lp->segtype->name);
 		return 0;
 	}
 
 	if (arg_count(cmd, mirrors_ARG) &&
-	    !(segtype_is_raid1(lp->segtype) || segtype_is_raid10(lp->segtype))) {
+	    !(segtype_is_raid1(lp->segtype) || segtype_is_any_raid10(lp->segtype))) {
 		log_error("Mirror argument cannot be used with segment type, %s",
 			  lp->segtype->name);
 		return 0;
@@ -522,17 +527,31 @@ static int _read_mirror_and_raid_params(struct cmd_context *cmd,
 			return 0;
 		}
 
-		if (lp->mirrors > 2 &&
-		    segtype_is_raid10(lp->segtype)) {
-			/*
-			 * FIXME: When RAID10 is no longer limited to
-			 *        2-way mirror, 'lv_mirror_count()'
-			 *        must also change for RAID10.
-			 */
-			log_error("RAID10 currently supports "
-				  "only 2-way mirroring (i.e. '-m 1')");
+#if 1
+		if (segtype_is_raid10_near(lp->segtype) &&
+		    lp->mirrors >= lp->stripes) {
+			log_error("RAID10 near mirrors have to be less than stripes");
 			return 0;
 		}
+#else
+		if (segtype_is_any_raid10(lp->segtype)) {
+			if (segtype_is_raid10_near(lp->segtype)) {
+				if (lp->mirrors > 2) {
+					/*
+					 * FIXME: When RAID10 is no longer limited to
+					 *        2-way mirror, 'lv_mirror_count()'
+					 *        must also change for RAID10.
+					 */
+					log_error("RAID10 near currently supports "
+					  	"only 2-way mirroring (i.e. '-m 1')");
+					return 0;
+				}
+			} else if (lp->mirrors > 2) {
+				log_error("RAID10 far/offset does not support more than 1 mirror");
+				return 0;
+			}
+		}
+#endif
 
 		if (lp->mirrors == 1) {
 			if (seg_is_mirrored(lp)) {
@@ -545,12 +564,20 @@ static int _read_mirror_and_raid_params(struct cmd_context *cmd,
 		/* Default to 2 mirrored areas if '--type mirror|raid1|raid10' */
 		lp->mirrors = seg_is_mirrored(lp) ? 2 : 1;
 
-PFLA("mirrors=%u stripes=%u", lp->mirrors, lp->stripes);
-	if (lp->stripes < 2 &&
-	    (segtype_is_any_raid0(lp->segtype) || segtype_is_raid10(lp->segtype)))
+PFLA("lp->mirrors=%u lp->stripes=%u", lp->mirrors, lp->stripes);
+	if (lp->stripes < 2 && segtype_is_any_raid0(lp->segtype))
 		if (arg_count(cmd, stripes_ARG)) {
 			/* User supplied the bad argument */
-			log_error("Segment type 'raid(1)0' requires 2 or more stripes.");
+PFL();
+			log_error("Segment type '%s' requires 2 or more stripes.", lp->segtype->name);
+			return 0;
+		}
+
+	if (lp->stripes * lp->mirrors < 2 && segtype_is_raid10_near(lp->segtype))
+		if (arg_count(cmd, stripes_ARG) || arg_count(cmd, mirrors_ARG)) {
+			/* User supplied the bad arguments */
+PFL();
+			log_error("Segment type '%s' requires 2 or more stripes.", lp->segtype->name);
 			return 0;
 		}
 
@@ -998,7 +1025,7 @@ static int _lvcreate_params(struct cmd_context *cmd,
 			return 0;
 		}
 
-		if (segtype_is_raid10(lp->segtype) &&
+		if (segtype_is_any_raid10(lp->segtype) &&
 		    !(lp->target_attr & RAID_FEATURE_RAID10)) {
 			log_error("RAID module does not support RAID10.");
 			return 0;
@@ -1220,30 +1247,36 @@ static int _check_raid_parameters(struct volume_group *vg,
 	struct cmd_context *cmd = vg->cmd;
 
 	/*
-	 * If number of devices was not supplied, we can infer from
-	 * the PVs given.
+	 * If number of devices was not supplied, limit
+	 * so we ain't get too many stripes with many PVs
 	 */
 	if (!seg_is_mirrored(lp)) {
 		if (!arg_count(cmd, stripes_ARG) &&
-		    (devs > 2 * lp->segtype->parity_devs)) {
-			lp->stripes = devs - lp->segtype->parity_devs;
-lp->stripes = 2; /* Or stripe bomb with many devs given */
-		}
+		    (devs > 2 * lp->segtype->parity_devs))
+			lp->stripes = devs < 3 ? devs : 3; /* Or stripe bomb with many allocatable PVs given */
 
 		if (!lp->stripe_size)
 			lp->stripe_size = find_config_tree_int(cmd, metadata_stripesize_CFG, NULL) * 2;
 
-		if (lp->stripes < 2) { // <= lp->segtype->parity_devs) {
+		if (lp->stripes <= lp->segtype->parity_devs) {
 			log_error("Number of stripes must be at least %d for %s",
 				  lp->segtype->parity_devs + 1,
 				  lp->segtype->name);
 			return 0;
 		}
 	} else if (segtype_is_any_raid0(lp->segtype) ||
-		   segtype_is_raid10(lp->segtype)) {
+		   segtype_is_any_raid10(lp->segtype)) {
+PFLA("lp->stripes=%u lp->mirrors=%u", lp->stripes, lp->mirrors);
+
+		if (!lp->mirrors && seg_is_any_raid10(lp))
+			lp->mirrors = 1;
+			
 		if (!arg_count(cmd, stripes_ARG))
-			lp->stripes = devs / lp->mirrors;
-		if (lp->stripes < 2) {
+			lp->stripes = devs < 3 ? devs : 3; /* Or stripe bomb with many allocatable PVs given */
+
+PFLA("lp->stripes=%u lp->mirrors=%u", lp->stripes, lp->mirrors);
+
+		if (lp->stripes < 3) {
 			log_error("Unable to create RAID(1)0 LV,"
 				  " insufficient number of devices.");
 			return 0;
@@ -1478,6 +1511,7 @@ int lvcreate(struct cmd_context *cmd, int argc, char **argv)
 		stack;
 		return EINVALID_CMD_LINE;
 	}
+PFLA("lp.stripe_size=%u", lp.stripe_size);
 
 	if (!_check_pool_parameters(cmd, NULL, &lp, &lcp)) {
 		stack;

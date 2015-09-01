@@ -209,6 +209,7 @@ xx(lvconvert,
    "\t[-R|--regionsize MirrorLogRegionSize]\n"
    "\t[--alloc AllocationPolicy]\n"
    "\t[-b|--background]\n"
+   "\t[--duplicate]\n"
    "\t[-f|--force]\n"
    "\t[-i|--interval seconds]\n"
    "\t[--stripes Stripes [-I|--stripesize StripeSize]]\n"
@@ -286,7 +287,7 @@ xx(lvconvert,
 
    alloc_ARG, background_ARG, cache_ARG, cachemode_ARG,
    cachepool_ARG, cachepolicy_ARG, cachesettings_ARG, chunksize_ARG,
-   corelog_ARG, discards_ARG, force_ARG, interval_ARG, merge_ARG, mirrorlog_ARG,
+   corelog_ARG, discards_ARG, duplicate_ARG, force_ARG, interval_ARG, merge_ARG, mirrorlog_ARG,
    mirrors_ARG, name_ARG, noudevsync_ARG, originname_ARG, poolmetadata_ARG,
    poolmetadatasize_ARG, poolmetadataspare_ARG, readahead_ARG, regionsize_ARG,
    repair_ARG, replace_ARG, snapshot_ARG,

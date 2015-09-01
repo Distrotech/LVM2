@@ -125,6 +125,7 @@ static int _raid_text_import(struct lv_segment *seg,
 	} attr_import[] = {
 		{ "region_size",       &seg->region_size },
 		{ "stripe_size",       &seg->stripe_size },
+		{ "data_copies",       &seg->mirrors },
 		{ "writebehind",       &seg->writebehind },
 		{ "min_recovery_rate", &seg->min_recovery_rate },
 		{ "max_recovery_rate", &seg->max_recovery_rate },
@@ -167,6 +168,8 @@ static int _raid_text_export(const struct lv_segment *seg, struct formatter *f)
 
 	else {
 		outf(f, "device_count = %u", seg->area_count);
+		if (seg->mirrors)
+			outf(f, "data_copies = %" PRIu32, seg->mirrors);
 		if (seg->region_size)
 			outf(f, "region_size = %" PRIu32, seg->region_size);
 	}
@@ -268,21 +271,25 @@ PFL();
 		/* RAID 4/5/6 */
 		params.mirrors = 1;
 		params.stripes = seg->area_count - seg->segtype->parity_devs;
+PFLA("mirrors=%u stripes=%u", params.mirrors, params.stripes);
 	} else if (seg_is_any_raid0(seg)) {
 		params.mirrors = 1;
 		params.stripes = seg->area_count;
 PFLA("mirrors=%u stripes=%u", params.mirrors, params.stripes);
-	} else if (seg_is_raid10(seg)) {
-		/* RAID 10 only supports 2 mirrors now */
-		/* FIXME: HM: is this actually a constraint still? */
-		params.mirrors = 2;
-		params.stripes = seg->area_count / 2;
+	} else if (seg_is_any_raid10(seg)) {
+		if (!seg->mirrors)
+			seg->mirrors = 2;
+
+		params.data_copies = seg->mirrors;
+		params.stripes = seg->area_count;
+PFLA("mirrors=%u stripes=%u", params.mirrors, params.stripes);
 	} else {
 		/* RAID 1 */
 		params.mirrors = seg->area_count;
 		params.stripes = 1;
 		params.writebehind = seg->writebehind;
 		memcpy(params.writemostly, writemostly, sizeof(params.writemostly));
+PFLA("mirrors=%u stripes=%u", params.mirrors, params.stripes);
 	}
 
 	/* RAID 0 doesn't have a bitmap, thus no region_size, rebuilds etc. */
@@ -297,7 +304,6 @@ PFLA("mirrors=%u stripes=%u", params.mirrors, params.stripes);
 
 	params.stripe_size = seg->stripe_size;
 	params.flags = flags;
-
 PFL();
 	if (!dm_tree_node_add_raid_target_with_params(node, len, &params))
 		return_0;
@@ -479,30 +485,33 @@ static struct segtype_handler _raid_ops = {
 };
 
 static const struct raid_type {
-	const char name[12];
+	const char name[19];
 	unsigned parity;
 	uint64_t extra_flags;
 } _raid_types[] = {
-	{ SEG_TYPE_NAME_RAID0,      0, SEG_RAID0 },
-	{ SEG_TYPE_NAME_RAID0_META, 0, SEG_RAID0_META },
-	{ SEG_TYPE_NAME_RAID1,      0, SEG_RAID1 | SEG_AREAS_MIRRORED },
-	{ SEG_TYPE_NAME_RAID10,     0, SEG_RAID10 | SEG_AREAS_MIRRORED },
-	{ SEG_TYPE_NAME_RAID4,      1, SEG_RAID4 },
-	{ SEG_TYPE_NAME_RAID5_N,    1, SEG_RAID5_N },
-	{ SEG_TYPE_NAME_RAID5_LA,   1, SEG_RAID5_LA },
-	{ SEG_TYPE_NAME_RAID5_LS,   1, SEG_RAID5_LS },
-	{ SEG_TYPE_NAME_RAID5_RA,   1, SEG_RAID5_RA },
-	{ SEG_TYPE_NAME_RAID5_RS,   1, SEG_RAID5_RS },
-	{ SEG_TYPE_NAME_RAID5,      1, SEG_RAID5 }, /* is raid5_ls */
-	{ SEG_TYPE_NAME_RAID6_NC,   2, SEG_RAID6_NC },
-	{ SEG_TYPE_NAME_RAID6_NR,   2, SEG_RAID6_NR },
-	{ SEG_TYPE_NAME_RAID6_ZR,   2, SEG_RAID6_ZR },
-	{ SEG_TYPE_NAME_RAID6_LA_6, 2, SEG_RAID6_LA_6 },
-	{ SEG_TYPE_NAME_RAID6_LS_6, 2, SEG_RAID6_LS_6 },
-	{ SEG_TYPE_NAME_RAID6_RA_6, 2, SEG_RAID6_RA_6 },
-	{ SEG_TYPE_NAME_RAID6_RS_6, 2, SEG_RAID6_RS_6 },
-	{ SEG_TYPE_NAME_RAID6_N_6,  2, SEG_RAID6_N_6 },
-	{ SEG_TYPE_NAME_RAID6,      2, SEG_RAID6 }, /* is raid6_zr */
+	{ SEG_TYPE_NAME_RAID0,         0, SEG_RAID0 },
+	{ SEG_TYPE_NAME_RAID0_META,    0, SEG_RAID0_META },
+	{ SEG_TYPE_NAME_RAID1,         0, SEG_RAID1 | SEG_AREAS_MIRRORED },
+	{ SEG_TYPE_NAME_RAID10_NEAR,   0, SEG_RAID10_NEAR | SEG_AREAS_MIRRORED },
+	{ SEG_TYPE_NAME_RAID10_FAR,    0, SEG_RAID10_FAR | SEG_AREAS_MIRRORED },
+	{ SEG_TYPE_NAME_RAID10_OFFSET, 0, SEG_RAID10_OFFSET | SEG_AREAS_MIRRORED },
+	{ SEG_TYPE_NAME_RAID10,        0, SEG_RAID10 | SEG_AREAS_MIRRORED }, /* is raid10_near" */
+	{ SEG_TYPE_NAME_RAID4,         1, SEG_RAID4 },
+	{ SEG_TYPE_NAME_RAID5_N,       1, SEG_RAID5_N },
+	{ SEG_TYPE_NAME_RAID5_LA,      1, SEG_RAID5_LA },
+	{ SEG_TYPE_NAME_RAID5_LS,      1, SEG_RAID5_LS },
+	{ SEG_TYPE_NAME_RAID5_RA,      1, SEG_RAID5_RA },
+	{ SEG_TYPE_NAME_RAID5_RS,      1, SEG_RAID5_RS },
+	{ SEG_TYPE_NAME_RAID5,         1, SEG_RAID5 }, /* is raid5_ls */
+	{ SEG_TYPE_NAME_RAID6_NC,      2, SEG_RAID6_NC },
+	{ SEG_TYPE_NAME_RAID6_NR,      2, SEG_RAID6_NR },
+	{ SEG_TYPE_NAME_RAID6_ZR,      2, SEG_RAID6_ZR },
+	{ SEG_TYPE_NAME_RAID6_LA_6,    2, SEG_RAID6_LA_6 },
+	{ SEG_TYPE_NAME_RAID6_LS_6,    2, SEG_RAID6_LS_6 },
+	{ SEG_TYPE_NAME_RAID6_RA_6,    2, SEG_RAID6_RA_6 },
+	{ SEG_TYPE_NAME_RAID6_RS_6,    2, SEG_RAID6_RS_6 },
+	{ SEG_TYPE_NAME_RAID6_N_6,     2, SEG_RAID6_N_6 },
+	{ SEG_TYPE_NAME_RAID6,         2, SEG_RAID6 }, /* is raid6_zr */
 };
 
 static struct segment_type *_init_raid_segtype(struct cmd_context *cmd,

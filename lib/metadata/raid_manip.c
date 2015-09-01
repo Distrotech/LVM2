@@ -271,7 +271,7 @@ static int _lv_cond_repair(struct logical_volume *lv)
 		return 0;
 
 	return (strcmp(action, "idle") &&
-		strcmp(action, "frozen")) ? lv_raid_message(lv, "repair") : 1;
+		strcmp(action, "frozen")) ? 1 : lv_raid_message(lv, "repair");
 }
 
 /*
@@ -282,8 +282,11 @@ static void _seg_get_redundancy(const struct segment_type *segtype, unsigned tot
 	if (!segtype)
 		*nr = 0;
 
-	else if (segtype_is_raid10(segtype))
+	else if (segtype_is_raid10_near(segtype))
 		*nr = total_images / 2; /* Only if one in each stripe failing */
+
+	else if (segtype_is_any_raid10(segtype))
+		*nr = 1; /* HM FIXME: correct? */
 
 	else if (segtype_is_raid1(segtype))
 		*nr = total_images - 1;
@@ -1174,8 +1177,8 @@ static int _alloc_rmeta_for_lv(struct logical_volume *data_lv,
 
 	dm_list_init(&allocatable_pvs);
 
-	/* HM FIXME: TESTME: with _dupe() */
 #if 0
+	/* HM FIXME: TESTME: with _dupe() */
 	if (!seg_is_linear(seg)) {
 		log_error(INTERNAL_ERROR "Unable to allocate RAID metadata "
 				"area for non-linear LV, %s", data_lv->name);
@@ -1344,7 +1347,7 @@ PFL();
 			mirrors = 1;
 			extents = count * (lv->le_count / _data_rimages_count(seg, seg->area_count));
 
-			if (seg_is_raid10(seg))
+			if (seg_is_any_raid10(seg))
 				extents *= 2;
 
 PFLA("stripes=%u lv->le_count=%u data_rimages_count=%u", stripes, lv->le_count, _data_rimages_count(seg, seg->area_count));
@@ -1652,6 +1655,7 @@ PFL();
 					     old_image_count, new_image_count, 0);
 	}
 
+	/* Must update area count after resizing it */
 	seg->area_count = new_image_count;
 
 	return 1;
@@ -1898,6 +1902,7 @@ static struct lv_segment *_convert_lv_to_raid1(struct logical_volume *lv, const 
 	if (!(seg->segtype = get_segtype_from_flag(lv->vg->cmd, SEG_RAID1)))
 		return NULL;
 
+	lv->status |= RAID;
 	_check_and_init_region_size(lv);
 
 	return seg;
@@ -1953,7 +1958,7 @@ static void _swap_areas(struct lv_segment_area *a1, struct lv_segment_area *a2)
 }
 
 /*
- * HM FIXME: leverage to support mirror image additions/removals
+ * HM FIXME: leverage to support more raid10 mirror images
  *
  * Reorder the areas in the first segment of @seg to suit raid10/raid0 layout
  *
@@ -1976,25 +1981,25 @@ enum raid0_raid10_conversion { reorder_to_raid10, reorder_from_raid10 };
 static int _raid10_reorder_seg_areas(struct lv_segment *seg, enum raid0_raid10_conversion conv)
 {
 	unsigned idx1, idx2, s, ss, xchg;
-	uint32_t mirrors;
+	uint32_t stripes = seg->area_count;
 	unsigned short *idx;
 	unsigned i = 0;
 
-	if (!(idx = dm_pool_zalloc(seg_lv(seg, 0)->vg->vgmem, seg->area_count * sizeof(*idx))))
-		return 0;
-PFL();
-#if 1
-	/* FIXME: workaround until seg->stripes support fully implemented */
-	if (!seg->stripes)
-		seg->stripes = seg->area_count / 2;
-#endif
-PFLA("stripes=%u", seg->stripes);
-	if (seg->area_count % seg->stripes) {
-		log_error(INTERNAL_ERROR "Areas don't match stripes");
+PFLA("seg->mirrors=%u", seg->mirrors);
+	if (!seg->mirrors)
+		seg->mirrors = 2;
+PFLA("seg->mirrors=%u", seg->mirrors);
+
+	if (stripes % seg->mirrors) {
+		log_error(INTERNAL_ERROR "Can't reorder raid10 near with odd number of devices");
 		return 0;
 	}
 
-	mirrors = seg->area_count / seg->stripes;
+	stripes /= seg->mirrors ?: 2;
+
+PFLA("stripes=%u", seg->stripes);
+	if (!(idx = dm_pool_zalloc(seg_lv(seg, 0)->vg->vgmem, seg->area_count * sizeof(*idx))))
+		return 0;
 
 	/* Set up positional index array */
 	switch (conv) {
@@ -2007,8 +2012,9 @@ PFLA("stripes=%u", seg->stripes);
 		// 3 -> 1
 		// 4 -> 3
 		// 5 -> 5
-		for (ss = 0; s < seg->area_count; s++)
-			idx[s] = (s < seg->stripes) ? s * mirrors : 1 + ss++ * mirrors;
+		ss = 1;
+		for (s = 0; s < seg->area_count; s++)
+			idx[s] = (s < stripes) ? s * seg->mirrors : (ss++ * seg->mirrors - 1);
 
 		break;
 
@@ -2020,10 +2026,10 @@ PFLA("stripes=%u", seg->stripes);
 		// 3 -> 4
 		// 4 -> 2
 		// 5 -> 5
-		idx1 = 0;
-		idx2 = seg->stripes;
+		idx1 = stripes;
+		idx2 = 0;
 		for (s = 0; s < seg->area_count; s++)
-			idx[s] = (s % mirrors) ? idx1++ : idx2++;
+			idx[s] = (s % seg->mirrors) ? idx1++ : idx2++;
 	}
 PFL();
 for (s = 0; s < seg->area_count ; s++)
@@ -2195,7 +2201,7 @@ int lv_raid_split(struct logical_volume *lv, const char *split_name,
 	}
 
 	if (!seg_is_mirrored(first_seg(lv)) ||
-	    segtype_is_raid10(first_seg(lv)->segtype)) {
+	    segtype_is_any_raid10(first_seg(lv)->segtype)) {
 		log_error("Unable to split logical volume of segment type, %s",
 				lvseg_name(first_seg(lv)));
 		return 0;
@@ -3415,8 +3421,10 @@ static void _log_possible_conversion_types(struct logical_volume *lv)
 		alias = SEG_TYPE_NAME_RAID5_LS;
 	else if (seg_is_raid6_zr(seg))
 		alias = SEG_TYPE_NAME_RAID6_ZR;
+	else if (seg_is_any_raid10(seg))
+		alias = SEG_TYPE_NAME_RAID10;
 
-	log_warn("Converting %s from %s%s%s%c is possible to:",
+	log_warn("Converting %s from %s%s%s%c without \"--duplicate\" is possible to:",
 		 display_lvname(lv), _get_segtype_name(seg->segtype, seg->area_count),
 		 *alias ? " (same as " : "", alias, *alias ? ')' : 0);
 
@@ -3609,7 +3617,9 @@ TAKEOVER_FN(_error)
 /****************************************************************************/
 /*
  * HM FIXME: Bastelkeller ;-)
- * Experimental conversion via creation of a new LV to top-level raid1 the content to
+ *
+ * Experimental conversion via creation of a new LV to put
+ * top-level raid1 on top of source and destination
  */
 /* Create a new LV with type @segtype */
 static struct logical_volume *_create_lv(struct volume_group *vg, const char *lv_name,
@@ -3618,23 +3628,23 @@ static struct logical_volume *_create_lv(struct volume_group *vg, const char *lv
 					 uint32_t region_size, uint32_t stripe_size,
 					 uint32_t extents, struct dm_list *pvs)
 {
-	uint64_t status = RAID_IMAGE |  LVM_READ | LVM_WRITE;
+	uint64_t status = RAID_IMAGE | LVM_READ | LVM_WRITE;
 	struct logical_volume *r;
 
 PFLA("lv_name=%s mirrors=%u stripes=%u", lv_name, mirrors, stripes);
-	if (segtype_is_striped_raid(segtype) &&
-	    stripes < 2 + segtype->parity_devs) {
-		log_error("Can't create %s LV %s/%s with less than %u stripes",
-			  segtype->name, vg->name, lv_name, 2 + segtype->parity_devs);
+	if (segtype_is_any_raid10(segtype) && stripes < 3) {
+		log_error("Can't create %s LV %s/%s with less than 3 stripes",
+			  segtype->name, vg->name, lv_name);
 		return_NULL;
 	}
 
 #if 1
 	if (segtype_is_mirror(segtype)) {
+PFLA("segtype->parity_devs=%u", segtype->parity_devs);
 		mirrors = stripes;
 		stripes = 1;
 		status &= ~RAID_IMAGE;
-		status |= MIRROR_IMAGE;
+		status |= MIRROR;
 	}
 #endif
 PFLA("lv_name=%s mirrors=%u stripes=%u parity_devs=%u", lv_name, mirrors, stripes, segtype->parity_devs);
@@ -3650,8 +3660,18 @@ PFL();
 		       mirrors, region_size, extents, pvs, vg->alloc, 0)) {
 		log_error("Failed to extend new LV %s", display_lvname(r));
 		return_NULL;
+	} 
+
+	/* Add mirror_log LV in case */
+	if (segtype_is_mirror(segtype) &&
+	    !add_mirror_log(vg->cmd, r, 1, 1024 /* region_size */, pvs, vg->alloc)) {
+		log_error("Unable to add mirror log to %s", display_lvname(r));
+		return_NULL;
 	}
 PFL();
+	/* Set here again in case a mirror was created and RAID_IMAGE hence reset */
+	r->status |= RAID_IMAGE;
+
 	return r;
 }
 
@@ -3671,90 +3691,13 @@ static char *_unique_lv_name(struct logical_volume *lv, const char *suffix)
 	return name;
 }
 
-#if 0
-/* Insert layer on top of @areal_lv and add it to @lvs first segment at @area */
-static int _insert_layer_and_add_sub_lv(struct logical_volume *lv, 
-					struct logical_volume *area_lv, uint32_t area,
-					const char *layer_suffix)
-{
-	/* Preserve read-only flag */
-	uint32_t flags = RAID | LVM_READ | (area_lv->status & LVM_WRITE);
-	char name[NAME_LEN];
-	struct logical_volume *layer_lv;
-	struct lv_segment *mapseg, *seg = first_seg(lv);
-	struct segment_type *segtype;
-
-	if (area >= seg->area_count) {
-		log_error(INTERNAL_ERROR "Invalid area requested");
-		return 0;
-	}
-
-	/* create an empty layer LV with @lv->name + @layer_suffix */
-	if (dm_snprintf(name, sizeof(name), "%s%s", lv->name, layer_suffix) < 0) {
-		log_error("Layered name is too long. Please use shorter LV name.");
-		return_0;
-	}
-
-	if (!(layer_lv = lv_create_empty(name, NULL, flags | RAID_IMAGE, ALLOC_INHERIT, lv->vg))) {
-		log_error("Creation of layer LV failed");
-		return_0;
-	}
-
-	if (!(segtype = get_segtype_from_string(lv->vg->cmd, SEG_TYPE_NAME_STRIPED)))
-		return_0;
-
-	/* allocate a new linear segment */
-	if (!(mapseg = alloc_lv_segment(segtype, layer_lv, 0, area_lv->le_count, 0,
-					flags, 0, NULL, 1, area_lv->le_count,
-					0, 0, 0, NULL))) {
-		log_error("Allocation of segment for %s failed", display_lvname(layer_lv));
-		return_0;
-	}
-
-	/* map the new segment to @area_lv */
-	if (!set_lv_segment_area_lv(mapseg, 0, area_lv, 0, 0))
-		return_0;
-
-	/* add the new segment to the layer LV */
-	dm_list_add(&layer_lv->segments, &mapseg->list);
-	layer_lv->le_count = area_lv->le_count;
-	layer_lv->size = (uint64_t) area_lv->le_count * area_lv->vg->extent_size;
-
-	/* Set @layer_lv as the lv of @area of @lv */
-	if (!set_lv_segment_area_lv(seg, area, layer_lv, layer_lv->le_count, layer_lv->status)) {
-		log_error("Failed to add destination sublv %s to %s",
-			  display_lvname(layer_lv), display_lvname(lv));
-		return 0;
-	}
-
-	return 1;
-}
-
-/*
- * Helper: raid to raid conversion by duplication
- *
- * Inserts a layer on top of the given @lv,
- * creates and aallocates a destination lv of the
- * same size with the requested @new_segtype
- */
-	seg1 = first_seg(seg_lv(seg, 0));
-	for (s = 0; s < seg1->area_count; s++)
-		if (!activate_lv_excl_local(lv->vg->cmd, seg_lv(seg1, s)))
-			return_0;
-
-	/* Make new names of source LV known */
-	if (!activate_lv_excl_local(lv->vg->cmd, seg_lv(seg, 0)))
-		return_0;
-
-#endif
-
 static void _rename_lv(struct logical_volume *lv, const char *from, const char *to)
 {
 	size_t sz;
 	char *name = (char *) lv->name, *p;
 
 	if (!(p = strstr(lv->name, from))) {
-		log_error(INTERNAL_ERROR "Fqiled to find %s in lv name %s", from, display_lvname(lv));
+		log_error(INTERNAL_ERROR "Failed to find %s in lv name %s", from, display_lvname(lv));
 		return;
 	}
 
@@ -3772,7 +3715,7 @@ static void _rename_lv(struct logical_volume *lv, const char *from, const char *
 	lv->name = name;
 }
 
-/* Helper to rename image/meta name suffixes */
+/* Helper to rename rimage/rmeta or mimage/mlog name suffixes */
 static void _rename_sub_lvs(struct logical_volume *lv, int to_dup)
 {
 	uint32_t s;
@@ -3781,39 +3724,46 @@ static void _rename_sub_lvs(struct logical_volume *lv, int to_dup)
 		const char *image[2];
 		const char *meta[2];
 	};
-	static struct from_to ft = {
-		{ "_rimage", "_rdimage" } ,
+	static struct from_to ft_raid = {
+		{ "_rimage", "_rdimage" },
 		{ "_rmeta" , "_rdmeta"  }
 	};
+	static struct from_to ft_mirror = {
+		{ "_mimage", "_mdimage" },
+		{ "_mlog" ,  "_mdlog"  }
+	};
+	struct from_to *ft = seg_is_mirror(seg) ? &ft_mirror : &ft_raid;
 
 	for (s = 0; s < seg->area_count; s++) {
 		if (seg_type(seg, s) == AREA_LV)
-			_rename_lv(seg_lv(seg, s), ft.image[!to_dup], ft.image[!!to_dup]);
+			_rename_lv(seg_lv(seg, s), ft->image[!to_dup], ft->image[!!to_dup]);
 
 		if (seg->meta_areas)
-			_rename_lv(seg_metalv(seg, s), ft.meta[!to_dup], ft.meta[!!to_dup]);
+			_rename_lv(seg_metalv(seg, s), ft->meta[!to_dup], ft->meta[!!to_dup]);
 	}
 }
 
-/* Helper: convert * <-> * by creating a duplicate and putting a raid1 on top (or removing the raid1) */
+/*
+ * Helper: raid to raid conversion by duplication
+ *
+ * Inserts a layer on top of the given @lv,
+ * creates and allocates a destination lv of the
+ * same size with the requested @new_segtype
+ * and properties (e.g. stripes).
+ */
 TAKEOVER_HELPER_FN(_raid_conv_duplicate)
 {
-	uint32_t extents, mirrors, region_size = 1024;
+	uint32_t extents, mirrors, region_size = 1024, stripes;
 	char *lv_name, *suffix;
 	struct logical_volume *dst_lv;
 	struct lv_segment *seg = first_seg(lv);
 	const struct segment_type *new_segtype_sav = new_segtype;
 
 PFL();
-	if (segtype_is_linear(new_segtype)) {
-PFLA("new_segtype=%s", new_segtype->name);
-		if  (!(new_segtype = get_segtype_from_string(lv->vg->cmd, SEG_TYPE_NAME_STRIPED)))
-			return_0;
-
-		new_image_count = 1;
-	}
-
-	/* In case of conversion dulpication, remove top-level raid1 lv with source/destination legs */
+	/*
+	 * In case of conversion duplication, remove top-level raid1 lv with
+	 * either source/destination legs selected by --type argument option
+	 */
 	if (_lv_is_duplicating(lv)) {
 		/*
 		 * If we get here and the top-level raid1 is still synchronozing ->
@@ -3827,7 +3777,9 @@ PFLA("new_segtype=%s", new_segtype->name);
 		struct lv_segment *seg0 = first_seg(seg_lv(seg, 0));
 		struct lv_segment *seg1 = first_seg(seg_lv(seg, 1));
 
-		if (seg0->segtype == new_segtype)
+		if (seg0->segtype == seg1->segtype)
+			idx = (seg0->area_count == new_image_count) ? 1 : 0;
+		else if (seg0->segtype == new_segtype)
 			/* Keep source requested */
 			idx = 1;
 		else if (seg1->segtype == new_segtype)
@@ -3851,7 +3803,11 @@ PFLA("new_segtype=%s", new_segtype->name);
 
 		log_warn("This is a request to remove the %s of a duplicating conversion of LV %s!",
 			 idx ? "destination" : "source", display_lvname(lv));
-		if (!_yes_no_conversion(lv, new_segtype_sav, yes, force, new_image_count, 0, 0))
+		if (!yes &&
+		    yes_no_prompt("Do you want to convert %s with type %s to %s? [y/n]: ",
+				  display_lvname(lv),
+				  _get_segtype_name(seg0->segtype, seg0->area_count),
+				  _get_segtype_name(seg1->segtype, new_image_count)) == 'n')
 			return 0;
 
 		dm_list_init(&removal_lvs);
@@ -3899,15 +3855,41 @@ PFLA("new_segtype=%s", new_segtype->name);
 		return _lv_update_and_reload_origin_eliminate_lvs(lv, &removal_lvs);
 	}
 
+
+	/*
+	 * Create duplicating LV by ceating a new LV with the
+	 * requested properties and putting a raid1 on top
+	 */
+
+#if 0
 	/* Adjust counts for destination lv creation */
 	if (segtype_is_raid1(new_segtype)) {
 		mirrors = 2;
 		new_image_count = 1;
-	} else if (segtype_is_raid10(new_segtype)) {
+	} else if (segtype_is_raid10_near(new_segtype)) {
 		mirrors = 2;
 		new_image_count /= 2;
+	} else if (segtype_is_any_raid10(new_segtype)) {
+		mirrors = 1;
+
 	} else
 		mirrors = 1;
+#else
+	/* Adjust counts for destination lv creation */
+	if (segtype_is_raid1(new_segtype)) {
+		mirrors = new_image_count;
+		stripes = 1;
+	} else if (segtype_is_raid10_near(new_segtype)) {
+		mirrors = 2;
+		stripes = new_image_count;
+	} else if (segtype_is_any_raid10(new_segtype)) {
+		mirrors = 1;
+		stripes = new_image_count;
+	} else {
+		mirrors = 1;
+		stripes = new_image_count;
+}
+#endif
 
 PFLA("mirrors=%u new_stripes=%u new_image_count=%u", mirrors, new_stripes, new_image_count);
 	log_warn("This is a conversion by duplication request for source LV %s!", display_lvname(lv));
@@ -3925,8 +3907,9 @@ PFLA("mirrors=%u new_stripes=%u new_image_count=%u", mirrors, new_stripes, new_i
 	 */
 	new_image_count = new_image_count <= new_segtype->parity_devs ? 2 + new_segtype->parity_devs : new_image_count;
 	new_stripe_size = new_stripe_size ?: 64 * 2;
-	extents = lv->le_count;
-PFLA("new_image_count=%u", new_image_count);
+	extents = lv->le_count - seg->reshape_len;
+
+PFLA("new_image_count=%u extents=%u", new_image_count, extents);
 
 	/*
 	 * By default, prevent any PVs holding image components from
@@ -3968,13 +3951,13 @@ PFLA("new_image_count=%u mirrors=%u", new_image_count, mirrors);
 	_rename_sub_lvs(seg_lv(seg, 0), 1);
 
 PFLA("seg->area_count=%u", seg->area_count);
-PFLA("lv->name=%s seg_lv(seg, 0)=%s", lv->name, seg_lv(seg, 0)->name);
+PFLA("lv->name=%s lv->le_count=%u seg_lv(seg, 0)=%s", lv->name, lv->le_count, seg_lv(seg, 0)->name);
 
 	if (!(lv_name = _unique_lv_name(lv, "_ddst")))
 		return 0;
 
 	/* Create the destination lv */
-	if (!(dst_lv = _create_lv(lv->vg, lv_name, new_segtype, mirrors, new_image_count,
+	if (!(dst_lv = _create_lv(lv->vg, lv_name, new_segtype, mirrors, stripes,
 				  region_size, new_stripe_size, extents, allocate_pvs))) {
 		log_error("Failed to create destination lv %s/%s", lv->vg->name, lv_name);
 		return 0;
@@ -3990,6 +3973,7 @@ PFLA("lv->name=%s seg_lv(seg, 0)=%s", lv->name, seg_lv(seg, 0)->name);
 		return_0;
 	}
 
+	/* Must update area count after resizing it */
 	seg->area_count = 2;
 
 	log_debug_metadata("Add detination LV %s to top-level LV %s as second raid1 leg",
@@ -4009,6 +3993,8 @@ PFLA("lv->name=%s meta_areas=%p", lv->name, seg->meta_areas);
 	/* Set destination lv to be synced */
 	seg_lv(seg, 0)->status &= ~LV_REBUILD;
 	seg_lv(seg, 1)->status |= LV_REBUILD;
+
+PFLA("lv0->le_count=%u lv1->le_count=%u", seg_lv(seg, 0)->le_count, seg_lv(seg, 1)->le_count);
 
 	/*
 	 * Prevent dst_lv from syncing, because the top-level
@@ -4176,10 +4162,14 @@ TAKEOVER_HELPER_FN(_striped_raid0_raid45610)
 		}
 
 	/* If this is a raid10 conversion request -> reorder the areas to suit raid19 */
-	} else if (segtype_is_raid10(new_segtype)) {
+	} else if (segtype_is_raid10_near(new_segtype)) {
 		log_debug_metadata("Reordering areas for raid0 -> raid10 takeover");
 		if (!_raid10_reorder_seg_areas(seg, reorder_to_raid10))
 			return 0;
+
+	} else {
+		log_error("Can't convert %s", display_lvname(lv));
+		return 0;
 	}
 
 
@@ -4434,16 +4424,11 @@ TAKEOVER_HELPER_FN(_r456_r0_striped)
 	struct dm_list removal_lvs;
 
 PFLA("new_stripes=%u new_image_count=%u", new_stripes, new_image_count);
-#if 1
-	if (!seg_is_raid4(seg) && !seg_is_raid5_n(seg) && !seg_is_raid6_n_6(seg))
-		return _raid_conv_duplicate(lv, yes, force, new_segtype, new_image_count, new_stripe_size, 0, allocate_pvs);
-#else
 	if (!seg_is_raid4(seg) && !seg_is_raid5_n(seg) && !seg_is_raid6_n_6(seg)) {
 		log_error("LV %s has to be of type raid4/raid5_n/raid6_n_6 to allow for this conversion",
 			  display_lvname(lv));
 		return 0;
 	}
-#endif
 
 	if (!_raid_in_sync(lv))
 		return 0;
@@ -4594,6 +4579,7 @@ TAKEOVER_HELPER_FN(_raid145_raid4510)
 }
 
 /* Helper: raid10 -> striped/raid0* */
+/* HM FIXME: enhance to support raid10_far -> stripes/raid0* */
 TAKEOVER_HELPER_FN_REMOVAL_LVS(_raid10_striped_r0)
 {
 	struct lv_segment *seg = first_seg(lv);
@@ -4612,6 +4598,11 @@ TAKEOVER_HELPER_FN_REMOVAL_LVS(_raid10_striped_r0)
 	if (!_raid10_reorder_seg_areas(seg, reorder_from_raid10))
 		return 0;
 
+	if (!seg->mirrors)
+		seg->mirrors = 2;
+
+	new_image_count = seg->area_count / seg->mirrors;
+
 	/* Remove the last half of the meta and data image pairs */
 	log_debug_metadata("Removing data and metadata image LV pairs from %s", display_lvname(lv));
 	if (!_lv_change_image_count(lv, new_segtype, new_image_count, allocate_pvs, removal_lvs))
@@ -4629,6 +4620,8 @@ TAKEOVER_HELPER_FN_REMOVAL_LVS(_raid10_striped_r0)
 		   !_raid0_add_or_remove_metadata_lvs(lv, 0 /* update_and_reload */, removal_lvs))
 		return 0;
 
+PFLA("seg->stripe_size=%u", seg->stripe_size);
+PFLA("seg->chunk_size=%u", seg->chunk_size);
 	seg->segtype = new_segtype;
 
 	/* HM FIXME: overloading force argument here! */
@@ -4690,9 +4683,6 @@ TAKEOVER_FN(_l_r45)
 {
 	if (!_lv_has_segments_with_n_areas(lv, 1))
 		return 0;
-
-	if (new_image_count > 2)	
-		return _raid_conv_duplicate(lv, yes, force, new_segtype, new_image_count, new_stripe_size, 0, allocate_pvs);
 
 	return _linear_raid14510(lv, yes, force, new_segtype,
 				 2 /* new_image_count */, 0 /* new_stripes */,
@@ -4792,16 +4782,11 @@ TAKEOVER_FN(_m_r10)
 {
 	struct lv_segment *seg = first_seg(lv);
 
-#if 1
-	if (seg->area_count != 2)
-		return _raid_conv_duplicate(lv, yes, force, new_segtype, new_image_count, new_stripe_size, 0, allocate_pvs);
-#else
 	if (seg->area_count != 2) {
 		log_error("Can't convert %s from %s to %s with != 2 images",
 			  display_lvname(lv), SEG_TYPE_NAME_MIRROR, new_segtype->name);
 		return 0;
 	}
-#endif
 
 	if (!_lv_is_synced(lv))
 		return 0;
@@ -5014,13 +4999,6 @@ TAKEOVER_FN(_r1_r45)
 
 	return _raid145_raid4510(lv, yes, force, new_segtype, new_image_count, 0, 0, allocate_pvs);
 }
-
-
-TAKEOVER_FN(_dupe)
-{
-PFLA("new_image_count=%u", new_image_count);
-	return _raid_conv_duplicate(lv, yes, force, new_segtype, new_image_count, new_stripe_size, 0, allocate_pvs);
-}
 /****************************************************************************/
 
 /* raid1 with 2 legs or duplicating one -> raid10 */
@@ -5033,18 +5011,12 @@ TAKEOVER_FN(_r1_r10)
 		return 0;
 	}
 
-	if (_lv_is_duplicating(lv))
-		return _raid_conv_duplicate(lv, yes, force, new_segtype, new_image_count, new_stripe_size, 0, allocate_pvs);
-
 	return _raid145_raid4510(lv, yes, force, new_segtype, new_image_count, 0, 0, allocate_pvs);
 }
 
 /* raid45 with 2 images -> linear */
 TAKEOVER_FN(_r45_l)
 {
-	if (first_seg(lv)->area_count >= 3)
-		return _raid_conv_duplicate(lv, yes, force, new_segtype, new_image_count, new_stripe_size, 0, allocate_pvs);
-
 	if (first_seg(lv)->area_count != 2) {
 		log_error("Can't convert %s from %s/%s to %s with != 2 images",
 			  display_lvname(lv), SEG_TYPE_NAME_RAID4,
@@ -5248,8 +5220,11 @@ TAKEOVER_FN(_r6_r6)
 /* raid10 with 2 images -> linear */
 TAKEOVER_FN(_r10_l)
 {
-	if (first_seg(lv)->area_count != 2)
-		return _raid_conv_duplicate(lv, yes, force, new_segtype, new_image_count, new_stripe_size, 0, allocate_pvs);
+	if (first_seg(lv)->area_count != 2) {
+		log_error("Can't convert %s from %s to %s with != 2 images",
+			  display_lvname(lv), SEG_TYPE_NAME_RAID10, SEG_TYPE_NAME_MIRROR);
+		return 0;
+	}
 
 	return _raid14510_linear(lv, yes, force, NULL, 1, 0, 0, allocate_pvs);
 }
@@ -5258,13 +5233,17 @@ TAKEOVER_FN(_r10_l)
 TAKEOVER_FN(_r10_s)
 {
 	struct dm_list removal_lvs;
-
+PFL();
 	dm_list_init(&removal_lvs);
 
-	if (first_seg(lv)->area_count != 2)
-		return _raid_conv_duplicate(lv, yes, force, new_segtype, new_image_count, new_stripe_size, 0, allocate_pvs);
-
-	return _raid10_striped_r0(lv, yes, 0, new_segtype, first_seg(lv)->area_count / 2, 0, 0, allocate_pvs, &removal_lvs);
+#if 0
+	if (first_seg(lv)->area_count != 2) {
+		log_error("Can't convert %s from %s to %s with != 2 images",
+			  display_lvname(lv), SEG_TYPE_NAME_RAID10, SEG_TYPE_NAME_MIRROR);
+		return 0;
+	}
+#endif
+	return _raid10_striped_r0(lv, yes, 0, new_segtype, 0, 0, 0, allocate_pvs, &removal_lvs);
 }
 
 /* raid10 with 2 images -> mirror */
@@ -5275,16 +5254,11 @@ TAKEOVER_FN(_r10_m)
 
 	dm_list_init(&removal_lvs);
 
-#if 1
-	if (seg->area_count != 2)
-		return _raid_conv_duplicate(lv, yes, force, new_segtype, new_image_count, new_stripe_size, 0, allocate_pvs);
-#else
 	if (seg->area_count != 2) {
 		log_error("Can't convert %s from %s to %s with != 2 images",
 			  display_lvname(lv), SEG_TYPE_NAME_RAID10, SEG_TYPE_NAME_MIRROR);
 		return 0;
 	}
-#endif
 
 	if (!_raid_in_sync(lv))
 		return 0;
@@ -5311,7 +5285,7 @@ TAKEOVER_FN(_r10_r0)
 
 	dm_list_init(&removal_lvs);
 
-	return _raid10_striped_r0(lv, yes, 0, new_segtype, first_seg(lv)->area_count / 2, 0, 0, allocate_pvs, &removal_lvs);
+	return _raid10_striped_r0(lv, yes, 0, new_segtype, 0, 0, 0, allocate_pvs, &removal_lvs);
 }
 
 /* raid10 -> raid0_meta */
@@ -5321,7 +5295,7 @@ TAKEOVER_FN(_r10_r0m)
 
 	dm_list_init(&removal_lvs);
 
-	return _raid10_striped_r0(lv, yes, 0, new_segtype, first_seg(lv)->area_count / 2, 0, 0, allocate_pvs, &removal_lvs);
+	return _raid10_striped_r0(lv, yes, 0, new_segtype, 0, 0, 0, allocate_pvs, &removal_lvs);
 }
 
 /* raid10 with 2 images -> raid1 */
@@ -5341,19 +5315,15 @@ TAKEOVER_FN(_r10_r1)
 static takeover_fn_t _takeover_fn[][9] = {
 	/* from |, to ->    linear  striped   mirror   raid0    raid0_meta  raid1    raid4/5    raid6    raid10 near */
 	/*      v */
-//	/* linear      */ { _noop,   _error,  _error,  _l_r0,   _l_r0,      _l_r1,   _l_r45,    _dupe,   _l_r10   },
-	/* linear      */ { _noop,   _dupe,   _dupe,   _l_r0,   _l_r0,      _l_r1,   _l_r45,    _dupe,   _l_r10   },
-//	/* striped     */ { _error,  _noop,   _error,  _s_r0,   _s_r0m,     _l_r1,   _s_r45,    _s_r6,   _s_r10   },
-	/* striped     */ { _dupe,   _dupe,   _dupe,   _s_r0,   _s_r0m,     _l_r1,   _s_r45,    _s_r6,   _s_r10   },
-	/* mirror      */ { _error,  _dupe,   _noop,   _m_r0,   _m_r0m,     _m_r1,   _m_r45,    _dupe,   _m_r10   },
+	/* linear      */ { _noop,   _error,  _error,  _l_r0,   _l_r0,      _l_r1,   _l_r45,    _error,  _l_r10   },
+	/* striped     */ { _error,  _noop,   _error,  _s_r0,   _s_r0m,     _l_r1,   _s_r45,    _s_r6,   _s_r10   },
+	/* mirror      */ { _error,  _error,  _noop,   _m_r0,   _m_r0m,     _m_r1,   _m_r45,    _error,  _m_r10   },
 	/* raid0       */ { _r0_l,   _r0_s,   _r0_m,   _noop,   _r0_r0m,    _r0_r1,  _r0_r45,   _r0_r6,  _r0_r10  },
 	/* raid0_meta  */ { _r0m_l,  _r0m_s,  _r0m_m,  _r0m_r0, _noop,      _r0m_r1, _r0m_r45,  _r0m_r6, _r0m_r10 },
-//	/* raid1       */ { _r1_l,   _r1_l,   _r1_m,   _r1_r0,  _r1_r0m,    _r1_r1,  _r1_r45,   _dupe,   _r1_r10  },
-	/* raid1       */ { _r1_l,   _dupe,   _r1_m,   _r1_r0,  _r1_r0m,    _r1_r1,  _r1_r45,   _dupe,   _r1_r10  },
-	/* raid4/5     */ { _r45_l,  _r45_s,  _r45_m,  _r45_r0, _r45_r0m,   _r45_r1, _r45_r45,  _r45_r6, _dupe    },
-//	/* raid6       */ { _error,  _r6_s,   _error,  _r6_r0,  _r6_r0m,    _error,  _r6_r45,   _r6_r6,  _error   },
-	/* raid6       */ { _dupe,   _r6_s,   _dupe,   _r6_r0,  _r6_r0m,    _dupe,   _r6_r45,   _r6_r6,  _dupe    },
-	/* raid10 near */ { _r10_l,  _r10_s,  _r10_m,  _r10_r0, _r10_r0m,   _r10_r1, _dupe,     _dupe,   _dupe    },
+	/* raid1       */ { _r1_l,   _r1_l,   _r1_m,   _r1_r0,  _r1_r0m,    _r1_r1,  _r1_r45,   _error,  _r1_r10  },
+	/* raid4/5     */ { _r45_l,  _r45_s,  _r45_m,  _r45_r0, _r45_r0m,   _r45_r1, _r45_r45,  _r45_r6, _error   },
+	/* raid6       */ { _error,  _r6_s,   _error,  _r6_r0,  _r6_r0m,    _error,  _r6_r45,   _r6_r6,  _error   },
+	/* raid10 near */ { _r10_l,  _r10_s,  _r10_m,  _r10_r0, _r10_r0m,   _r10_r1, _error,    _error,  _error   },
 };
 
 /* End: various conversions between layers (aka MD takeover) */
@@ -5412,9 +5382,10 @@ static takeover_fn_t _takeover_fn[][9] = {
  *  - keep ti->len small on initial disk adding reshape and grow after it has finished
  *    in order to avoid bio_endio in the targets map method?
  */
+
 int lv_raid_convert(struct logical_volume *lv,
 		    const struct segment_type *new_segtype,
-		    int yes, int force,
+		    int yes, int force, int duplicate,
 		    unsigned new_image_count,
 		    const unsigned new_stripes,
 		    const unsigned new_stripe_size,
@@ -5452,6 +5423,7 @@ int lv_raid_convert(struct logical_volume *lv,
 
 	/* Define new image count if not passed in */
 	new_image_count = new_image_count ?: seg->area_count;
+
 PFLA("new_segtype=%s new_image_count=%u new_stripes=%u segtype=%s, seg->area_count=%u", new_segtype->name, new_image_count, new_stripes, seg->segtype->name, seg->area_count);
 
 	if (!_check_max_raid_devices(new_image_count))
@@ -5483,35 +5455,38 @@ PFLA("new_segtype=%s new_image_count=%u new_stripes=%u stripes=%u", new_segtype-
 	}
 
 	/* If clustered VG, @lv has to be active locally */
+	/* HM FIXME: has to change whnever we'll support clustered raid1 */
 	if (vg_is_clustered(lv->vg) && !lv_is_active_exclusive_locally(lv)) {
 		log_error("%s must be active exclusive locally to"
 			  " perform this operation.", display_lvname(lv));
 		return 0;
 	}
 
-	/*
-	 * Reshape of capable raid type requested
-	 */
-	switch (_reshape_requested(lv, new_segtype_tmp, new_stripes, new_stripe_size)) {
-	case 0:
-		break;
-	case 1:
-		if (!_raid_in_sync(lv)) {
-			log_error("Unable to convert %s while it is not in-sync",
-				  display_lvname(lv));
+	if (!duplicate) {
+		/*
+		 * Reshape of capable raid type requested
+		 */
+		switch (_reshape_requested(lv, new_segtype_tmp, new_stripes, new_stripe_size)) {
+		case 0:
+			break;
+		case 1:
+			if (!_raid_in_sync(lv)) {
+				log_error("Unable to convert %s while it is not in-sync",
+					  display_lvname(lv));
+				return 0;
+			}
+
+			if (new_stripes && seg->segtype != new_segtype) {
+				log_error("Can't reshape and takeover %s at the same time",
+					  display_lvname(lv));
+				return 0;
+			}
+
+			return _raid_reshape(lv, new_segtype, yes, force, stripes, stripe_size, allocate_pvs);
+		case 2:
+			/* Error if we got here with stripes and/or stripe size change requested */
 			return 0;
 		}
-
-		if (new_stripes && seg->segtype != new_segtype) {
-			log_error("Can't reshape and takeover %s at the same time",
-				  display_lvname(lv));
-			return 0;
-		}
-
-		return _raid_reshape(lv, new_segtype, yes, force, stripes, stripe_size, allocate_pvs);
-	case 2:
-		/* Error if we got here with stripes and/or stripe size change requested */
-		return 0;
 	}
 
 	/*
@@ -5526,34 +5501,44 @@ PFLA("new_segtype=%s new_image_count=%u new_stripes=%u stripes=%u", new_segtype-
 
 PFLA("new_segtype=%s new_image_count=%u new_stripes=%u stripes=%u", new_segtype->name, new_image_count, new_stripes, stripes);
 
-	/* Catch any active duplicating conversions early */
+	/* Process any active duplicating conversion */
 	if (_lv_is_duplicating(lv)) {
 		if (!_raid_conv_duplicate(lv, yes, force, new_segtype, new_image_count, new_stripe_size, 0, allocate_pvs)) {
-			_log_possible_conversion_types(lv);
+			if (!_lv_is_duplicating(lv))
+				_log_possible_conversion_types(lv);
+
 			return 0;
 		}
 
 		goto out;
 	}
+
+	/* A conversion by duplication has been requested (i.e. create a new lv of the requested segtype etc.) */
+	if (duplicate)
+		return _raid_conv_duplicate(lv, yes, force, new_segtype, new_image_count, new_stripe_size, 0, allocate_pvs);
 		
-	/* Check 100% sync for any takeover != dupe here */
-	tfn = _takeover_fn[_takeover_fn_idx(seg->segtype, seg->area_count)][_takeover_fn_idx(new_segtype, new_image_count)];
-	if (tfn != _dupe &&
-	    !_raid_in_sync(lv)) {
+
+	/*
+	 * All non-duplicating conversion requests need to be 100% in-sync,
+	 * because those'll be processed using md takeover features relying
+	 * on in-sync crc/q-syndroms
+	 */
+	if (!_raid_in_sync(lv)) {
 		log_error("Unable to convert %s while it is not in-sync",
 			  display_lvname(lv));
 		return 0;
 	}
 
 PFLA("new_segtype=%s new_image_count=%u new_stripes=%u stripes=%u", new_segtype->name, new_image_count, new_stripes, stripes);
+	tfn = _takeover_fn[_takeover_fn_idx(seg->segtype, seg->area_count)][_takeover_fn_idx(new_segtype, new_image_count)];
 	if (!tfn(lv, yes, force, new_segtype, new_image_count, stripes, stripe_size, allocate_pvs)) {
 		_log_possible_conversion_types(lv);
 		return 0;
 	}
 out:
 	log_print_unless_silent("Logical volume %s successfully converted.", display_lvname(lv));
-	return 1;
 
+	return 1;
 err:
 	/* FIXME: enhance message */
 	log_error("Converting the segment type for %s (directly) from %s to %s"
@@ -5749,7 +5734,7 @@ int lv_raid_replace(struct logical_volume *lv,
 			  display_lvname(lv));
 		return 0;
 
-	} else if (seg_is_raid10(raid_seg)) {
+	} else if (seg_is_raid10_near(raid_seg)) {
 		uint32_t i, rebuilds_per_group = 0;
 		/* FIXME: We only support 2-way mirrors in RAID10 currently */
 		uint32_t copies;
@@ -5774,13 +5759,12 @@ int lv_raid_replace(struct logical_volume *lv,
 				return 0;
 			}
 		}
-#if 1
+#if 0
 	}
 #else
-	} else if (seg_is_raid10_far(raid_seg)) {
-		/* HM FIXME: do the raid10_far thing */
-	} else if (seg_is_raid10_offset(raid_seg)) {
-		/* HM FIXME: do the raid10_offset thing */
+	} else if (seg_is_any_raid10(raid_seg)) {
+		/* HM FIXME: do the raid10_{far,offset} thing */
+		return 0;
 	}
 #endif
 	
