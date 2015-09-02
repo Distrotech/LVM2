@@ -1267,4 +1267,6 @@ int validate_vg_rename_params(struct cmd_context *cmd,
 
 int is_lockd_type(const char *lock_type);
 
+int vg_strip_outdated_dead_lvs(struct volume_group *vg);
+
 #endif
