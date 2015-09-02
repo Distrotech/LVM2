@@ -5681,7 +5681,7 @@ static int _process_switches(int *argcp, char ***argvp, const char *dev_dir)
 		{"auxdata", 1, &ind, AUX_DATA_ARG},
 		{"checks", 0, &ind, CHECKS_ARG},
 		{"clear", 0, &ind, CLEAR_ARG},
-		{"columns", 0, &ind, COLS_ARG},
+		{"columns", 1, &ind, COLS_ARG},
 		{"count", 1, &ind, COUNT_ARG},
 		{"deferred", 0, &ind, DEFERRED_ARG},
 		{"select", 1, &ind, SELECT_ARG},
@@ -5805,7 +5805,7 @@ static int _process_switches(int *argcp, char ***argvp, const char *dev_dir)
 
 	optarg = 0;
 	optind = OPTIND_INIT;
-	while ((ind = -1, c = GETOPTLONG_FN(*argcp, *argvp, "cCfG:hj:m:M:no:O:rS:u:U:vy",
+	while ((ind = -1, c = GETOPTLONG_FN(*argcp, *argvp, "c::C::fG:hj:m:M:no:O:rS:u:U:vy",
 					    long_options, NULL)) != -1) {
 		if (ind == ALL_DEVICES_ARG)
 			_switches[ALL_DEVICES_ARG]++;
@@ -5835,8 +5835,17 @@ static int _process_switches(int *argcp, char ***argvp, const char *dev_dir)
 		}
 		if (ind == CLEAR_ARG)
 			_switches[CLEAR_ARG]++;
-		if (c == 'c' || c == 'C' || ind == COLS_ARG)
+		if (c == 'c' || c == 'C' || ind == COLS_ARG) {
 			_switches[COLS_ARG]++;
+			if (optarg && _base_command_type == STATS_TYPE) {
+				_switches[COUNT_ARG]++;
+				_int_args[COUNT_ARG] = atoi(optarg);
+				if (_int_args[COUNT_ARG] < 0) {
+					log_error("Count must be zero or greater.");
+					return 0;
+				}
+			}
+		}
 		if (c == 'f' || ind == FORCE_ARG)
 			_switches[FORCE_ARG]++;
 		if (c == 'r' || ind == READ_ONLY)
