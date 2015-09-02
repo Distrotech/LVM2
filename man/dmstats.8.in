@@ -1,4 +1,4 @@
-eTH DMSTATS 8 "Jul 25 2015" "Linux" "MAINTENANCE COMMANDS"
+.TH DMSTATS 8 "Jul 25 2015" "Linux" "MAINTENANCE COMMANDS"
 .SH NAME
 dmstats \(em device-mapper statistics management
 .SH SYNOPSIS
@@ -62,7 +62,7 @@ dmstats \(em device-mapper statistics management
 .RI [ device_name ]
 .RB [ \-\-interval
 .IR seconds ]
-.RB [ \-\-count
+.RB [ -c | \-\-count
 .IR count ]
 .RB [ \-\-units
 .IR units ]
@@ -105,7 +105,7 @@ dmstats \(em device-mapper statistics management
 .RI [ device_name ]
 .RB [ \-\-interval
 .IR seconds ]
-.RB [ \-\-count
+.RB [ \-c | \-\-count
 .IR count ]
 .RB [ \-\-units
 .IR units ]
@@ -174,7 +174,7 @@ Specify auxilliary data (a string) to be stored with a new region.
 .B \-\-clear
 When printing statistics counters, also atomically reset them to zero.
 .TP
-.B \-\-count \fIcount
+.B \-c | \-\-count \fIcount
 Specify the iteration count for repeating reports. If the count
 argument is zero reports will continue to repeat until interrupted.
 .TP
@@ -367,7 +367,7 @@ the list of report fields.
 .RB [ \-\-allprograms ]
 .RB [ \-\-interval
 .IR seconds ]
-.RB [ \-\-count
+.RB [ \-c | \-\-count
 .IR count ]
 .RB [ \-\-units
 .IR unit ]
@@ -428,7 +428,7 @@ present regions.
 .RB [ \-\-allprograms ]
 .RB [ \-\-interval
 .IR seconds ]
-.RB [ \-\-count
+.RB [ \-c | \-\-count
 .IR count ]
 .RB [ \-\-units
 .IR unit ]
