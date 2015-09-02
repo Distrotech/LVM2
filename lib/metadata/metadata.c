@@ -5577,7 +5577,7 @@ int is_lockd_type(const char *lock_type)
 int vg_strip_outdated_dead_lvs(struct volume_group *vg) {
 	struct glv_list *glvl, *tglvl;
 	time_t current_time = time(NULL);
-	uint64_t threshold = 0;
+	uint64_t threshold = find_config_tree_int(vg->cmd, metadata_removed_entity_timeout_CFG, NULL);
 
 	if (!threshold)
 		return 1;

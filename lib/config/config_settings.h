@@ -1359,6 +1359,10 @@ cfg(metadata_record_removed_entities_CFG, "record_removed_entities", metadata_CF
 	"metadata for live entities. Currently, this feature is supported\n"
 	"for thin and thin snapshot LVs only.\n")
 
+cfg(metadata_removed_entity_timeout_CFG, "removed_entity_timeout", metadata_CFG_SECTION, CFG_DEFAULT_COMMENTED, CFG_TYPE_INT, DEFAULT_REMOVED_ENTITY_TIMEOUT, vsn(2, 2, 130), NULL, 0, NULL,
+	"Timeout in seconds after which a record about individual removed\n"
+	"entity is automatically destroyed. A value of 0 disables this feature.\n")
+
 cfg(metadata_pvmetadatacopies_CFG, "pvmetadatacopies", metadata_CFG_SECTION, CFG_ADVANCED | CFG_DEFAULT_COMMENTED, CFG_TYPE_INT, DEFAULT_PVMETADATACOPIES, vsn(1, 0, 0), NULL, 0, NULL,
 	"Number of copies of metadata to store on each PV.\n"
 	"The --pvmetadatacopies option overrides this setting.\n"
