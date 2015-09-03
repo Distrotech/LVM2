@@ -954,6 +954,7 @@ struct lv_segment *alloc_lv_segment(const struct segment_type *segtype,
 				    struct logical_volume *log_lv,
 				    uint32_t area_count,
 				    uint32_t area_len,
+				    uint32_t data_copies,
 				    uint32_t chunk_size,
 				    uint32_t region_size,
 				    uint32_t extents_copied,
@@ -989,12 +990,13 @@ PFLA("lv=%s le=%u len=%u area_len=%u area_count=%u seg->meta_areas=%p", lv->name
 	seg->lv = lv;
 	seg->le = le;
 	seg->len = len;
+	seg->reshape_len = reshape_len;
 	seg->status = status;
 	seg->stripe_size = stripe_size;
 PFLA("seg->stripe_size=%u", seg->stripe_size);
 	seg->area_count = area_count;
 	seg->area_len = area_len;
-	seg->reshape_len = reshape_len;
+	seg->data_copies = data_copies ?: 1;
 	seg->chunk_size = chunk_size;
 	seg->region_size = region_size;
 	seg->extents_copied = extents_copied;
@@ -1049,7 +1051,7 @@ struct lv_segment *alloc_snapshot_seg(struct logical_volume *lv,
 
 	if (!(seg = alloc_lv_segment(segtype, lv, old_le_count,
 				     lv->le_count - old_le_count, 0, status, 0,
-				     NULL, 0, lv->le_count - old_le_count,
+				     NULL, 0, lv->le_count - old_le_count, 1,
 				     0, 0, 0, NULL))) {
 		log_error("Couldn't allocate new snapshot segment.");
 		return NULL;
@@ -1302,12 +1304,8 @@ static uint32_t _area_len(struct lv_segment *seg, uint32_t extents, uint32_t *ar
 	/* Caller must ensure exact divisibility */
 	if (seg_is_striped(seg) || seg_is_striped_raid(seg)) {
 		uint32_t data_devs = seg->area_count - seg->segtype->parity_devs;
-		uint32_t mirrors = 1;
 
-		if (seg_is_any_raid10(seg))
-			mirrors = (seg_is_raid10_near(seg) ? 1 : seg->mirrors);
-
-		*area_len = _rimage_extents(extents, data_devs, seg->mirrors) * mirrors;
+		*area_len = _rimage_extents(extents, data_devs, seg->data_copies);
 	} else
 		*area_len = extents;
 
@@ -1323,11 +1321,11 @@ static uint32_t _area_len(struct lv_segment *seg, uint32_t extents, uint32_t *ar
 	if (seg_is_striped(seg) || seg_is_striped_raid(seg)) {
 		uint32_t data_devs = seg->area_count - seg->segtype->parity_devs;
 
-		if (!seg->mirrors)
-			seg->mirrors = 2;
+		if (!seg->data_copies)
+			seg->data_copies = 2;
 
 		if (seg_is_any_raid10(seg))
-			*area_len = _rimage_extents(seg->len, data_devs, seg->mirrors) * (seg_is_raid10_near(seg) ? 1 : seg->mirrors);
+			*area_len = _rimage_extents(seg->len, data_devs, seg->data_copies) * (seg_is_raid10_near(seg) ? 1 : seg->data_copies);
 
 		else {
 			if (extents % data_devs) {
@@ -1435,7 +1433,7 @@ PFLA("lv=%s lv->le_count=%u seg=%p extents=%u", lv->name, lv->le_count, seg, ext
 if (!seg)
 return_0;
 	if (seg_is_striped(seg) || seg_is_striped_raid(seg))
-		extents = _round_to_stripe_boundary(lv, extents, _calc_area_multiple(seg->segtype, seg->area_count, seg->stripes, seg->mirrors), 0);
+		extents = _round_to_stripe_boundary(lv, extents, _calc_area_multiple(seg->segtype, seg->area_count, seg->stripes, seg->data_copies), 0);
 
 	if (lv_is_merging_origin(lv)) {
 		log_debug_metadata("Dropping snapshot merge of %s to removed origin %s.",
@@ -1732,6 +1730,8 @@ static struct alloc_handle *_alloc_init(struct cmd_context *cmd,
 	size_t size = 0;
 
 	/* FIXME Caller should ensure this */
+	if (!mirrors)
+		mirrors = 1;
 	if (mirrors && !stripes)
 		stripes = 1;
 
@@ -1842,7 +1842,7 @@ PFLA("area_count=%u metadata_area_count=%u total_extents=%u", area_count, metada
 			 * We need 'log_len' extents for each
 			 * RAID device's metadata_area
 			 */
-			total_extents += ah->log_len * ah->area_multiple;
+			total_extents += ah->log_len * area_count;
 PFLA("existing_extents=%u new_extents=%u ah->log_len=%u total_extents=%u", existing_extents, new_extents, ah->log_len, total_extents);
 #else
 		if (metadata_area_count) {
@@ -1894,8 +1894,13 @@ PFLA("existing_extents=%u new_extents=%u ah->log_len=%u total_extents=%u", exist
 	} else {
 		ah->log_area_count = metadata_area_count;
 		ah->log_len = !metadata_area_count ? 0 :
+#if 1
+			mirror_log_extents(ah->region_size, extent_size,
+					   _rimage_extents(existing_extents + total_extents, stripes, mirrors));
+#else
 			mirror_log_extents(ah->region_size, extent_size,
 					   (existing_extents + total_extents) / ah->area_multiple);
+#endif
 PFLA("ah->log_area_count=%u ah->log_len=%u existing_extents=%u total_extents=%u", ah->log_area_count, ah->log_len, existing_extents, total_extents);
 	}
 
@@ -2069,6 +2074,7 @@ static int _log_parallel_areas(struct dm_pool *mem, struct dm_list *parallel_are
 
 static int _setup_alloced_segment(struct logical_volume *lv, uint64_t status,
 				  uint32_t area_count,
+				  uint32_t data_copies,
 				  uint32_t stripe_size,
 				  const struct segment_type *segtype,
 				  struct alloced_area *aa,
@@ -2077,16 +2083,25 @@ static int _setup_alloced_segment(struct logical_volume *lv, uint64_t status,
 	uint32_t s, extents, area_multiple;
 	struct lv_segment *seg;
 
+#if 0
 	area_multiple = _calc_area_multiple(segtype, area_count, 0, 1);
 PFLA("area_multiple=%u", area_multiple);
 	extents = aa[0].len * area_multiple;
+#else
+	extents = _rimage_extents(aa[0].len, area_count - segtype->parity_devs, data_copies);
+	extents *= area_count - segtype->parity_devs;
+#endif
 
 	if (!(seg = alloc_lv_segment(segtype, lv, lv->le_count, extents, 0,
 				     status, stripe_size, NULL, area_count,
-				     aa[0].len, 0u, region_size, 0u, NULL))) {
+				     aa[0].len, data_copies, 0u, region_size, 0u, NULL))) {
 		log_error("Couldn't allocate new LV segment.");
 		return 0;
 	}
+
+#if 1
+	seg->data_copies = data_copies;
+#endif
 
 	for (s = 0; s < area_count; s++)
 		if (!set_lv_segment_area_pv(seg, s, aa[s].pv, aa[s].pe))
@@ -2103,6 +2118,7 @@ PFLA("area_multiple=%u", area_multiple);
 static int _setup_alloced_segments(struct logical_volume *lv,
 				   struct dm_list *alloced_areas,
 				   uint32_t area_count,
+				   uint32_t data_copies,
 				   uint64_t status,
 				   uint32_t stripe_size,
 				   const struct segment_type *segtype,
@@ -2111,7 +2127,7 @@ static int _setup_alloced_segments(struct logical_volume *lv,
 	struct alloced_area *aa;
 
 	dm_list_iterate_items(aa, &alloced_areas[0]) {
-		if (!_setup_alloced_segment(lv, status, area_count,
+		if (!_setup_alloced_segment(lv, status, area_count, data_copies,
 					    stripe_size, segtype, aa,
 					    region_size))
 			return_0;
@@ -2291,7 +2307,7 @@ PFLA("area_multiple=%u", area_multiple);
 		if (seg_type(seg, s) == AREA_LV) {
 			uint32_t image_le = _rimage_extents(le - seg->le,
 							    seg->area_count - seg->segtype->parity_devs,
-							    seg->mirrors);
+							    seg->data_copies);
 
 			if (!(r = _for_each_pv(cmd, seg_lv(seg, s),
 #if 1
@@ -3467,7 +3483,7 @@ int lv_add_virtual_segment(struct logical_volume *lv, uint64_t status,
 	} else {
 		if (!(seg = alloc_lv_segment(segtype, lv, lv->le_count, extents, 0,
 					     status, 0, NULL, 0,
-					     extents, 0, 0, 0, NULL))) {
+					     extents, 1, 0, 0, 0, NULL))) {
 			log_error("Couldn't allocate new %s segment.", segtype->name);
 			return 0;
 		}
@@ -3524,7 +3540,7 @@ struct alloc_handle *allocate_extents(struct volume_group *vg,
 	/* raid10_{far,offset} store mirrored data in the 2nd half of the sub-lv */
 	/* HM FIXME: find better way to go by mirrors=N */
 	if (segtype_is_raid10_far(segtype) || segtype_is_raid10_offset(segtype))
-		extents *= mirrors;
+		; // extents *= mirrors;
 PFLA("mirrors=%u stripes=%u extents=%u", mirrors, stripes, extents);
 #endif
 
@@ -3547,7 +3563,9 @@ PFLA("log_count=%u", log_count);
  * Add new segments to an LV from supplied list of areas.
  */
 int lv_add_segment(struct alloc_handle *ah,
-		   uint32_t first_area, uint32_t num_areas,
+		   uint32_t first_area,
+		   uint32_t num_areas,
+		   uint32_t data_copies,
 		   struct logical_volume *lv,
 		   const struct segment_type *segtype,
 		   uint32_t stripe_size,
@@ -3570,7 +3588,7 @@ int lv_add_segment(struct alloc_handle *ah,
 	}
 
 	if (!_setup_alloced_segments(lv, &ah->alloced_areas[first_area],
-				     num_areas, status,
+				     num_areas, data_copies, status,
 				     stripe_size, segtype, region_size))
 		return_0;
 
@@ -3615,7 +3633,7 @@ static struct lv_segment *_convert_seg_to_mirror(struct lv_segment *seg,
 					seg->status, seg->stripe_size,
 					log_lv,
 					seg->area_count, seg->area_len,
-					seg->chunk_size, region_size,
+					seg->data_copies, seg->chunk_size, region_size,
 					seg->extents_copied, NULL))) {
 		log_error("Couldn't allocate converted LV segment");
 		return NULL;
@@ -3715,7 +3733,7 @@ int lv_add_segmented_mirror_image(struct alloc_handle *ah,
 
 		if (!(new_seg = alloc_lv_segment(segtype, copy_lv,
 						 seg->le, seg->len, 0, PVMOVE, 0,
-						 NULL, 1, seg->len,
+						 NULL, 1, seg->len, 1,
 						 0, 0, 0, NULL)))
 			return_0;
 
@@ -3875,9 +3893,9 @@ int lv_add_log_segment(struct alloc_handle *ah, uint32_t first_area,
 		       struct logical_volume *log_lv, uint64_t status)
 {
 
-	return lv_add_segment(ah, ah->area_count + first_area, 1, log_lv,
-			      get_segtype_from_string(log_lv->vg->cmd,
-						      "striped"),
+	return lv_add_segment(ah, ah->area_count + first_area, 1, 1 /* data_copies */,
+			      log_lv, get_segtype_from_string(log_lv->vg->cmd,
+							      "striped"),
 			      0, status, 0);
 }
 
@@ -3916,7 +3934,7 @@ static int _lv_insert_empty_sublvs(struct logical_volume *lv,
 	 */
 	if (!(mapseg = alloc_lv_segment(segtype, lv, 0, 0, 0, lv->status,
 					stripe_size, NULL,
-					devices, 0, 0, region_size, 0, NULL))) {
+					devices, 0, 1, 0, region_size, 0, NULL))) {
 		log_error("Failed to create mapping segment for %s", lv->name);
 		return 0;
 	}
@@ -4073,6 +4091,7 @@ static void _adjust_region_size(struct logical_volume *lv,
 static int _lv_extend_layered_lv(struct alloc_handle *ah,
 				 struct logical_volume *lv,
 				 uint32_t extents, uint32_t first_area,
+				 uint32_t mirrors,
 				 uint32_t stripes, uint32_t stripe_size)
 {
 	const struct segment_type *segtype;
@@ -4097,7 +4116,7 @@ PFLA("extents=%u", extents);
 	for (fa = first_area, s = 0; s < seg->area_count; s++) {
 		if (is_temporary_mirror_layer(seg_lv(seg, s))) {
 			if (!_lv_extend_layered_lv(ah, seg_lv(seg, s), extents,
-						   fa, stripes, stripe_size))
+						   fa, mirrors, stripes, stripe_size))
 				return_0;
 			fa += lv_mirror_count(seg_lv(seg, s));
 			continue;
@@ -4105,7 +4124,8 @@ PFLA("extents=%u", extents);
 
 		sub_lv = seg_lv(seg, s);
 PFLA("extending %s in %s, stripes=%u", sub_lv->name, lv->name, stripes);
-		if (!lv_add_segment(ah, fa, stripes, sub_lv, segtype,
+		if (!lv_add_segment(ah, fa, stripes, 1 /* data_copies */,
+				    sub_lv, segtype,
 				    stripe_size, sub_lv->status, 0)) {
 			log_error("Aborting. Failed to extend %s in %s.",
 				  sub_lv->name, lv->name);
@@ -4116,7 +4136,8 @@ PFLA("extending %s in %s, stripes=%u", sub_lv->name, lv->name, stripes);
 		    seg->meta_areas &&
 		    ah->log_len &&
 		    (meta_lv = seg_metalv(seg, s))) {
-			if (!lv_add_segment(ah, fa + seg->area_count, 1,
+			if (!lv_add_segment(ah, fa + seg->area_count,
+					    1, 1 /* data_copies */,
 					    meta_lv, segtype, 0,
 					    meta_lv->status, 0)) {
 				log_error("Failed to extend %s in %s.",
@@ -4149,7 +4170,7 @@ PFLA("lv->le_count=%u", lv->le_count);
 	lv->le_count += extents;
 	lv->size += (uint64_t) extents * lv->vg->extent_size;
 PFLA("lv->le_count=%u", lv->le_count);
-
+	seg->data_copies = mirrors;
 
 	if (!vg_write(lv->vg) || !vg_commit(lv->vg))
 		return_0;
@@ -4243,8 +4264,8 @@ PFLA("extents=%u mirrors=%u stripes=%u log_count=%u", extents, mirrors, stripes,
 		if (!(r = create_pool(lv, segtype, ah, stripes, stripe_size)))
 			stack;
 	} else if (!segtype_is_mirrored(segtype) && !segtype_is_raid(segtype)) {
-		if (!(r = lv_add_segment(ah, 0, ah->area_count, lv, segtype,
-					 stripe_size, 0u, 0)))
+		if (!(r = lv_add_segment(ah, 0, ah->area_count, 1 /* data_copies */,
+					 lv, segtype, stripe_size, 0u, 0)))
 			stack;
 	} else {
 		/*
@@ -4273,7 +4294,7 @@ PFLA("extents=%u mirrors=%u stripes=%u log_count=%u", extents, mirrors, stripes,
 
 PFLA("extents=%u ah->new_extents=%u lv->le_count=%u stripes=%u sub_lv_count=%u", extents, ah->new_extents, lv->le_count, stripes, sub_lv_count);
 		if (!(r = _lv_extend_layered_lv(ah, lv, extents, 0,
-						stripes, stripe_size)))
+						mirrors, stripes, stripe_size)))
 			goto_out;
 
 		/*
@@ -6784,7 +6805,7 @@ PFLA("%s", "vg_commit");
 	/* allocate a new linear segment */
 	le_count = layer_lv->le_count - first_seg(layer_lv)->reshape_len;
 	if (!(mapseg = alloc_lv_segment(segtype, lv_where, 0, le_count, 0,
-					status, 0, NULL, 1, le_count,
+					status, 0, NULL, 1, le_count, 1,
 					0, 0, 0, NULL)))
 		return_NULL;
 
@@ -6841,7 +6862,7 @@ static int _extend_layer_lv_for_segment(struct logical_volume *layer_lv,
 	/* allocate a new segment */
 	if (!(mapseg = alloc_lv_segment(segtype, layer_lv, layer_lv->le_count, seg->area_len,
 					0, status, 0,
-					NULL, 1, seg->area_len, 0, 0, 0, seg)))
+					NULL, 1, seg->area_len, 1, 0, 0, 0, seg)))
 		return_0;
 
 	/* map the new segment to the original underlying are */
@@ -7654,7 +7675,7 @@ PFLA("lp->stripe_size=%u", lp->stripe_size);
 			first_seg(lv)->max_recovery_rate = lp->max_recovery_rate;
 		}
 
-		first_seg(lv)->mirrors = lp->mirrors;
+		first_seg(lv)->data_copies = lp->mirrors;
 		first_seg(lv)->stripes = lp->stripes;
 	} else if (seg_is_thin_pool(lp)) {
 		first_seg(lv)->chunk_size = lp->chunk_size;

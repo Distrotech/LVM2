@@ -1104,7 +1104,8 @@ static struct logical_volume *_alloc_image_component(struct logical_volume *lv, 
 		if (!(segtype = get_segtype_from_string(lv->vg->cmd, SEG_TYPE_NAME_STRIPED)))
 			return_0;
 
-		if (!lv_add_segment(ah, first_area, 1, tmp_lv, segtype, 0, status, 0)) {
+		if (!lv_add_segment(ah, first_area, 1 /* areas */, 1 /* data_copies */,
+				    tmp_lv, segtype, 0, status, 0)) {
 			log_error("Failed to add segment to LV, %s", img_name);
 			return 0;
 		}
@@ -1985,17 +1986,17 @@ static int _raid10_reorder_seg_areas(struct lv_segment *seg, enum raid0_raid10_c
 	unsigned short *idx;
 	unsigned i = 0;
 
-PFLA("seg->mirrors=%u", seg->mirrors);
-	if (!seg->mirrors)
-		seg->mirrors = 2;
-PFLA("seg->mirrors=%u", seg->mirrors);
+PFLA("seg->data_copies=%u", seg->data_copies);
+	if (!seg->data_copies)
+		seg->data_copies = 2;
+PFLA("seg->data_copies=%u", seg->data_copies);
 
-	if (stripes % seg->mirrors) {
+	if (stripes % seg->data_copies) {
 		log_error(INTERNAL_ERROR "Can't reorder raid10 near with odd number of devices");
 		return 0;
 	}
 
-	stripes /= seg->mirrors ?: 2;
+	stripes /= seg->data_copies ?: 2;
 
 PFLA("stripes=%u", seg->stripes);
 	if (!(idx = dm_pool_zalloc(seg_lv(seg, 0)->vg->vgmem, seg->area_count * sizeof(*idx))))
@@ -2014,7 +2015,7 @@ PFLA("stripes=%u", seg->stripes);
 		// 5 -> 5
 		ss = 1;
 		for (s = 0; s < seg->area_count; s++)
-			idx[s] = (s < stripes) ? s * seg->mirrors : (ss++ * seg->mirrors - 1);
+			idx[s] = (s < stripes) ? s * seg->data_copies : (ss++ * seg->data_copies - 1);
 
 		break;
 
@@ -2029,7 +2030,7 @@ PFLA("stripes=%u", seg->stripes);
 		idx1 = stripes;
 		idx2 = 0;
 		for (s = 0; s < seg->area_count; s++)
-			idx[s] = (s % seg->mirrors) ? idx1++ : idx2++;
+			idx[s] = (s % seg->data_copies) ? idx1++ : idx2++;
 	}
 PFL();
 for (s = 0; s < seg->area_count ; s++)
@@ -2650,8 +2651,8 @@ static int _striped_to_raid0_move_segs_to_raid0_lvs(struct logical_volume *lv,
 							 le, seg_from->area_len - seg_from->reshape_len,
 							 seg_from->reshape_len, status,
 							 seg_from->stripe_size, NULL, 1 /* area_count */,
-							 seg_from->area_len, seg_from->chunk_size,
-							 0 /* region_size */, 0, NULL)))
+							 seg_from->area_len, seg_from->data_copies,
+							 seg_from->chunk_size, 0 /* region_size */, 0, NULL)))
 				return_0;
 
 			seg_type(seg_new, 0) = AREA_UNASSIGNED;
@@ -2769,7 +2770,8 @@ static struct lv_segment *_convert_striped_to_raid0(struct logical_volume *lv,
 					   0 /* le */, lv->le_count /* len */,
 					   0 /* reshape_len */, seg->status,
 					   seg->stripe_size, NULL /* log_lv */,
-					   area_count, lv->le_count, seg->chunk_size,
+					   area_count, lv->le_count,
+					   seg->data_copies, seg->chunk_size,
 					   0 /* seg->region_size */, 0u /* extents_copied */ ,
 					   NULL /* pvmove_source_seg */))) {
 		log_error("Failed to allocate new raid0 segement for LV %s.", display_lvname(lv));
@@ -2843,7 +2845,7 @@ static int _alloc_and_add_new_striped_segment(struct logical_volume *lv,
 	if (!(new_seg = alloc_lv_segment(striped_segtype, lv, le, area_len * seg->area_count,
 					 0 /* seg->reshape_len */, seg->status & ~RAID,
 					 seg->stripe_size, NULL, seg->area_count,
-					 area_len, seg->chunk_size, 0, 0, NULL)))
+					 area_len, seg->data_copies, seg->chunk_size, 0, 0, NULL)))
 		return_0;
 
 	dm_list_add(new_segments, &new_seg->list);
@@ -3674,7 +3676,7 @@ PFL();
 		return_NULL;
 	} 
 
-	first_seg(r)->mirrors = mirrors;
+	first_seg(r)->data_copies = mirrors;
 
 	/* Add mirror_log LV in case */
 	if (segtype_is_mirror(segtype) &&
@@ -3793,7 +3795,7 @@ PFL();
 
 		if (seg0->segtype == seg1->segtype) {
 			if (seg0->area_count == seg1->area_count)
-				idx = (seg0->mirrors == new_mirrors) ? 1 : 0;
+				idx = (seg0->data_copies == new_mirrors) ? 1 : 0;
 			else
 				idx = (seg0->area_count == new_image_count) ? 1 : 0;
 		} else if (seg0->segtype == new_segtype)
@@ -4587,10 +4589,10 @@ TAKEOVER_HELPER_FN_REMOVAL_LVS(_raid10_striped_r0)
 	if (!_raid10_reorder_seg_areas(seg, reorder_from_raid10))
 		return 0;
 
-	if (!seg->mirrors)
-		seg->mirrors = 2;
+	if (!seg->data_copies)
+		seg->data_copies = 2;
 
-	new_image_count = seg->area_count / seg->mirrors;
+	new_image_count = seg->area_count / seg->data_copies;
 
 	/* Remove the last half of the meta and data image pairs */
 	log_debug_metadata("Removing data and metadata image LV pairs from %s", display_lvname(lv));

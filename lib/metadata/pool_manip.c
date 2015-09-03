@@ -449,7 +449,7 @@ int create_pool(struct logical_volume *pool_lv,
 	}
 
 	/* Metadata segment */
-	if (!lv_add_segment(ah, stripes, 1, pool_lv, striped, 1, 0, 0))
+	if (!lv_add_segment(ah, stripes, 1, 1, pool_lv, striped, 1, 0, 0))
 		return_0;
 
 	if (!activation())
@@ -501,7 +501,7 @@ int create_pool(struct logical_volume *pool_lv,
 		goto_bad;
 
 	/* Pool data segment */
-	if (!lv_add_segment(ah, 0, stripes, pool_lv, striped, stripe_size, 0, 0))
+	if (!lv_add_segment(ah, 0, stripes, 1, pool_lv, striped, stripe_size, 0, 0))
 		goto_bad;
 
 	if (!(data_lv = insert_layer_for_lv(pool_lv->vg->cmd, pool_lv,

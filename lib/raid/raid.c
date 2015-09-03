@@ -125,7 +125,7 @@ static int _raid_text_import(struct lv_segment *seg,
 	} attr_import[] = {
 		{ "region_size",       &seg->region_size },
 		{ "stripe_size",       &seg->stripe_size },
-		{ "data_copies",       &seg->mirrors },
+		{ "data_copies",       &seg->data_copies },
 		{ "writebehind",       &seg->writebehind },
 		{ "min_recovery_rate", &seg->min_recovery_rate },
 		{ "max_recovery_rate", &seg->max_recovery_rate },
@@ -168,8 +168,8 @@ static int _raid_text_export(const struct lv_segment *seg, struct formatter *f)
 
 	else {
 		outf(f, "device_count = %u", seg->area_count);
-		if (seg->mirrors)
-			outf(f, "data_copies = %" PRIu32, seg->mirrors);
+		if (seg->data_copies)
+			outf(f, "data_copies = %" PRIu32, seg->data_copies);
 		if (seg->region_size)
 			outf(f, "region_size = %" PRIu32, seg->region_size);
 	}
@@ -277,10 +277,10 @@ PFLA("mirrors=%u stripes=%u", params.mirrors, params.stripes);
 		params.stripes = seg->area_count;
 PFLA("mirrors=%u stripes=%u", params.mirrors, params.stripes);
 	} else if (seg_is_any_raid10(seg)) {
-		if (!seg->mirrors)
-			seg->mirrors = 2;
+		if (!seg->data_copies)
+			seg->data_copies = 2;
 
-		params.data_copies = seg->mirrors;
+		params.data_copies = seg->data_copies;
 		params.stripes = seg->area_count;
 PFLA("mirrors=%u stripes=%u", params.mirrors, params.stripes);
 	} else {

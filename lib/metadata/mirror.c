@@ -1494,7 +1494,7 @@ static int _create_mimage_lvs(struct alloc_handle *ah,
 				return 0;
 			}
 		} else {
-			if (!lv_add_segment(ah, m * stripes, stripes, img_lvs[m],
+			if (!lv_add_segment(ah, m * stripes, stripes, 1, img_lvs[m],
 					    get_segtype_from_string(lv->vg->cmd,
 								    "striped"),
 					    stripe_size, 0, 0)) {
