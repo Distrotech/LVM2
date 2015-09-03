@@ -1284,17 +1284,38 @@ static int _lv_segment_add_areas(struct logical_volume *lv,
 	return 1;
 }
 
-/* Calculate rimage lenght based on total @extents for segment and @stripes and @mirrors */
+/* Calculate rimage length based on total @extents for segment and @stripes and @mirrors */
 static uint32_t _rimage_extents(uint32_t extents, uint32_t stripes, uint32_t mirrors)
 {
 	uint64_t r = extents;
 
-	r *= mirrors;
+	r *= mirrors ?: 1;
 	r = dm_div_up(r, stripes);
 
-	return (r > UINT_MAX) ? 0 : r;
+	return r > UINT_MAX ? 0 : (uint32_t) r;
 }
 
+#if 1
+/* Return @area_len for @extents based on @seg's properties (e.g. striped, ...) */
+static uint32_t _area_len(struct lv_segment *seg, uint32_t extents, uint32_t *area_len)
+{
+	/* Caller must ensure exact divisibility */
+	if (seg_is_striped(seg) || seg_is_striped_raid(seg)) {
+		uint32_t data_devs = seg->area_count - seg->segtype->parity_devs;
+		uint32_t mirrors = 1;
+
+		if (seg_is_any_raid10(seg))
+			mirrors = (seg_is_raid10_near(seg) ? 1 : seg->mirrors);
+
+		*area_len = _rimage_extents(extents, data_devs, seg->mirrors) * mirrors;
+	} else
+		*area_len = extents;
+
+PFLA("*area_len=%u", *area_len);
+
+	return 1;
+}
+#else
 /* Return @area_len for @extents based on @seg's properties (e.g. striped, ...) */
 static uint32_t _area_len(struct lv_segment *seg, uint32_t extents, uint32_t *area_len)
 {
@@ -1306,7 +1327,7 @@ static uint32_t _area_len(struct lv_segment *seg, uint32_t extents, uint32_t *ar
 			seg->mirrors = 2;
 
 		if (seg_is_any_raid10(seg))
-			*area_len = _rimage_extents(seg->len, data_devs, seg->mirrors);
+			*area_len = _rimage_extents(seg->len, data_devs, seg->mirrors) * (seg_is_raid10_near(seg) ? 1 : seg->mirrors);
 
 		else {
 			if (extents % data_devs) {
@@ -1320,8 +1341,11 @@ static uint32_t _area_len(struct lv_segment *seg, uint32_t extents, uint32_t *ar
 	} else
 		*area_len = extents;
 
+PFLA("*area_len=%u", *area_len);
+
 	return 1;
 }
+#endif
 
 /*
  * Reduce the size of an lv_segment.  New size can be zero.
@@ -1432,10 +1456,7 @@ return_0;
 		return 0;
 #endif
 
-
-	/* HM FIXME: ensure seg->mirrors != 0 */
-	count = extents * (seg_is_any_raid10(seg) ? (seg->mirrors ?: 2) : 1);
-PFLA("lv=%s extents=%u count=%u", lv->name, extents, count);
+	count = extents;
 	dm_list_iterate_back_items(seg, &lv->segments) {
 		if (!count)
 			break;
@@ -1791,8 +1812,8 @@ PFLA("alloc_count=%u parity_count=%u metadata_area_count=%u", alloc_count, parit
 	 * is calculated from.  So, we must pass in the total count to get
 	 * a correct area_multiple.
 	 */
+	/* HM FIXME: get rid of area_multiple, because it does not cut raid10* */
 	ah->area_multiple = _calc_area_multiple(segtype, area_count + segtype->parity_devs, stripes, mirrors);
-
 	ah->area_multiple_check = extend ? 1 : 0;
 
 	//FIXME: s/mirror_logs_separate/metadata_separate/ so it can be used by others?
@@ -1802,7 +1823,7 @@ PFLA("alloc_count=%u parity_count=%u metadata_area_count=%u", alloc_count, parit
 PFLA("ah->area_multiple=%u area_count=%u new_extents=%u total_extents=%u", ah->area_multiple, area_count, new_extents, total_extents);
 
 	if (segtype_is_raid(segtype)) {
-		if (segtype_is_raid10_near(segtype)) {
+		if (segtype_is_any_raid10(segtype)) {
 			total_extents = _rimage_extents(new_extents, stripes, mirrors) * stripes;
 			ah->area_multiple_check = 0;
 		}
@@ -2249,9 +2270,16 @@ static int _for_each_pv(struct cmd_context *cmd, struct logical_volume *lv,
 	if (max_seg_len && *max_seg_len > remaining_seg_len)
 		*max_seg_len = remaining_seg_len;
 
+	/* HM FIXME: get rid of area_multiple, because it does not cut raid10* */
 	area_multiple = _calc_area_multiple(seg->segtype, seg->area_count, 0, 1);
 PFLA("area_multiple=%u", area_multiple);
+
+#if 0
 	area_len = remaining_seg_len / (area_multiple ?: 1);
+#else
+	if (!_area_len(seg, remaining_seg_len, &area_len))
+		return 0;
+#endif
 
 	/* For striped mirrors, all the areas are counted, through the mirror layer */
 	if (top_level_area_index == -1)
@@ -2261,9 +2289,17 @@ PFLA("area_multiple=%u", area_multiple);
 	     s < seg->area_count && (!max_areas || s <= max_areas);
 	     s++) {
 		if (seg_type(seg, s) == AREA_LV) {
+			uint32_t image_le = _rimage_extents(le - seg->le,
+							    seg->area_count - seg->segtype->parity_devs,
+							    seg->mirrors);
+
 			if (!(r = _for_each_pv(cmd, seg_lv(seg, s),
+#if 1
+					       seg_le(seg, s) + image_le,
+#else
 					       seg_le(seg, s) +
 					       (le - seg->le) / area_multiple,
+#endif
 					       area_len, NULL, max_seg_len, 0,
 					       (stripes_per_mimage == 1) && only_single_area_segments ? 1U : 0U,
 					       (top_level_area_index != -1) ? top_level_area_index : (int) (s * stripes_per_mimage),
@@ -3486,9 +3522,10 @@ struct alloc_handle *allocate_extents(struct volume_group *vg,
 		alloc = vg->alloc;
 #if 1
 	/* raid10_{far,offset} store mirrored data in the 2nd half of the sub-lv */
-	/* HM FIXME: find better way to go by mirrors=2 */
+	/* HM FIXME: find better way to go by mirrors=N */
 	if (segtype_is_raid10_far(segtype) || segtype_is_raid10_offset(segtype))
-		extents *= 2;
+		extents *= mirrors;
+PFLA("mirrors=%u stripes=%u extents=%u", mirrors, stripes, extents);
 #endif
 
 PFLA("log_count=%u", log_count);
@@ -4166,8 +4203,7 @@ PFLA("extents=%u stripe_size=%u", extents, stripe_size);
 		 */
 		/* FIXME Support striped metadata pool */
 		log_count = 1;
-	} else if (!segtype_is_raid10_near(segtype) &&
-		   (segtype_is_striped(segtype) || segtype_is_striped_raid(segtype))) {
+	} else if (segtype_is_striped(segtype) || segtype_is_striped_raid(segtype)) {
 		extents = _round_to_stripe_boundary(lv, extents, stripes, 1);
 PFL();
 		/* Make sure metadata LVs are being extended as well */

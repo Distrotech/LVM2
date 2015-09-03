@@ -516,6 +516,9 @@ static int _read_mirror_and_raid_params(struct cmd_context *cmd,
 		if (segtype_is_raid1(lp->segtype)) {
 			type = SEG_TYPE_NAME_RAID1;
 			max_images = DEFAULT_RAID_MAX_IMAGES;
+		} else if (segtype_is_any_raid10(lp->segtype)) {
+			type = lp->segtype->name;
+			max_images = DEFAULT_RAID_MAX_IMAGES;
 		} else {
 			type = "mirror";
 			max_images = DEFAULT_MIRROR_MAX_IMAGES;
@@ -527,31 +530,12 @@ static int _read_mirror_and_raid_params(struct cmd_context *cmd,
 			return 0;
 		}
 
-#if 1
-		if (segtype_is_raid10_near(lp->segtype) &&
-		    lp->mirrors >= lp->stripes) {
-			log_error("RAID10 near mirrors have to be less than stripes");
+PFLA("lp->mirrors=%u lp->stripes=%u", lp->mirrors, lp->stripes);
+		if (segtype_is_any_raid10(lp->segtype) &&
+		    lp->mirrors > lp->stripes) {
+			log_error("RAID10 mirrors have to be less than stripes (i.e. -mN with N < #stripes)");
 			return 0;
 		}
-#else
-		if (segtype_is_any_raid10(lp->segtype)) {
-			if (segtype_is_raid10_near(lp->segtype)) {
-				if (lp->mirrors > 2) {
-					/*
-					 * FIXME: When RAID10 is no longer limited to
-					 *        2-way mirror, 'lv_mirror_count()'
-					 *        must also change for RAID10.
-					 */
-					log_error("RAID10 near currently supports "
-					  	"only 2-way mirroring (i.e. '-m 1')");
-					return 0;
-				}
-			} else if (lp->mirrors > 2) {
-				log_error("RAID10 far/offset does not support more than 1 mirror");
-				return 0;
-			}
-		}
-#endif
 
 		if (lp->mirrors == 1) {
 			if (seg_is_mirrored(lp)) {
@@ -1276,7 +1260,7 @@ PFLA("lp->stripes=%u lp->mirrors=%u", lp->stripes, lp->mirrors);
 
 PFLA("lp->stripes=%u lp->mirrors=%u", lp->stripes, lp->mirrors);
 
-		if (lp->stripes < 3) {
+		if (lp->stripes < (seg_is_raid10_near(lp) ? 3 : 2)) {
 			log_error("Unable to create RAID(1)0 LV,"
 				  " insufficient number of devices.");
 			return 0;

@@ -1818,7 +1818,7 @@ PFLA("lp->segtype=%s\n", lp->segtype->name);
 			seg->region_size = lp->region_size ?: 1024;
 
 		return lv_raid_convert(lv, lp->segtype, lp->yes, lp->force, arg_count(cmd, duplicate_ARG),
-				       image_count, stripes, stripe_size, lp->pvh);
+				       image_count, lp->mirrors + 1, stripes, stripe_size, lp->pvh);
 	}
 
 	if (arg_count(cmd, replace_ARG))

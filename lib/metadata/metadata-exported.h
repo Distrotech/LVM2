@@ -1151,6 +1151,7 @@ int lv_raid_convert(struct logical_volume *lv,
 		    const struct segment_type *new_segtype,
 		    int yes, int force, int duplicate,
 		    const unsigned image_count,
+		    const unsigned mirrors,
 		    const unsigned stripes,
 		    const unsigned new_stripe_size,
 		    struct dm_list *allocate_pvs);
