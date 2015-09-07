@@ -3,6 +3,7 @@
  *
  * This file is part of LVM2.
  *
+ *
  * This copyrighted material is made available to anyone wishing to use,
  * modify, copy, or redistribute it subject to the terms and conditions
  * of the GNU Lesser General Public License v.2.1.
@@ -1998,7 +1999,7 @@ PFLA("seg->data_copies=%u", seg->data_copies);
 
 	stripes /= seg->data_copies ?: 2;
 
-PFLA("stripes=%u", seg->stripes);
+PFLA("stripes=%u", stripes);
 	if (!(idx = dm_pool_zalloc(seg_lv(seg, 0)->vg->vgmem, seg->area_count * sizeof(*idx))))
 		return 0;
 
@@ -3631,27 +3632,25 @@ static struct logical_volume *_lv_create(struct volume_group *vg, const char *lv
 					 uint32_t region_size, uint32_t stripe_size,
 					 uint32_t extents, struct dm_list *pvs)
 {
-	uint32_t min_stripes = segtype_is_raid10_near(segtype) ? 3 : 2;
+	uint32_t min_stripes = 2;
 	uint64_t status = RAID_IMAGE | LVM_READ | LVM_WRITE;
 	struct logical_volume *r;
+
+	if (segtype_is_striped_raid(segtype) && stripes < 2) {
+		log_warn("Adjusting stripes to the minimum of 2");
+		stripes = min_stripes;
+	}
 
 PFLA("lv_name=%s mirrors=%u stripes=%u", lv_name, mirrors, stripes);
 	if (segtype_is_any_raid10(segtype)) {
 		if (mirrors < 2)
 			mirrors = 2;
 
-		if (stripes < min_stripes) {
-			log_error("Can't create %s LV %s/%s with less than %u stripes",
-				  segtype->name, vg->name, lv_name, min_stripes);
-			return_NULL;
-		}
-
-		if (segtype_is_raid10_near(segtype) && mirrors > stripes) {
-			log_error("raid10 near mirrors have to be less than stripes (i.e. -mN with N < #stripes)");
+		if (mirrors > stripes) {
+			log_error("raid10 mirrors have to be less than stripes (i.e. -mN with N < #stripes)");
 			return_NULL;
 		}
 	}
-
 #if 1
 	if (segtype_is_mirror(segtype)) {
 PFLA("segtype->parity_devs=%u", segtype->parity_devs);
@@ -3670,7 +3669,7 @@ PFLA("lv_name=%s mirrors=%u stripes=%u parity_devs=%u", lv_name, mirrors, stripe
 	/* Hide the lv, it's going to be a raid1 slave sub lv */
 	lv_set_hidden(r);
 PFL();
-	if (!lv_extend(r, segtype, stripes - segtype->parity_devs, stripe_size,
+	if (!lv_extend(r, segtype, stripes, stripe_size,
 		       mirrors, region_size, extents, pvs, vg->alloc, 0)) {
 		log_error("Failed to extend new LV %s", display_lvname(r));
 		return_NULL;
@@ -3951,8 +3950,11 @@ PFLA("lv->name=%s lv->le_count=%u seg_lv(seg, 0)=%s", lv->name, lv->le_count, se
 		return 0;
 	}
 
-	if (lv->le_count != dst_lv->le_count)
-		log_warn("Source and destination LVs differ in size due to stripe boundary rounding");
+	if (lv->le_count != dst_lv->le_count) {
+		log_warn("Destination LV with %u extents is larger than source with %u due to stripe boundary rounding",
+			 dst_lv->le_count, lv->le_count);
+		log_warn("You may want to resize your LV content after the duplication conversion (e.g. resize fs)");
+	}
 
 	/* Rename destination lvs sub lvs */
 	_rename_sub_lvs(dst_lv, 1);
@@ -5732,10 +5734,7 @@ int lv_raid_replace(struct logical_volume *lv,
 		/* FIXME: We only support 2-way mirrors in RAID10 currently */
 		uint32_t copies;
 
-		if (!raid_seg->stripes)
-			raid_seg->stripes = 2;
-
-		copies = raid_seg->area_count / raid_seg->stripes;
+		copies = raid_seg->data_copies;
 
 		for (i = 0; i < raid_seg->area_count * copies; i++) {
 			s = i % raid_seg->area_count;

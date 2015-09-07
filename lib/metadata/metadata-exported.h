@@ -452,7 +452,6 @@ struct lv_segment {
 	struct logical_volume *cow;
 	struct dm_list origin_list;
 	uint32_t region_size;	/* For mirrors, raid, replicators - in sectors */
-	uint32_t stripes;	/* For RAID10 near/far/offset */
 	uint32_t data_copies;	/* For RAID10 */
 	uint32_t extents_copied;
 	struct logical_volume *log_lv;

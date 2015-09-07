@@ -16,6 +16,7 @@
 #include "properties.h"
 #include "activate.h"
 #include "metadata.h"
+#include "segtype.h"
 
 
 #define GET_VG_NUM_PROPERTY_FN(NAME, VALUE) \
@@ -409,6 +410,10 @@ GET_VG_STR_PROPERTY_FN(vg_profile, vg_profile_dup(vg))
 
 /* LVSEG */
 GET_LVSEG_STR_PROPERTY_FN(segtype, lvseg_segtype_dup(lvseg->lv->vg->vgmem, lvseg))
+#define _datacopies_set prop_not_implemented_set
+GET_LVSEG_NUM_PROPERTY_FN(datacopies, lvseg->segtype->parity_devs ? lvseg->segtype->parity_devs + 1 : lvseg->data_copies)
+#define _data_copies_set prop_not_implemented_set
+GET_LVSEG_NUM_PROPERTY_FN(data_copies, lvseg->segtype->parity_devs ? lvseg->segtype->parity_devs + 1: lvseg->data_copies)
 #define _segtype_set prop_not_implemented_set
 GET_LVSEG_NUM_PROPERTY_FN(stripes, lvseg->area_count)
 #define _stripes_set prop_not_implemented_set
