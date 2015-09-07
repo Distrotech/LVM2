@@ -1044,17 +1044,13 @@ PFLA("lv=%s lv->le_count=%u extents=%u stripes=%u", lv->name, lv->le_count, exte
 		rest = extents % stripes;
 		if (rest)
 			r += extend ? stripes - rest : -rest;
-PFLA("r=%u", r);
+
 		if (data_copies > 1) {
 			r = _rimage_extents(r, stripes, data_copies);
-PFLA("r=%u", r);
 			r *= stripes;
-PFLA("r=%u", r);
 			r = dm_div_up(r, data_copies);
-PFLA("r=%u", r);
 		}
 	}
-
 
 	if (r != extents)
 		log_print_unless_silent("Rounding up size to full stripe size %s",
@@ -1458,6 +1454,97 @@ PFL();
 	return 1;
 }
 
+#if 1
+static int _lv_raid_reorder_extended_segments(struct logical_volume *lv, uint32_t extents, int extend)
+{
+	uint32_t len, o, s = 0, stripes;
+	struct lv_segment *seg = last_seg(lv), *prev_seg;
+	struct dm_list *d_this, *d_next, *s_this, *s_next;
+
+	/* Only reorder in case of raid10 far and less extents than segment length */
+	if (!seg_is_raid10_far(seg) ||
+	    (!extend && extents >= seg->len))
+		return 1;
+
+	stripes = seg->area_count;
+
+	if (extend) {
+		/* We've got a new raid10_far segment allocated and have to split it up and insert into existing one */
+
+PFLA("seg->area_len=%u", seg->area_len);
+		/* Check properties of new segment and previous segment for compaitbility */
+		if (first_seg(seg_lv(seg, 0))->area_len % seg->data_copies) {
+			log_error(INTERNAL_ERROR "raid10_far segment length of LV %s not divisible by #data_copies!",
+				  display_lvname(lv));
+			return 0;
+		}
+
+		/* If we don't have a previous segment, this is a new LV -> no need to reorder */
+		prev_seg = dm_list_item(seg->list.p, struct lv_segment);
+		if (&prev_seg->list == &lv->segments)
+			return 1;
+PFLA("prev_seg->area_len=%u", prev_seg->area_len);
+		if (!seg_is_raid10_far(prev_seg)) {
+			log_error(INTERNAL_ERROR "Not a raid10_far segment in LV %s!", display_lvname(lv));
+			return 0;
+		}
+		if (first_seg(seg_lv(prev_seg, 0))->area_len % prev_seg->data_copies) {
+			log_error(INTERNAL_ERROR "raid10_far segment length of LV %s not divisible by #data_copies!",
+				  display_lvname(lv));
+			return 0;
+		}
+		if (seg->area_count != prev_seg->area_count ||
+		    seg->data_copies != prev_seg->data_copies) {
+			log_error(INTERNAL_ERROR "raid10_far segments of LV %s vary in #stripes or #data_copies!",
+				  display_lvname(lv));
+			return 0;
+		}
+
+PFL();
+		/* Ensure proper segment boundaries to merge them into previous segments */
+		len = seg->len / seg->data_copies;
+		for (o = lv->le_count - len; o > seg->le; o -= len)
+			if (!lv_split_segment(lv, o))
+				return_0;
+
+		/* reorder */
+		len = prev_seg->len / prev_seg->data_copies;
+		for (o = seg->le - len; o > prev_seg->le; o -= len)
+			/* Ensure segment boundary at begin/end of reshape space */
+			if (!lv_split_segment(lv, o))
+				return_0;
+PFL();
+
+		s_this = &seg->list;
+		d_this = &prev_seg->list;
+
+		for (s = 1; s < seg->data_copies; s++) {
+PFL();
+			s_next = s_this->n;
+			d_next = d_this->n;
+			dm_list_move(d_next, s_this);
+			s_this = s_next;
+			s_this = d_next;
+		}
+
+PFL();
+		while (prev_seg->list.n != &lv->segments) {
+			uint32_t le = prev_seg->le + prev_seg->len;
+
+PFL();
+			prev_seg = dm_list_item(prev_seg->list.n, struct lv_segment);
+			prev_seg->le = le;
+		}
+
+	} else {
+		return 0;
+		/* reorder */
+	}
+
+	return 1;
+}
+#endif
+
 /*
  * Entry point for all LV reductions in size.
  */
@@ -1487,16 +1574,14 @@ PFLA("lv=%s lv->le_count=%u seg=%p extents=%u", lv->name, lv->le_count, seg, ext
 		clear_snapshot_merge(lv);
 	}
 
-#if 0
+#if 1
 	/*
 	 * HM FIXME: CODEME: for raid10_far on reduction (not deletion!),
 	 * the given address space has to be split in half and half @extents at the end
 	 * of the first half of the address space have to be reordered to the end 
 	 * before the normal reduction flow is allowed to happen
 	 */
-	if (seg_is_raid10_far(seg) &&
-	    extents < lv->le_count &&
-	    !lv_raid_reorder_extended_segment(lv, extents, 0 /* reduce */))
+	if (!_lv_raid_reorder_extended_segments(lv, extents, 0 /* reduce */))
 		return 0;
 #endif
 
@@ -4170,13 +4255,13 @@ PFLA("extending %s in %s, stripes=%u", sub_lv->name, lv->name, stripes);
 		fa += stripes;
 	}
 
-#if 0
+#if 1
 	/*
-	 * HM FIXME: CODEME: the new segment extended has to be split in half and one
-	 * half has to be instered in the middle of the previous address range
+	 * HM FIXME: CODEME: the new segment extended has to be split
+	 * in #data_copies and the split segments have to be inserted
+	 * at respective offsets in the previous address range
 	 */
-	if (lv->le_count &&
-	    !lv_raid_reorder_extended_segment(lv, extents , 1 /* extend */))
+	if (!_lv_raid_reorder_extended_segments(lv, extents , 1 /* extend */))
 		return 0;
 #endif
 
