@@ -1043,7 +1043,10 @@ PFLA("lv=%s lv->le_count=%u extents=%u stripes=%u", lv->name, lv->le_count, exte
 	if (stripes > 1) {
 		rest = extents % stripes;
 		if (rest)
-			r += extend ? stripes - rest : -rest;
+			r += extend ? (stripes - rest) : -rest;
+
+		if (!r)
+			r = stripes;
 
 		if (data_copies > 1) {
 			r = _rimage_extents(r, stripes, data_copies);
@@ -1508,9 +1511,7 @@ PFLA("extents=%u lv->le_count=%u raid_seg->area_len=%u", extents, lv->le_count, 
 		return 0;
 PFL();
 	if (extend) {
-		uint32_t le1, le2;
 		uint32_t new_split_len, prev_le_count, prev_split_len;
-		struct lv_segment *seg1, *seg2;
 
 		/* If this is a new LV -> no need to reorder */
 		if (extents == lv->le_count)
@@ -1553,17 +1554,20 @@ PFL();
 		 * P1, P2, P3, N1, N2, N3 -> P1, N1, P2, N2, P3, N3
 		 */
 		for (s = 0; s < raid_seg->area_count; s++) {
+			uint32_t le2;
+			struct lv_segment *seg2;
+
 			slv = seg_lv(raid_seg, s);
-			for (le1 = prev_split_len, le2 = prev_le_count + new_split_len;
+			for (le = prev_split_len, le2 = prev_le_count + new_split_len;
 			     le2 < slv->le_count;
-			     le1 += prev_split_len, le2 += new_split_len) {
-				seg1 = find_seg_by_le(slv, le1);
+			     le += prev_split_len, le2 += new_split_len) {
+				seg  = find_seg_by_le(slv, le);
 				seg2 = find_seg_by_le(slv, le2);
-if (!seg1 || !seg2) {
+if (!seg || !seg2) {
 PFLA("%s", "Shit^2!!!");
 return 0;
 }
-				dm_list_move(seg1->list.n, &seg2->list);
+				dm_list_move(seg->list.n, &seg2->list);
 			}
 		}
 
@@ -1615,6 +1619,7 @@ PFL();
 			area_len_sum += seg->area_len;
 		}
 
+		/* HM FIXME: REMOVEME: superfluous check */
 		if (area_len_sum % raid_seg->data_copies) {
 			log_error(INTERNAL_ERROR "raid10_far extents of LV %s to reduce not divisable by #data_copies",
 				  display_lvname(lv));
