@@ -114,6 +114,15 @@ static const struct {
 	{ SEG_RAID10_NEAR, "raid10"}, /* same as "raid10_near" */
 };
 
+static const char *_get_dm_segtype_target(unsigned type)
+{
+	unsigned t = DM_ARRAY_SIZE(_dm_segtypes);
+
+	while (t--)
+		if (type == _dm_segtypes[t].type)
+			return _dm_segtypes[t].target;
+	return NULL;
+}
 
 /* Some segment types have a list of areas of other devices attached */
 struct seg_area {
@@ -2397,7 +2406,6 @@ static int _raid_emit_segment_line(struct dm_task *dmt, uint32_t major,
 	int pos = 0;
 	unsigned type;
 
-PFLA("seg->area_count=%u", seg->area_count);
 	if (seg->area_count % 2)
 		return 0;
 
@@ -2430,9 +2438,7 @@ PFLA("seg->area_count=%u", seg->area_count);
 		type = SEG_RAID10_NEAR;
 	}
 
-PFLA("param_count=%u", param_count);
-	EMIT_PARAMS(pos, "%s %d %u",
-		    type == SEG_RAID10_NEAR ? _dm_segtypes[DM_ARRAY_SIZE(_dm_segtypes)-1].target : _dm_segtypes[type].target,
+	EMIT_PARAMS(pos, "%s %d %u", _get_dm_segtype_target(type),
 		    param_count, seg->stripe_size);
 
 	if (seg->type == SEG_RAID10_FAR)

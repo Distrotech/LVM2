@@ -1017,19 +1017,7 @@ PFL();
 	return seg;
 }
 
-/* Calculate rimage length based on total @extents for segment and @stripes and @mirrors */
-static uint32_t _rimage_extents(uint32_t extents, uint32_t stripes, uint32_t data_copies)
-{
-	uint64_t r = extents;
-
-	r *= data_copies ?: 1;
-	r = dm_div_up(r, stripes ?: 1);
-
-	return r > UINT_MAX ? 0 : (uint32_t) r;
-}
-
 #if 1
-
 /* Round up @extents to next stripe boundary for number of @stripes */
 static uint32_t _round_to_stripe_boundary(struct logical_volume *lv, uint32_t extents,
 					  uint32_t stripes, uint32_t data_copies, int extend)
@@ -1049,7 +1037,7 @@ PFLA("lv=%s lv->le_count=%u extents=%u stripes=%u", lv->name, lv->le_count, exte
 			r = stripes;
 
 		if (data_copies > 1) {
-			r = _rimage_extents(r, stripes, data_copies);
+			r = lv_raid_rimage_extents(r, stripes, data_copies);
 			r *= stripes;
 			r = dm_div_up(r, data_copies);
 		}
@@ -1343,7 +1331,7 @@ PFLA("extents=%u", extents);
 	if (seg_is_striped(seg) || seg_is_striped_raid(seg)) {
 		uint32_t stripes = seg->area_count - seg->segtype->parity_devs;
 
-		r = _rimage_extents(extents, stripes, seg->data_copies ?: 1);
+		r = lv_raid_rimage_extents(extents, stripes, seg->data_copies ?: 1);
 	} else
 		r= extents;
 
@@ -1364,7 +1352,7 @@ static uint32_t _area_len(struct lv_segment *seg, uint32_t extents, uint32_t *ar
 			seg->data_copies = 2;
 
 		if (seg_is_any_raid10(seg))
-			*area_len = _rimage_extents(seg->len, data_devs, seg->data_copies) * (seg_is_raid10_near(seg) ? 1 : seg->data_copies);
+			*area_len = lv_raid_rimage_extents(seg->len, data_devs, seg->data_copies) * (seg_is_raid10_near(seg) ? 1 : seg->data_copies);
 
 		else {
 			if (extents % data_devs) {
@@ -1457,180 +1445,6 @@ PFL();
 	return 1;
 }
 
-#if 1
-/* Ensure consistent image LVs have been passed in for @seg */
-static int _seg_images_are_divisible_by_data_copies(struct lv_segment *seg)
-{
-	uint32_t s;
-
-	for (s = 0; s < seg->area_count; s++) {
-		if (seg_type(seg, s) != AREA_LV) {
-			log_error(INTERNAL_ERROR "raid10_far segment of LV %s missing image LV!",
-				  display_lvname(seg->lv));
-			return 0;
-		}
-
-		if (seg_lv(seg, s)->le_count % seg->data_copies) {
-			log_error(INTERNAL_ERROR "XXX raid10_far image length of LV %s not divisible by #data_copies!",
-				  display_lvname(seg->lv));
-			return 0;
-		}
-	}
-
-	return 1;
-}
-
-/*
- * Reorder segments for @extents length in @lv;
- * @extend flag indicates extension/reduction request.
- *
- * raid10_far arranges stripe zones with differing data block rotation
- * one after the other and mirrors across them.
- * In order to resize those, we have to split them up by # data copies
- * and reorder the split sgements.
- */
-static int _lv_raid10_far_reorder_segments(struct logical_volume *lv, uint32_t extents, int extend)
-{
-	uint32_t area_len_sum, le, s;
-	struct logical_volume *slv;
-	struct lv_segment *seg, *raid_seg = first_seg(lv);
-
-	if (!extents) {
-		log_error(INTERNAL_ERROR "Called on LV %s for 0 extents!", display_lvname(lv));
-		return 0;
-	}
-
-	/* Only reorder in case of raid10 far and less extents than segment length */
-	if (!seg_is_raid10_far(raid_seg) ||
-	    (!extend && extents >= raid_seg->len))
-		return 1;
-
-PFLA("extents=%u lv->le_count=%u raid_seg->area_len=%u", extents, lv->le_count, raid_seg->area_len);
-	/* Check properties of new segment and previous segment for compaitbility */
-	if (!_seg_images_are_divisible_by_data_copies(raid_seg))
-		return 0;
-PFL();
-	if (extend) {
-		uint32_t new_split_len, prev_le_count, prev_split_len;
-
-		/* If this is a new LV -> no need to reorder */
-		if (extents == lv->le_count)
-			return 1;
-
-		/*
-		 * We've got new extemts added to the image lvs which
-		 * are in the wrong place; got to split them up to insert
-		 * the split ones into the previous raid10_far ones.
-		 */
-		/* Ensure proper segment boundaries so that we can move segments */
-		/* Split segments of all image LVs for reordering */
-		prev_le_count = _rimage_extents(lv->le_count - extents, raid_seg->area_count, raid_seg->data_copies);
-		for (s = 0; s < raid_seg->area_count; s++) {
-			slv = seg_lv(raid_seg, s);
-PFLA("extents=%u slv->le_count=%u prev_le_count=%u", extents, slv->le_count, prev_le_count);
-			prev_split_len = prev_le_count / raid_seg->data_copies;
-
-			/* Split the previoues length of the image up */
-			for (le = prev_split_len; le < prev_le_count; le += prev_split_len) {
-PFLA("le=%u", le);
-				if (!lv_split_segment(slv, le))
-					return_0;
-			}
-
-			/* Split the newly allocated part of the image up */
-			new_split_len = (slv->le_count - prev_le_count) / raid_seg->data_copies;
-			for (le = prev_le_count ; le < slv->le_count; le += new_split_len)
-				if (!lv_split_segment(slv, le))
-					return_0;
-		}
-PFL();
-		/*
-		 * Reorder segments of the image LVs so that the split off #data_copies
-		 * segmentsof the new allocation get moved to the ends of the split off
-		 * previous ones.
-		 *
-		 * E.g. with 3 data copies before/after reordering an image LV:
-		 *
-		 * P1, P2, P3, N1, N2, N3 -> P1, N1, P2, N2, P3, N3
-		 */
-		for (s = 0; s < raid_seg->area_count; s++) {
-			uint32_t le2;
-			struct lv_segment *seg2;
-
-			slv = seg_lv(raid_seg, s);
-			for (le = prev_split_len, le2 = prev_le_count + new_split_len;
-			     le2 < slv->le_count;
-			     le += prev_split_len, le2 += new_split_len) {
-				seg  = find_seg_by_le(slv, le);
-				seg2 = find_seg_by_le(slv, le2);
-if (!seg || !seg2) {
-PFLA("%s", "Shit^2!!!");
-return 0;
-}
-				dm_list_move(seg->list.n, &seg2->list);
-			}
-		}
-
-	/*
-	 * Reduce...
-	 */
-	} else {
-		uint32_t reduction = extents / raid_seg->area_count;
-		uint32_t split_len;
-PFLA("seg->len=%u, seg->area_len=%u extents=%u reduction=%u", raid_seg->len, raid_seg->area_len, extents, reduction);
-
-		/* Ensure proper segment boundaries so that we can move segments */
-		/* Split segments of all image LVs for reordering */
-		for (s = 0; s < raid_seg->area_count; s++) {
-
-			slv = seg_lv(raid_seg, s);
-			split_len = slv->le_count / raid_seg->data_copies;
-
-			for (le = split_len; le <= slv->le_count; le += split_len) {
-PFLA("slv->le_count=%u le=%u", slv->le_count, le);
-				if (!lv_split_segment(slv, le - reduction) ||
-				    (le < slv->le_count && !lv_split_segment(slv, le)))
-					return_0;
-			}
-		}
-PFL();
-		/* Reorder split segments of all image LVs to have those to reduce at the end */
-		for (s = 0; s < raid_seg->area_count; s++) {
-			slv = seg_lv(raid_seg, s);
-			split_len = slv->le_count / raid_seg->data_copies;
-
-			for (le = split_len; le <= slv->le_count; le += split_len) {
-PFLA("lv=%s split_len=%u le=%u reduction=%u", display_lvname(slv), split_len, le, reduction);
-				seg = find_seg_by_le(slv, le - reduction);
-				dm_list_move(&slv->segments, &seg->list);
-			}
-		}
-PFL();
-	}
-
-	/* Correct segments start logical extents and length */
-	for (s = 0; s < raid_seg->area_count; s++) {
-		area_len_sum = le = 0;
-		slv = seg_lv(raid_seg, s);
-
-		dm_list_iterate_items(seg, &slv->segments) {
-			seg->le = le;
-			le += seg->len;
-			area_len_sum += seg->area_len;
-		}
-
-		/* HM FIXME: REMOVEME: superfluous check */
-		if (area_len_sum % raid_seg->data_copies) {
-			log_error(INTERNAL_ERROR "raid10_far extents of LV %s to reduce not divisable by #data_copies",
-				  display_lvname(lv));
-			return 0;
-		} 
-	}
-
-	return 1;
-}
-#endif
-
 /*
  * Entry point for all LV reductions in size.
  */
@@ -1664,7 +1478,7 @@ PFLA("lv=%s lv->le_count=%u seg=%p extents=%u", lv->name, lv->le_count, seg, ext
 	 * of the first half of the address space have to be reordered to the end 
 	 * before the normal reduction flow is allowed to happen
 	 */
-	if (!_lv_raid10_far_reorder_segments(lv, extents, 0 /* reduce */))
+	if (!lv_raid10_far_reorder_segments(lv, extents, 0 /* reduce */))
 		return 0;
 #endif
 
@@ -2033,7 +1847,7 @@ PFLA("ah->area_multiple=%u area_count=%u new_extents=%u total_extents=%u", ah->a
 
 	if (segtype_is_raid(segtype)) {
 		if (segtype_is_any_raid10(segtype))
-			total_extents = _rimage_extents(total_extents, stripes, mirrors) * stripes;
+			total_extents = lv_raid_rimage_extents(total_extents, stripes, mirrors) * stripes;
 
 PFLA("total_extents=%u stripes=%u mirrors=%u", total_extents, stripes, mirrors);
 
@@ -2041,8 +1855,8 @@ PFLA("total_extents=%u stripes=%u mirrors=%u", total_extents, stripes, mirrors);
 PFLA("area_count=%u metadata_area_count=%u total_extents=%u", area_count, metadata_area_count, total_extents);
 
 			ah->log_len = raid_rmeta_extents_delta(cmd,
-							       _rimage_extents(existing_extents, stripes, mirrors),
-							       _rimage_extents(existing_extents + new_extents, stripes, mirrors),
+							       lv_raid_rimage_extents(existing_extents, stripes, mirrors),
+							       lv_raid_rimage_extents(existing_extents + new_extents, stripes, mirrors),
 							       region_size, extent_size);
 			ah->metadata_area_count = metadata_area_count;
 			ah->alloc_and_split_meta = !!ah->log_len;
@@ -2277,7 +2091,7 @@ PFLA("area_multiple=%u", area_multiple);
 	extents = aa[0].len * area_multiple;
 #else
 PFLA("aa[0].len=%u stripes=%u, data_copies=%u", aa[0].len, stripes, data_copies);
-	extents = _rimage_extents(aa[0].len * stripes, stripes, data_copies);
+	extents = lv_raid_rimage_extents(aa[0].len * stripes, stripes, data_copies);
 #endif
 
 	if (!(seg = alloc_lv_segment(segtype, lv, lv->le_count, extents, 0,
@@ -2492,9 +2306,9 @@ PFLA("area_multiple=%u", area_multiple);
 	     s < seg->area_count && (!max_areas || s <= max_areas);
 	     s++) {
 		if (seg_type(seg, s) == AREA_LV) {
-			uint32_t image_le = _rimage_extents(le - seg->le,
-							    seg->area_count - seg->segtype->parity_devs,
-							    seg->data_copies);
+			uint32_t image_le = lv_raid_rimage_extents(le - seg->le,
+								   seg->area_count - seg->segtype->parity_devs,
+								   seg->data_copies);
 
 			if (!(r = _for_each_pv(cmd, seg_lv(seg, s),
 #if 1
@@ -4353,7 +4167,7 @@ PFLA("lv->le_count=%u", lv->le_count);
 	 * in #data_copies and the split segments have to be inserted
 	 * at respective offsets in the previous address range
 	 */
-	if (!_lv_raid10_far_reorder_segments(lv, extents , 1 /* extend */))
+	if (!lv_raid10_far_reorder_segments(lv, extents , 1 /* extend */))
 		return 0;
 #endif
 	if (!vg_write(lv->vg) || !vg_commit(lv->vg))
