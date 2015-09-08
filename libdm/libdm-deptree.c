@@ -87,7 +87,7 @@ static const struct {
 	{ SEG_RAID0, "raid0"},
 	{ SEG_RAID0_META, "raid0_meta"},
 	{ SEG_RAID1, "raid1"},
-	{ SEG_RAID10_NEAR, "raid10"},
+	{ SEG_RAID10_NEAR, "raid10_near"},
 	{ SEG_RAID10_FAR, "raid10_far"},
 	{ SEG_RAID10_OFFSET, "raid10_offset"},
 	{ SEG_RAID4, "raid4"},
@@ -111,6 +111,7 @@ static const struct {
 	 */
 	{ SEG_RAID5_LS, "raid5"}, /* same as "raid5_ls" (default for MD also) */
 	{ SEG_RAID6_ZR, "raid6"}, /* same as "raid6_zr" */
+	{ SEG_RAID10_NEAR, "raid10"}, /* same as "raid10_near" */
 };
 
 
@@ -2430,7 +2431,8 @@ PFLA("seg->area_count=%u", seg->area_count);
 	}
 
 PFLA("param_count=%u", param_count);
-	EMIT_PARAMS(pos, "%s %d %u", _dm_segtypes[type].target,
+	EMIT_PARAMS(pos, "%s %d %u",
+		    type == SEG_RAID10_NEAR ? _dm_segtypes[DM_ARRAY_SIZE(_dm_segtypes)-1].target : _dm_segtypes[type].target,
 		    param_count, seg->stripe_size);
 
 	if (seg->type == SEG_RAID10_FAR)
