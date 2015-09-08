@@ -550,9 +550,10 @@ static int _lv_split_segment(struct logical_volume *lv, struct lv_segment *seg,
 		return 0;
 	}
 
-	/* In case of a striped segment, the offset has to be / stripes */
+	/* In case of a striped/raid10_far segment, the offset has to be / stripes */
 	area_offset = offset;
-	if (seg_is_striped(seg))
+	if (seg_is_striped(seg) ||
+	    seg_is_raid10_far(seg))
 		area_offset /= seg->area_count;
 
 	split_seg->area_len -= area_offset;
