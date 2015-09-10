@@ -977,7 +977,6 @@ struct lv_segment *alloc_lv_segment(const struct segment_type *segtype,
 		return_NULL;
 	}
 
-	/*  HM FIXME raid0 optionally w/o rmeta */
 	if (segtype_is_raid(segtype) &&
 	    !segtype_is_raid0(segtype) &&
 	    !(seg->meta_areas = dm_pool_zalloc(mem, areas_sz))) {
@@ -1471,16 +1470,17 @@ PFLA("lv=%s lv->le_count=%u seg=%p extents=%u", lv->name, lv->le_count, seg, ext
 		clear_snapshot_merge(lv);
 	}
 
-#if 1
 	/*
-	 * HM FIXME: CODEME: for raid10_far on reduction (not deletion!),
-	 * the given address space has to be split in half and half @extents at the end
-	 * of the first half of the address space have to be reordered to the end 
+	 * For raid10_far on reduction (not deletion!), the given address
+	 * space of the data image LVs have to be split in #data_copies
+	 * (i.e. the raid10_far stripe zones being mirrored)
+	 * and @extents/#data_copies extents at the end of the splits
+	 * have to be moved to the end of the images segment list
 	 * before the normal reduction flow is allowed to happen
 	 */
-	if (!lv_raid10_far_reorder_segments(lv, extents, 0 /* reduce */))
+	if (seg_is_raid10_far(seg) &&
+	    !lv_raid10_far_reorder_segments(lv, extents, 0 /* reduce */))
 		return 0;
-#endif
 
 	count = extents;
 	dm_list_iterate_back_items(seg, &lv->segments) {
@@ -2085,14 +2085,14 @@ static int _setup_alloced_segment(struct logical_volume *lv, uint64_t status,
 	uint32_t s, extents, area_multiple, stripes = area_count - segtype->parity_devs;
 	struct lv_segment *seg;
 
-#if 0
-	area_multiple = _calc_area_multiple(segtype, area_count, 0, 1);
+	if (segtype_is_raid(segtype))
+		extents = lv_raid_rimage_extents(aa[0].len * stripes, stripes, data_copies);
+	else {
+		area_multiple = _calc_area_multiple(segtype, area_count, 0, 1);
 PFLA("area_multiple=%u", area_multiple);
-	extents = aa[0].len * area_multiple;
-#else
+		extents = aa[0].len * area_multiple;
+	}
 PFLA("aa[0].len=%u stripes=%u, data_copies=%u", aa[0].len, stripes, data_copies);
-	extents = lv_raid_rimage_extents(aa[0].len * stripes, stripes, data_copies);
-#endif
 
 	if (!(seg = alloc_lv_segment(segtype, lv, lv->le_count, extents, 0,
 				     status, stripe_size, NULL, area_count,
@@ -4161,15 +4161,17 @@ PFLA("lv->le_count=%u", lv->le_count);
 	lv->size += (uint64_t) extents * lv->vg->extent_size;
 PFLA("lv->le_count=%u", lv->le_count);
 	seg->data_copies = mirrors;
-#if 1
+
 	/*
-	 * HM FIXME: CODEME: the extended image LVs have to be split
-	 * in #data_copies and the split segments have to be inserted
-	 * at respective offsets in the previous address range
+	 * The extended image LVs have to be split in #data_copies
+	 * and newly allocated @extents/@data_copies extents have
+	 * to be added to the splits to suit the raid10_far layout
+	 * expecting growth of each stripe zone
 	 */
-	if (!lv_raid10_far_reorder_segments(lv, extents , 1 /* extend */))
+	if (seg_is_raid10_far(seg) &&
+	    !lv_raid10_far_reorder_segments(lv, extents , 1 /* extend */))
 		return 0;
-#endif
+
 	if (!vg_write(lv->vg) || !vg_commit(lv->vg))
 		return_0;
 
@@ -4218,6 +4220,7 @@ int lv_extend(struct logical_volume *lv,
 		mirrors = seg->data_copies;
 		stripes = seg->area_count - seg->segtype->parity_devs;
 	}
+	PFLA("mirrors=%u stripes=%u", mirrors, stripes);
 #endif
 	if (segtype_is_virtual(segtype))
 		return lv_add_virtual_segment(lv, 0u, extents, segtype);
@@ -4231,11 +4234,7 @@ PFLA("extents=%u stripe_size=%u", extents, stripe_size);
 		/* FIXME Support striped metadata pool */
 		log_count = 1;
 	} else if (segtype_is_striped(segtype) || segtype_is_striped_raid(segtype))
-#if 1
 		extents = _round_to_stripe_boundary(lv, extents, stripes, mirrors, 1);
-#else
-		extents = _round_to_stripe_boundary(lv, extents, stripes, 1);
-#endif
 PFL();
 
 PFLA("extents=%u mirrors=%u stripes=%u log_count=%u", extents, mirrors, stripes, log_count);

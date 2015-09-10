@@ -4198,6 +4198,7 @@ static int _output_as_rows(struct dm_report *rh)
 	struct dm_report_field *field;
 	struct row *row;
 
+PFL();
 	dm_list_iterate_items(fp, &rh->field_props) {
 		if (fp->flags & FLD_HIDDEN) {
 			dm_list_iterate_items(row, &rh->rows) {
@@ -4314,7 +4315,6 @@ int dm_report_output(struct dm_report *rh)
 {
 	if (dm_list_empty(&rh->rows))
 		return 1;
-
 	if ((rh->flags & RH_SORT_REQUIRED))
 		_sort_rows(rh);
 

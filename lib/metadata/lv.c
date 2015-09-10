@@ -207,7 +207,7 @@ uint64_t lvseg_start(const struct lv_segment *seg)
 
 uint64_t lvseg_size(const struct lv_segment *seg)
 {
-	return (uint64_t) seg->len * seg->lv->vg->extent_size;
+	return (uint64_t) (seg->len - seg->reshape_len) * seg->lv->vg->extent_size;
 }
 
 uint32_t lv_kernel_read_ahead(const struct logical_volume *lv)

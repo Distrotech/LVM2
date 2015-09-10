@@ -293,7 +293,7 @@ GET_LV_NUM_PROPERTY_FN(lv_kernel_minor, lv_kernel_minor(lv))
 #define _lv_kernel_minor_set prop_not_implemented_set
 GET_LV_NUM_PROPERTY_FN(lv_kernel_read_ahead, lv_kernel_read_ahead(lv) * SECTOR_SIZE)
 #define _lv_kernel_read_ahead_set prop_not_implemented_set
-GET_LV_NUM_PROPERTY_FN(lv_size, lv->size * SECTOR_SIZE)
+GET_LV_NUM_PROPERTY_FN(lv_size, (lv->le_count - first_seg(lv)->reshape_len) * lv->vg->extent_size) // lv->size * SECTOR_SIZE)
 #define _lv_size_set prop_not_implemented_set
 GET_LV_NUM_PROPERTY_FN(seg_count, dm_list_size(&lv->segments))
 #define _seg_count_set prop_not_implemented_set
@@ -414,6 +414,10 @@ GET_LVSEG_STR_PROPERTY_FN(segtype, lvseg_segtype_dup(lvseg->lv->vg->vgmem, lvseg
 GET_LVSEG_NUM_PROPERTY_FN(datacopies, lvseg->segtype->parity_devs ? lvseg->segtype->parity_devs + 1 : lvseg->data_copies)
 #define _data_copies_set prop_not_implemented_set
 GET_LVSEG_NUM_PROPERTY_FN(data_copies, lvseg->segtype->parity_devs ? lvseg->segtype->parity_devs + 1: lvseg->data_copies)
+#define _reshapelen_set prop_not_implemented_set
+GET_LVSEG_NUM_PROPERTY_FN(reshapelen, (lvseg->reshape_len *lvseg->area_count / (lvseg->area_count - lvseg->segtype->parity_devs)))
+#define _reshape_len_set prop_not_implemented_set
+GET_LVSEG_NUM_PROPERTY_FN(reshape_len, (lvseg->reshape_len *lvseg->area_count / (lvseg->area_count - lvseg->segtype->parity_devs)))
 #define _segtype_set prop_not_implemented_set
 GET_LVSEG_NUM_PROPERTY_FN(stripes, lvseg->area_count)
 #define _stripes_set prop_not_implemented_set

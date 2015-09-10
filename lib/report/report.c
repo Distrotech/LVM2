@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2002-2004 Sistina Software, Inc. All rights reserved.
- * Copyright (C) 2004-2014 Red Hat, Inc. All rights reserved.
+ * Copyright (C) 2004-2015 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
  *
@@ -1957,6 +1957,16 @@ static int _vgsize_disp(struct dm_report *rh, struct dm_pool *mem,
 	return _size64_disp(rh, mem, field, &size, private);
 }
 
+static int _lvsize_disp(struct dm_report *rh, struct dm_pool *mem,
+			struct dm_report_field *field,
+			const void *data, void *private)
+{
+	const struct logical_volume *lv = (const struct logical_volume *) data;
+	uint64_t size = lv->size - first_seg(lv)->reshape_len * lv->vg->extent_size;
+
+	return _size64_disp(rh, mem, field, &size, private);
+}
+
 static int _segmonitor_disp(struct dm_report *rh, struct dm_pool *mem,
 			    struct dm_report_field *field,
 			    const void *data, void *private)
@@ -1972,6 +1982,34 @@ static int _segmonitor_disp(struct dm_report *rh, struct dm_pool *mem,
 
 	return _field_set_value(field, GET_FIRST_RESERVED_NAME(seg_monitor_undef),
 				GET_FIELD_RESERVED_VALUE(seg_monitor_undef));
+}
+
+static int _segreshape_len_disp(struct dm_report *rh, struct dm_pool *mem,
+				struct dm_report_field *field,
+				const void *data, void *private)
+{
+	const struct lv_segment *seg = (const struct lv_segment *) data;
+	uint32_t reshape_len = seg->reshape_len * seg->area_count /
+			       (seg->area_count - seg->segtype->parity_devs);
+
+	if (reshape_len)
+		return dm_report_field_uint32(rh, field, &reshape_len);
+
+	return _field_set_value(field, "", &GET_TYPE_RESERVED_VALUE(num_undef_32));
+}
+
+static int _segdata_copies_disp(struct dm_report *rh, struct dm_pool *mem,
+				struct dm_report_field *field,
+				const void *data, void *private)
+{
+	const struct lv_segment *seg = (const struct lv_segment *) data;
+	uint32_t data_copies = seg->segtype->parity_devs ?
+			       (seg->segtype->parity_devs + 1) : seg->data_copies;
+
+	if (data_copies > 1)
+		return dm_report_field_uint32(rh, field, &data_copies);
+
+	return _field_set_value(field, "", &GET_TYPE_RESERVED_VALUE(num_undef_32));
 }
 
 static int _segstart_disp(struct dm_report *rh, struct dm_pool *mem,
@@ -2001,6 +2039,7 @@ static int _segsize_disp(struct dm_report *rh, struct dm_pool *mem,
 {
 	const struct lv_segment *seg = (const struct lv_segment *) data;
 	uint64_t size = lvseg_size(seg);
+PFL();
 
 	return _size64_disp(rh, mem, field, &size, private);
 }
@@ -2013,7 +2052,14 @@ static int _segsizepe_disp(struct dm_report *rh,
 {
 	const struct lv_segment *seg = (const struct lv_segment *) data;
 
-	return dm_report_field_uint32(rh, field, &seg->len);
+PFL();
+	if (seg) {
+		uint32_t len = seg->len - seg->reshape_len;
+
+		return dm_report_field_uint32(rh, field, &len);
+	}
+
+	return _field_set_value(field, "", &GET_TYPE_RESERVED_VALUE(num_undef_32));
 }
 
 static int _chunksize_disp(struct dm_report *rh, struct dm_pool *mem,

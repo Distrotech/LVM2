@@ -134,9 +134,13 @@ static int _raid_text_import(struct lv_segment *seg,
 	for (i = 0; i < DM_ARRAY_SIZE(attr_import); i++, aip++) {
 		if (dm_config_has_node(sn, aip->name)) {
 			if (!dm_config_get_uint32(sn, aip->name, aip->var)) {
-				log_error("Couldn't read '%s' for segment %s of logical volume %s.",
-					  aip->name, dm_config_parent_name(sn), seg->lv->name);
-				return 0;
+				if (strcmp(aip->name, "data_copies")) {
+					log_error("Couldn't read '%s' for segment %s of logical volume %s.",
+						  aip->name, dm_config_parent_name(sn), seg->lv->name);
+					return 0;
+				}
+
+				seg->data_copies = 1;
 			}
 		}
 	}
@@ -168,7 +172,7 @@ static int _raid_text_export(const struct lv_segment *seg, struct formatter *f)
 
 	else {
 		outf(f, "device_count = %u", seg->area_count);
-		if (seg->data_copies)
+		if (seg->data_copies > 1)
 			outf(f, "data_copies = %" PRIu32, seg->data_copies);
 		if (seg->region_size)
 			outf(f, "region_size = %" PRIu32, seg->region_size);

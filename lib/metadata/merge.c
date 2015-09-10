@@ -141,7 +141,7 @@ int check_lv_segments(struct logical_volume *lv, int complete_vg)
 		area_multiplier = seg_is_striped(seg) ? seg->area_count - seg->segtype->parity_devs : 1;
 
 PFLA("segtype=%s seg->area_len=%u seg->area_count=%u parity_devs=%u area_multiplier=%u seg->len=%u", seg->segtype->name, seg->area_len, seg->area_count, seg->segtype->parity_devs, area_multiplier, seg->len);
-		if (seg->area_len * area_multiplier != seg->len) { //  - seg->reshape_len) {
+		if (seg->area_len * area_multiplier != seg->len) {
 			log_error("LV %s: segment %u has inconsistent "
 				  "area_len %u",
 				  lv->name, seg_count, seg->area_len);

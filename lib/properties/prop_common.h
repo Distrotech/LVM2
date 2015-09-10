@@ -15,6 +15,7 @@
 #define _LVM_PROP_COMMON_H
 
 #include <stdint.h>
+#include "lib.h" /* HM FIXME: REMOVEME: */
 
 /*
  * Common code for getting and setting properties.
@@ -51,6 +52,7 @@ static int _ ## NAME ## _get (const void *obj, struct lvm_property_type *prop) \
 { \
 	const struct TYPE *VAR = (const struct TYPE *)obj; \
 \
+PFLA("%s", "Huhu!!!") \
 	prop->value.integer = VALUE; \
 	return 1; \
 }

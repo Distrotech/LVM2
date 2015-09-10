@@ -177,6 +177,15 @@ typedef enum {
 	MKNODES
 } info_type_t;
 
+/* Return length of segment depending on type and reshape_len */
+static uint32_t _seg_len(const struct lv_segment *seg)
+{
+	if (seg_is_raid(seg))
+		return seg->len - seg->reshape_len;
+
+	return seg->len;
+}
+
 static int _info_run(info_type_t type, const char *name, const char *dlid,
 		     struct dm_info *dminfo, uint32_t *read_ahead,
 		     struct lv_seg_status *seg_status,
@@ -228,7 +237,7 @@ static int _info_run(info_type_t type, const char *name, const char *dlid,
 			target = dm_get_next_target(dmt, target, &target_start,
 						    &target_length, &target_name, &target_params);
 			if (((uint64_t) seg_status->seg->le * extent_size == target_start) &&
-			    ((uint64_t) (seg_status->seg->len - seg_status->seg->reshape_len) * extent_size == target_length)) {
+			    ((uint64_t) _seg_len(seg_status->seg) * extent_size == target_length)) {
 				params_to_process = target_params;
 				break;
 			}
@@ -2286,7 +2295,7 @@ static char *_add_error_device(struct dev_manager *dm, struct dm_tree *dtree,
 	struct lv_segment *seg_i;
 	struct dm_info info;
 	int segno = -1, i = 0;
-	uint64_t size = (uint64_t) (seg->len - seg->reshape_len) * seg->lv->vg->extent_size;
+	uint64_t size = (uint64_t) _seg_len(seg) * seg->lv->vg->extent_size;
 
 	dm_list_iterate_items(seg_i, &seg->lv->segments) {
 		if (seg == seg_i)
@@ -2565,7 +2574,7 @@ PFLA("%s seg->len=%u seg->reshape_len=%u", seg->lv->name ? seg->lv->name : "NOLV
 	return seg->segtype->ops->add_target_line(dm, dm->mem, dm->cmd,
 						  &dm->target_state, seg,
 						  laopts, dnode,
-						  extent_size * (seg->len - seg->reshape_len),
+						  extent_size * _seg_len(seg),
 						  &dm->pvmove_mirror_count);
 }
 
@@ -2756,7 +2765,7 @@ static int _add_segment_to_dtree(struct dev_manager *dm,
 		/* Replace target and all its used devs with error mapping */
 		log_debug_activation("Using error for pending delete %s.",
 				     seg->lv->name);
-		if (!dm_tree_node_add_error_target(dnode, (uint64_t)seg->lv->vg->extent_size * (seg->len - seg->reshape_len)))
+		if (!dm_tree_node_add_error_target(dnode, (uint64_t)seg->lv->vg->extent_size * _seg_len(seg)))
 			return_0;
 	} else if (!_add_target_to_dtree(dm, dnode, seg, laopts))
 		return_0;

@@ -46,8 +46,8 @@ enum {
 	SEG_RAID0_META,
 	SEG_RAID1,
 	SEG_RAID10_NEAR,
-	SEG_RAID10_FAR,
 	SEG_RAID10_OFFSET,
+	SEG_RAID10_FAR,
 	SEG_RAID4,
 	SEG_RAID5_N,
 	SEG_RAID5_LA,
@@ -88,8 +88,8 @@ static const struct {
 	{ SEG_RAID0_META, "raid0_meta"},
 	{ SEG_RAID1, "raid1"},
 	{ SEG_RAID10_NEAR, "raid10_near"},
-	{ SEG_RAID10_FAR, "raid10_far"},
 	{ SEG_RAID10_OFFSET, "raid10_offset"},
+	{ SEG_RAID10_FAR, "raid10_far"},
 	{ SEG_RAID4, "raid4"},
 	{ SEG_RAID5_N, "raid5_n"},
 	{ SEG_RAID5_LA, "raid5_la"},
@@ -111,18 +111,8 @@ static const struct {
 	 */
 	{ SEG_RAID5_LS, "raid5"}, /* same as "raid5_ls" (default for MD also) */
 	{ SEG_RAID6_ZR, "raid6"}, /* same as "raid6_zr" */
-	{ SEG_RAID10_NEAR, "raid10"}, /* same as "raid10_near" */
+	{ SEG_RAID10_NEAR, "raid10" } /* same as "raid10_near" */
 };
-
-static const char *_get_dm_segtype_target(unsigned type)
-{
-	unsigned t = DM_ARRAY_SIZE(_dm_segtypes);
-
-	while (t--)
-		if (type == _dm_segtypes[t].type)
-			return _dm_segtypes[t].target;
-	return NULL;
-}
 
 /* Some segment types have a list of areas of other devices attached */
 struct seg_area {
@@ -2418,7 +2408,7 @@ static int _raid_emit_segment_line(struct dm_task *dmt, uint32_t major,
 		       _2_if_value(seg->writebehind) +
 		       _2_if_value(seg->min_recovery_rate) +
 		       _2_if_value(seg->max_recovery_rate) +
-		       _2_if_value(seg->data_copies);
+		       _2_if_value(seg->data_copies > 1);
 
 	/* rebuilds and writemostly are 4 * 64 bits */
 	param_count += _get_params_count(seg->rebuilds);
@@ -2438,7 +2428,8 @@ static int _raid_emit_segment_line(struct dm_task *dmt, uint32_t major,
 		type = SEG_RAID10_NEAR;
 	}
 
-	EMIT_PARAMS(pos, "%s %d %u", _get_dm_segtype_target(type),
+	EMIT_PARAMS(pos, "%s %d %u",
+		    type == SEG_RAID10_NEAR ? "raid10" : _dm_segtypes[type].target,
 		    param_count, seg->stripe_size);
 
 	if (seg->type == SEG_RAID10_FAR)
@@ -2446,7 +2437,7 @@ static int _raid_emit_segment_line(struct dm_task *dmt, uint32_t major,
 	else if (seg->type == SEG_RAID10_OFFSET)
 		EMIT_PARAMS(pos, " raid10_format offset");
 
-	if (seg->data_copies)
+	if (seg->data_copies > 1)
 		EMIT_PARAMS(pos, " raid10_copies %u", seg->data_copies);
 
 	if (seg->flags & DM_NOSYNC)
