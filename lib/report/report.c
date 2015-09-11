@@ -1990,7 +1990,7 @@ static int _segreshape_len_disp(struct dm_report *rh, struct dm_pool *mem,
 {
 	const struct lv_segment *seg = (const struct lv_segment *) data;
 	uint32_t reshape_len = seg->reshape_len * seg->area_count /
-			       (seg->area_count - seg->segtype->parity_devs);
+			       (seg->area_count - ((seg->area_count > 2) ? seg->segtype->parity_devs : 0));
 
 	if (reshape_len)
 		return dm_report_field_uint32(rh, field, &reshape_len);

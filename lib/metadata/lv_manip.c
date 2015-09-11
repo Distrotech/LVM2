@@ -1328,7 +1328,8 @@ static uint32_t _area_len(struct lv_segment *seg, uint32_t extents)
 PFLA("extents=%u", extents);
 	/* Caller must ensure exact divisibility */
 	if (seg_is_striped(seg) || seg_is_striped_raid(seg)) {
-		uint32_t stripes = seg->area_count - seg->segtype->parity_devs;
+		uint32_t stripes = seg->area_count - ((seg->area_count > 2) ? seg->segtype->parity_devs : 0);
+PFLA("segtype=%s stripes=%u data_copies=%u", seg->segtype->name, stripes, seg->data_copies);
 
 		r = lv_raid_rimage_extents(extents, stripes, seg->data_copies ?: 1);
 	} else
