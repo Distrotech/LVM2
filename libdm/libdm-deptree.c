@@ -45,6 +45,7 @@ enum {
 	SEG_RAID0,
 	SEG_RAID0_META,
 	SEG_RAID1,
+	SEG_RAID01,
 	SEG_RAID10_NEAR,
 	SEG_RAID10_OFFSET,
 	SEG_RAID10_FAR,
@@ -87,6 +88,7 @@ static const struct {
 	{ SEG_RAID0, "raid0"},
 	{ SEG_RAID0_META, "raid0_meta"},
 	{ SEG_RAID1, "raid1"},
+	{ SEG_RAID01, "raid01"},
 	{ SEG_RAID10_NEAR, "raid10_near"},
 	{ SEG_RAID10_OFFSET, "raid10_offset"},
 	{ SEG_RAID10_FAR, "raid10_far"},
@@ -2159,6 +2161,7 @@ static int _emit_areas_line(struct dm_task *dmt __attribute__((unused)),
 		case SEG_RAID0:
 		case SEG_RAID0_META:
 		case SEG_RAID1:
+		case SEG_RAID01:
 		case SEG_RAID10_NEAR:
 		case SEG_RAID10_FAR:
 		case SEG_RAID10_OFFSET:
@@ -2426,7 +2429,8 @@ static int _raid_emit_segment_line(struct dm_task *dmt, uint32_t major,
 		 type == SEG_RAID10_OFFSET) {
 		param_count += 2;
 		type = SEG_RAID10_NEAR;
-	}
+	} else if (type == SEG_RAID01)
+		type = SEG_RAID1;
 
 	EMIT_PARAMS(pos, "%s %d %u",
 		    type == SEG_RAID10_NEAR ? "raid10" : _dm_segtypes[type].target,
@@ -2653,6 +2657,7 @@ PFL()
 	case SEG_RAID0:
 	case SEG_RAID0_META:
 	case SEG_RAID1:
+	case SEG_RAID01:
 	case SEG_RAID10_NEAR:
 	case SEG_RAID10_FAR:
 	case SEG_RAID10_OFFSET:

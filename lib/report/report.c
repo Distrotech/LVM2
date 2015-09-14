@@ -1989,8 +1989,12 @@ static int _segreshape_len_disp(struct dm_report *rh, struct dm_pool *mem,
 				const void *data, void *private)
 {
 	const struct lv_segment *seg = (const struct lv_segment *) data;
-	uint32_t reshape_len = seg->reshape_len * seg->area_count /
-			       (seg->area_count - ((seg->area_count > 2) ? seg->segtype->parity_devs : 0));
+	uint32_t reshape_len = 0;
+
+	if (seg_is_raid(seg))
+		reshape_len = first_seg(seg_lv(seg, 0))->reshape_len * seg->area_count;
+	else
+		reshape_len = seg->reshape_len;
 
 	if (reshape_len)
 		return dm_report_field_uint32(rh, field, &reshape_len);
@@ -2010,6 +2014,25 @@ static int _segdata_copies_disp(struct dm_report *rh, struct dm_pool *mem,
 		return dm_report_field_uint32(rh, field, &data_copies);
 
 	return _field_set_value(field, "", &GET_TYPE_RESERVED_VALUE(num_undef_32));
+}
+
+static int _segdata_offset_disp(struct dm_report *rh, struct dm_pool *mem,
+				struct dm_report_field *field,
+				const void *data, void *private)
+{
+	const struct lv_segment *seg = (const struct lv_segment *) data;
+	const char *what = "";
+
+	if (seg_is_reshapable_raid(seg)) {
+		uint64_t data_offset;
+
+		if (lv_raid_offset_and_sectors(seg->lv, &data_offset, NULL))
+			return dm_report_field_uint64(rh, field, &data_offset);
+
+		what = _str_unknown;
+	}
+
+	return _field_set_value(field, what, &GET_TYPE_RESERVED_VALUE(num_undef_64));
 }
 
 static int _segstart_disp(struct dm_report *rh, struct dm_pool *mem,

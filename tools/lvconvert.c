@@ -1717,7 +1717,8 @@ static int _lvconvert_raid(struct logical_volume *lv, struct lvconvert_params *l
 	    !seg_is_linear(seg) &&
 #if 1
 	    !seg_is_raid(seg) &&
-	    !seg_is_mirrored(seg)) {
+	    !seg_is_mirrored(seg) &&
+	    !seg_is_striped(seg)) {
 #else
 	    !seg_is_mirrored(seg) &&
 	    !(seg_is_any_raid0(seg) && seg->area_count == 1) &&

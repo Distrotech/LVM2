@@ -453,7 +453,7 @@ static int _read_mirror_params(struct cmd_context *cmd,
 static int _read_raid_params(struct cmd_context *cmd,
 			     struct lvcreate_params *lp)
 {
-	if (segtype_is_raid10_near(lp->segtype)) {
+	if (seg_is_raid10_near(lp)) {
 		if (lp->stripes * lp->mirrors < 2) {
 			if (arg_count(cmd, stripes_ARG) || arg_count(cmd, mirrors_ARG)) {
 				/* User supplied the bad argument */
@@ -463,25 +463,37 @@ static int _read_raid_params(struct cmd_context *cmd,
 
 			/* No stripe argument was given - default to 3 */
 			lp->stripes = 3;
+			log_warn("Defaulting to %u stripes with %s", lp->stripes, lp->segtype->name);
 		}
 	}
 
-	if (!lp->stripe_size && !segtype_is_raid1(lp->segtype))
+	if (seg_is_raid01(lp)) {
+		if (lp->stripes < 2) {
+			lp->stripes = 2;
+			log_warn("Defaulting to %u stripes with %s", lp->stripes, lp->segtype->name);
+		}
+		if (lp->mirrors < 2) {
+			lp->mirrors = 2; 
+			log_warn("Defaulting to %u mirrors with %s", lp->mirrors, lp->segtype->name);
+		}
+	}
+
+	if (!lp->stripe_size && !seg_is_raid1(lp))
 		lp->stripe_size = find_config_tree_int(cmd, metadata_stripesize_CFG, NULL) * 2;
 
 	/*
 	 * RAID1 does not take a stripe arg
 	 */
 	if ((lp->stripes > 1) &&
-	    (seg_is_mirrored(lp) || segtype_is_raid1(lp->segtype)) &&
-	    !segtype_is_any_raid10(lp->segtype)) {
+	    ((seg_is_mirrored(lp) && !seg_is_raid01(lp)) || seg_is_raid1(lp)) &&
+	    !seg_is_any_raid10(lp)) {
 		log_error("Stripe argument cannot be used with segment type, %s",
 			  lp->segtype->name);
 		return 0;
 	}
 
 	if (arg_count(cmd, mirrors_ARG) &&
-	    !(segtype_is_raid1(lp->segtype) || segtype_is_any_raid10(lp->segtype))) {
+	    !(seg_is_raid1(lp) ||seg_is_raid01(lp) || seg_is_any_raid10(lp))) {
 		log_error("Mirror argument cannot be used with segment type, %s",
 			  lp->segtype->name);
 		return 0;
@@ -1242,9 +1254,9 @@ static int _check_raid_parameters(struct volume_group *vg,
 		if (!lp->stripe_size)
 			lp->stripe_size = find_config_tree_int(cmd, metadata_stripesize_CFG, NULL) * 2;
 
-		if (lp->stripes <= lp->segtype->parity_devs) {
+		if (lp->stripes < lp->segtype->parity_devs) {
 			log_error("Number of stripes must be at least %d for %s",
-				  lp->segtype->parity_devs + 1,
+				  lp->segtype->parity_devs,
 				  lp->segtype->name);
 			return 0;
 		}

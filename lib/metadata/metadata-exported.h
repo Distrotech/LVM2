@@ -1160,6 +1160,10 @@ int lv_raid_remove_missing(struct logical_volume *lv);
 int partial_raid_lv_supports_degraded_activation(const struct logical_volume *lv);
 int lv_raid10_far_reorder_segments(struct logical_volume *lv, uint32_t extents, int extend);
 uint32_t lv_raid_rimage_extents(uint32_t extents, uint32_t stripes, uint32_t data_copies);
+int lv_create_raid01(struct logical_volume *lv, const struct segment_type *segtype,
+		     unsigned mirrors, unsigned stripes,
+		     unsigned stripe_size, unsigned region_size,
+		     unsigned extents, struct dm_list *allocate_pvs);
 /* --  metadata/raid_manip.c */
 
 /* ++  metadata/cache_manip.c */

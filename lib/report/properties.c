@@ -418,6 +418,10 @@ GET_LVSEG_NUM_PROPERTY_FN(data_copies, lvseg->segtype->parity_devs ? lvseg->segt
 GET_LVSEG_NUM_PROPERTY_FN(reshapelen, (lvseg->reshape_len *lvseg->area_count / (lvseg->area_count - lvseg->segtype->parity_devs)))
 #define _reshape_len_set prop_not_implemented_set
 GET_LVSEG_NUM_PROPERTY_FN(reshape_len, (lvseg->reshape_len *lvseg->area_count / (lvseg->area_count - lvseg->segtype->parity_devs)))
+#define _dataoffset_set prop_not_implemented_set
+GET_LVSEG_NUM_PROPERTY_FN(dataoffset, lvseg->data_offset)
+#define _data_offset_set prop_not_implemented_set
+GET_LVSEG_NUM_PROPERTY_FN(data_offset, lvseg->data_offset)
 #define _segtype_set prop_not_implemented_set
 GET_LVSEG_NUM_PROPERTY_FN(stripes, lvseg->area_count)
 #define _stripes_set prop_not_implemented_set

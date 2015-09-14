@@ -121,6 +121,7 @@ enum _lv_type_name_enum {
 	LV_TYPE_RAID0,
 	LV_TYPE_RAID0_META,
 	LV_TYPE_RAID1,
+	LV_TYPE_RAID01,
 	LV_TYPE_RAID10,
 	LV_TYPE_RAID10_NEAR,
 	LV_TYPE_RAID10_FAR,
@@ -177,6 +178,7 @@ static const char *_lv_type_names[] = {
 	[LV_TYPE_RAID0] =				SEG_TYPE_NAME_RAID0,
 	[LV_TYPE_RAID0_META] =				SEG_TYPE_NAME_RAID0_META,
 	[LV_TYPE_RAID1] =				SEG_TYPE_NAME_RAID1,
+	[LV_TYPE_RAID01] =				SEG_TYPE_NAME_RAID01,
 	[LV_TYPE_RAID10] =				SEG_TYPE_NAME_RAID10,
 	[LV_TYPE_RAID10_NEAR] =				SEG_TYPE_NAME_RAID10_NEAR,
 	[LV_TYPE_RAID10_FAR] =				SEG_TYPE_NAME_RAID10_FAR,
@@ -983,7 +985,8 @@ struct lv_segment *alloc_lv_segment(const struct segment_type *segtype,
 		dm_pool_free(mem, seg); /* frees everything alloced since seg */
 		return_NULL;
 	}
-PFLA("lv=%s le=%u len=%u area_len=%u area_count=%u seg->meta_areas=%p", lv->name, le, len, area_len, area_count, seg->meta_areas);
+PFLA("lv=%s segtype=%s le=%u len=%u area_len=%u area_count=%u seg->meta_areas=%p",
+     lv->name, segtype->name, le, len, area_len, area_count, seg->meta_areas);
 
 	seg->segtype = segtype;
 	seg->lv = lv;
@@ -1011,7 +1014,6 @@ PFLA("seg->stripe_size=%u", seg->stripe_size);
 
 	if (segtype_is_mirrored(segtype))
 		lv->status |= MIRRORED;
-
 PFL();
 	return seg;
 }
@@ -1275,7 +1277,7 @@ int set_lv_segment_area_lv(struct lv_segment *seg, uint32_t area_num,
 
 	if (status & RAID_META) {
 		if (seg->meta_areas) {
-PFLA("metadata LV = %s", lv->name);
+PFLA("seg->lv=%s metadata LV=%s s=%u le=%u len=%u status=%lX", display_lvname(seg->lv), display_lvname(lv), area_num, le, lv->le_count, status);
 			seg->meta_areas[area_num].type = AREA_LV;
 			seg_metalv(seg, area_num) = lv;
 			seg_metale(seg, area_num) = le;
@@ -1284,7 +1286,7 @@ else {
 PFLA("NO meta_areas!!! metadata LV = %s", lv->name);
 }
 	} else {
-PFLA("data LV = %s", lv->name);
+PFLA("seg->lv=%s data LV=%s s=%u le=%u len=%u status=%lX", display_lvname(seg->lv), display_lvname(lv), area_num, le, lv->le_count, status);
 		seg->areas[area_num].type = AREA_LV;
 		seg_lv(seg, area_num) = lv;
 		seg_le(seg, area_num) = le;
@@ -1406,6 +1408,9 @@ static uint32_t _calc_area_multiple(const struct segment_type *segtype,
 	if (!area_count)
 		return 1;
 
+	if (segtype_is_raid01(segtype))
+		return 1;
+
 	/* Striped */
 PFLA("area_count=%u stripes=%u", area_count, stripes);
 	if (segtype_is_striped(segtype))
@@ -1457,8 +1462,6 @@ static int _lv_reduce(struct logical_volume *lv, uint32_t extents, int delete)
 	struct logical_volume *pool_lv;
 
 PFLA("lv=%s lv->le_count=%u seg=%p extents=%u stripes=%u data_copies=%u", lv->name, lv->le_count, seg, extents, stripes, seg->data_copies);
-if (!seg)
-return_0;
 	if (seg_is_striped(seg) || seg_is_striped_raid(seg))
 		extents = _round_to_stripe_boundary(lv, extents, seg->area_count - seg->segtype->parity_devs,
 						    seg->data_copies, 0);
@@ -1767,6 +1770,8 @@ static struct alloc_handle *_alloc_init(struct cmd_context *cmd,
 
 	if (segtype_is_virtual(segtype))
 		area_count = 0;
+	else if (segtype_is_raid01(segtype))
+		area_count = stripes * mirrors;
 	else
 		area_count = stripes < 2 ? mirrors : stripes;
 
@@ -1849,6 +1854,8 @@ PFLA("ah->area_multiple=%u area_count=%u new_extents=%u total_extents=%u", ah->a
 	if (segtype_is_raid(segtype)) {
 		if (segtype_is_any_raid10(segtype))
 			total_extents = lv_raid_rimage_extents(total_extents, stripes, mirrors) * stripes;
+		else if (segtype_is_raid01(segtype))
+			total_extents /= stripes;
 
 PFLA("total_extents=%u stripes=%u mirrors=%u", total_extents, stripes, mirrors);
 
@@ -2086,11 +2093,12 @@ static int _setup_alloced_segment(struct logical_volume *lv, uint64_t status,
 	uint32_t s, extents, area_multiple, stripes = area_count - segtype->parity_devs;
 	struct lv_segment *seg;
 
+PFLA("area_count=%u data_copies=%u segtype=%s", area_count, data_copies, segtype->name);
 	if (segtype_is_raid(segtype))
 		extents = lv_raid_rimage_extents(aa[0].len * stripes, stripes, data_copies);
 	else {
-		area_multiple = _calc_area_multiple(segtype, area_count, 0, 1);
-PFLA("area_multiple=%u", area_multiple);
+		area_multiple = _calc_area_multiple(segtype, area_count, stripes, data_copies);
+PFLA("aa[0]=%p area_multiple=%u", (void *) aa, area_multiple);
 		extents = aa[0].len * area_multiple;
 	}
 PFLA("aa[0].len=%u stripes=%u, data_copies=%u", aa[0].len, stripes, data_copies);
@@ -3515,6 +3523,9 @@ struct alloc_handle *allocate_extents(struct volume_group *vg,
 	int extend = lv ? 1 : 0;
 	struct alloc_handle *ah;
 
+PFLA("segtype=%s stripes=%u mirrors=%u, log_count=%u, region_size=%u extents=%u",
+     segtype->name, stripes, mirrors, log_count, region_size, extents);
+
 	if (segtype_is_virtual(segtype)) {
 		log_error("allocate_extents does not handle virtual segments");
 		return NULL;
@@ -3537,15 +3548,7 @@ struct alloc_handle *allocate_extents(struct volume_group *vg,
 
 	if (alloc >= ALLOC_INHERIT)
 		alloc = vg->alloc;
-#if 0
-	/* raid10_{far,offset} store mirrored data in the 2nd half of the sub-lv */
-	/* HM FIXME: find better way to go by mirrors=N */
-	if (segtype_is_raid10_far(segtype) || segtype_is_raid10_offset(segtype))
-		extents *= mirrors;
-PFLA("mirrors=%u stripes=%u extents=%u", mirrors, stripes, extents);
-#endif
 
-PFLA("log_count=%u", log_count);
 	if (!(ah = _alloc_init(vg->cmd, vg->vgmem, segtype, alloc, approx_alloc, extend,
 			       lv ? lv->le_count : 0, extents, mirrors, stripes, log_count,
 			       vg->extent_size, region_size,
@@ -4103,13 +4106,13 @@ static int _lv_extend_layered_lv(struct alloc_handle *ah,
 
 	if (!(segtype = get_segtype_from_string(lv->vg->cmd, "striped")))
 		return_0;
-PFLA("extents=%u", extents);
+PFLA("extents=%u mirrors=%u stripes=%u", extents, mirrors, stripes);
 	/*
 	 * The component devices of a "striped" LV all go in the same
 	 * LV.  However, RAID has an LV for each device - making the
-	 * 'stripes' and 'stripe_size' parameters meaningless.
+	 * 'stripes' and 'stripe_size' parameters meaningless unless raid01.
 	 */
-	if (seg_is_raid(seg)) {
+	if (seg_is_raid(seg) && !seg_is_raid01(seg)) {
 		stripes = 1;
 		stripe_size = 0;
 	}
@@ -4124,7 +4127,7 @@ PFLA("extents=%u", extents);
 		}
 
 		sub_lv = seg_lv(seg, s);
-PFLA("extending %s in %s, stripes=%u", sub_lv->name, lv->name, stripes);
+PFLA("extending %s in %s, stripes=%u", display_lvname(sub_lv), lv->name, stripes);
 		if (!lv_add_segment(ah, fa, stripes, 1 /* data_copies */,
 				    sub_lv, segtype,
 				    stripe_size, sub_lv->status, 0)) {
@@ -4132,6 +4135,7 @@ PFLA("extending %s in %s, stripes=%u", sub_lv->name, lv->name, stripes);
 				  sub_lv->name, lv->name);
 			return 0;
 		}
+PFLA("sub_lv=%s len=%u", display_lvname(sub_lv), sub_lv->le_count);
 
 		if (seg_is_raid(seg) &&
 		    seg->meta_areas &&
@@ -4219,9 +4223,12 @@ int lv_extend(struct logical_volume *lv,
 	/* HM FIXME: caller should ensure... */
 	if (seg) {
 		mirrors = seg->data_copies;
-		stripes = seg->area_count - seg->segtype->parity_devs;
+		if (seg_is_raid01(seg))
+			stripes = first_seg(seg_lv(seg, 0))->area_count;
+		else
+			stripes = seg->area_count - seg->segtype->parity_devs;
 	}
-	PFLA("mirrors=%u stripes=%u", mirrors, stripes);
+PFLA("mirrors=%u stripes=%u", mirrors, stripes);
 #endif
 	if (segtype_is_virtual(segtype))
 		return lv_add_virtual_segment(lv, 0u, extents, segtype);
@@ -4237,8 +4244,12 @@ PFLA("extents=%u stripe_size=%u", extents, stripe_size);
 	} else if (segtype_is_striped(segtype) || segtype_is_striped_raid(segtype))
 		extents = _round_to_stripe_boundary(lv, extents, stripes, mirrors, 1);
 PFL();
+PFLA("extents=%u segtype=%s mirrors=%u stripes=%u log_count=%u", extents, segtype->name, mirrors, stripes, log_count);
 
-PFLA("extents=%u mirrors=%u stripes=%u log_count=%u", extents, mirrors, stripes, log_count);
+	/* Special creation case for raid01 (mirror(s) on top of raid0 stripes */
+	if (!lv->le_count && segtype_is_raid01(segtype))
+		return lv_create_raid01(lv, segtype, mirrors, stripes, stripe_size,
+					region_size, extents, allocatable_pvs);
 #if 1
 	/* FIXME log_count should be 1 for mirrors */
 	if (segtype_is_mirror(segtype))
@@ -5170,6 +5181,10 @@ static int _lvresize_adjust_extents(struct cmd_context *cmd, struct logical_volu
 			/* FIXME Warn if command line values are being overridden? */
 			lp->stripes = mirr_seg->area_count;
 			lp->stripe_size = mirr_seg->stripe_size;
+		} else if (!strcmp(mirr_seg->segtype->name, _lv_type_names[LV_TYPE_RAID01])) {
+			/* FIXME Warn if command line values are being overridden? */
+			lp->stripes = first_seg(seg_lv(mirr_seg, 0))->area_count;
+			lp->stripe_size = first_seg(seg_lv(mirr_seg, 0))->stripe_size;
 		} else if (!(lp->stripes == 1 || (lp->stripes > 1 && lp->stripe_size))) {
 			/* If extending, find stripes, stripesize & size of last segment */
 			/* FIXME Don't assume mirror seg will always be AREA_LV */
