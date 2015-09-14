@@ -5670,7 +5670,7 @@ TAKEOVER_FN(_r0m_r01)
 TAKEOVER_FN(_r01_s)
 {
 	uint32_t s;
-	struct logical_volume *image_lv;
+	struct logical_volume *image_lv = NULL;
 	struct lv_segment *seg = first_seg(lv);
 
 	for (s = 0; s < seg->area_count; s++)
@@ -5678,9 +5678,29 @@ TAKEOVER_FN(_r01_s)
 			image_lv = seg_lv(seg, s);
 			break;
 		}
-
-
-	return 0;
+PFL();
+	if (!image_lv) {
+		log_error("No mirror in sync!");
+		return 0;
+	}
+PFL();
+	for ( ; s < seg->area_count - 1; s++)
+		seg_lv(seg, s) = seg_lv(seg, s + 1);
+PFL();
+	seg->area_count--;
+	for (s = 0; s < seg->area_count; s++)
+		if (!_replace_lv_with_error_segment(seg_lv(seg, s)))
+			return_0;
+PFL();
+	if (!set_lv_segment_area_lv(seg, 0, image_lv, 0 /* le */, image_lv->status)) {
+		log_error("Failed to add sublv %s", display_lvname(image_lv));
+		return 0;
+	}
+PFL();
+	if (!remove_layer_from_lv(lv, image_lv))
+		return_0;
+PFL();
+	return lv_update_and_reload(lv);
 }
 
 /* raid01 with any number of mirrors to raid0 */
