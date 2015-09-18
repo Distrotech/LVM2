@@ -570,7 +570,7 @@ static void mark_outdated_pv(lvmetad_state *s, const char *vgid, const char *pvi
 	     dm_config_find_int64(pvmeta->root, "pvmeta/mda1/ignore", 1)))
 		return;
 
-	WARN(s, "PV %s has outdated metadata", pvid);
+	WARN(s, "PV %s has outdated metadata for VG %s", pvid, vgid);
 
 	outdated_pvs = dm_hash_lookup(s->vgid_to_outdated_pvs, vgid);
 	if (!outdated_pvs) {
@@ -831,131 +831,812 @@ static int vg_remove_if_missing(lvmetad_state *s, const char *vgid, int update_p
 	return 1;
 }
 
-/* No locks need to be held. The pointers are never used outside of the scope of
- * this function, so they can be safely destroyed after update_metadata returns
- * (anything that might have been retained is copied). */
-static int update_metadata(lvmetad_state *s, const char *name, const char *_vgid,
-			   struct dm_config_node *metadata, int64_t *oldseq, const char *pvid)
+/*
+ * Remove all hash table references to arg_name and arg_vgid
+ * so that new metadata using this name and/or vgid can be added
+ * without interference previous data.
+ *
+ * This is used if a command updates metadata in the cache,
+ * but update_metadata finds that what's in the cache is not
+ * consistent with a normal transition between old and new
+ * metadata.  If this happens, it assumes that the command
+ * is providing the correct metadata, so it first calls this
+ * function to purge all records of the old metadata so the
+ * new metadata can be added.
+ */
+
+static void _purge_metadata(lvmetad_state *s, const char *arg_name, const char *arg_vgid)
 {
-	struct dm_config_tree *cft = NULL;
-	struct dm_config_tree *old;
-	int retval = 0;
-	int seq;
-	int haveseq = -1;
-	const char *oldname = NULL;
-	const char *oldvgid = NULL;
+	struct dm_config_tree *old_meta;
+	struct dm_config_tree *outdated_pvs;
+	struct dm_hash_node *n;
+	const char *pvid;
 	const char *vgid;
-	char *cfgname;
 
 	lock_vgid_to_metadata(s);
-	old = dm_hash_lookup(s->vgid_to_metadata, _vgid);
-	oldname = dm_hash_lookup(s->vgid_to_vgname, _vgid);
-	/* If _vgid is unknown, it may be a new vgid for an existing vg. */
-	if (!oldname)
-		oldvgid = dm_hash_lookup(s->vgname_to_vgid, name);
+
+	old_meta = dm_hash_lookup(s->vgid_to_metadata, arg_vgid);
+	outdated_pvs = dm_hash_lookup(s->vgid_to_outdated_pvs, arg_vgid);
+
+	dm_hash_remove(s->vgid_to_metadata, arg_vgid);
+	dm_hash_remove(s->vgid_to_vgname, arg_vgid);
+	dm_hash_remove(s->vgid_to_outdated_pvs, arg_vgid);
+	dm_hash_remove(s->vgname_to_vgid, arg_name);
+
+	if (old_meta)
+		dm_config_destroy(old_meta);
+	if (outdated_pvs)
+		dm_config_destroy(outdated_pvs);
+
 	unlock_vgid_to_metadata(s);
-
-	if (oldvgid) {
-		DEBUGLOG(s, "Existing name %s with vgid %s has new vgid %s",
-			 name, oldvgid, _vgid);
-		remove_metadata(s, oldvgid, 1);
-		oldname = NULL;
-		oldvgid = NULL;
-	}
-
-	lock_vg(s, _vgid);
-
-	seq = dm_config_find_int(metadata, "metadata/seqno", -1);
-
-	if (old)
-		haveseq = dm_config_find_int(old->root, "metadata/seqno", -1);
-
-	if (seq < 0)
-		goto out;
-
-	filter_metadata(metadata); /* sanitize */
-
-	if (oldseq) {
-		if (old)
-			*oldseq = haveseq;
-		else
-			*oldseq = seq;
-	}
-
-	if (seq == haveseq) {
-		retval = 1;
-		if (compare_config(metadata, old->root))
-			retval = 0;
-		DEBUGLOG(s, "Not updating metadata for %s at %d (%s)", _vgid, haveseq,
-		      retval ? "ok" : "MISMATCH");
-		if (!retval) {
-			DEBUGLOG_cft(s, "OLD: ", old->root);
-			DEBUGLOG_cft(s, "NEW: ", metadata);
-		}
-		goto out;
-	}
-
-	if (seq < haveseq) {
-		DEBUGLOG(s, "Refusing to update metadata for %s (at %d) to %d", _vgid, haveseq, seq);
-
-		if (pvid)
-			mark_outdated_pv(s, dm_config_find_str(old->root, "metadata/id", NULL), pvid);
-
-		/* TODO: notify the client that their metadata is out of date? */
-		retval = 1;
-		goto out;
-	}
-
-	if (!(cft = dm_config_create()) ||
-	    !(cft->root = dm_config_clone_node(cft, metadata, 0))) {
-		ERROR(s, "Out of memory");
-		goto out;
-	}
-
-	vgid = dm_config_find_str(cft->root, "metadata/id", NULL);
-
-	if (!vgid || !name) {
-		DEBUGLOG(s, "Name '%s' or uuid '%s' missing!", name, vgid);
-		goto out;
-	}
 
 	lock_pvid_to_vgid(s);
+ restart:
+	dm_hash_iterate(n, s->pvid_to_vgid) {
+		pvid = dm_hash_get_key(s->pvid_to_vgid, n);
+		vgid = dm_hash_get_data(s->pvid_to_vgid, n);
 
-	if (haveseq >= 0 && haveseq < seq) {
-		INFO(s, "Updating metadata for %s at %d to %d", _vgid, haveseq, seq);
-		if (oldseq)
-			update_pvid_to_vgid(s, old, vgid, MARK_OUTDATED);
-		/* temporarily orphan all of our PVs */
-		update_pvid_to_vgid(s, old, "#orphan", 0);
+		if (strcmp(vgid, arg_vgid))
+			continue;
+
+		dm_hash_remove(s->pvid_to_vgid, pvid);
+		goto restart;
 	}
+	unlock_pvid_to_vgid(s);
+}
+
+/*
+ * Updates for new vgid and new metadata.
+ * arg_name is unchanged.
+ * arg_vgid is the current/old vgid to remove.
+ * new_vgid is the new vgid to add.
+ */
+
+static int _update_metadata_new_vgid(lvmetad_state *s,
+				     const char *arg_name, const char *arg_vgid,
+				     const char *new_vgid,
+				     struct dm_config_tree *old_meta,
+				     struct dm_config_tree *new_meta)
+{
+	char *new_vgid_dup = NULL;
+	char *arg_name_dup = NULL;
+	char *rem_str;
+	int abort_daemon = 0;
+	int retval = 0;
+
+	if (!(new_vgid_dup = dm_strdup(new_vgid)))
+		goto out_free;
+
+	if (!(arg_name_dup = dm_strdup(arg_name)))
+		goto out_free;
+
+	lock_vg(s, new_vgid);
+	lock_pvid_to_vgid(s);
+	lock_vgid_to_metadata(s);
+
+	/*
+	 * Remove the mappings between vgid/name for the old vgid.
+	 */
+	if ((rem_str = dm_hash_lookup(s->vgid_to_vgname, arg_vgid)))
+		dm_free(rem_str);
+	if ((rem_str = dm_hash_lookup(s->vgname_to_vgid, arg_name)))
+		dm_free(rem_str);
+	dm_hash_remove(s->vgid_to_vgname, arg_vgid);
+	dm_hash_remove(s->vgname_to_vgid, arg_name);
+
+	/*
+	 * Insert new mappings between vgid/name for the new vgid.
+	 */
+
+	if (!dm_hash_insert(s->vgid_to_vgname, new_vgid, arg_name_dup)) {
+		ERROR(s, "update_metadata_new_vgid out of memory for name hash insert for %s %s", arg_name, new_vgid);
+		abort_daemon = 1;
+		goto out;
+	}
+
+	if (!dm_hash_insert(s->vgname_to_vgid, arg_name, new_vgid_dup)) {
+		ERROR(s, "update_metadata_new_vgid out of memory for vgid hash insert for %s %s", arg_name, new_vgid);
+		abort_daemon = 1;
+		goto out;
+	}
+
+	/*
+	 * Temporarily orphan the PVs in the old metadata.
+	 */
+	if (!update_pvid_to_vgid(s, old_meta, "#orphan", 0)) {
+		ERROR(s, "update_metadata_new_vgid failed to move PVs for %s %s", arg_name, new_vgid);
+		abort_daemon = 1;
+		goto out;
+	}
+
+	/*
+	 * Update to the new metadata.
+	 */
+	if (!dm_hash_insert(s->vgid_to_metadata, new_vgid, new_meta)) {
+		ERROR(s, "update_metadata_new_vgid out of memory for meta hash insert for %s %s", arg_name, new_vgid);
+		abort_daemon = 1;
+		goto out;
+	}
+
+	/*
+	 * Reassign PVs based on the new metadata.
+	 */
+	if (!update_pvid_to_vgid(s, new_meta, new_vgid, 1)) {
+		ERROR(s, "update_metadata_new_name failed to update PVs for %s %s", arg_name, new_vgid);
+		abort_daemon = 1;
+		goto out;
+	}
+
+	dm_config_destroy(old_meta);
+
+	DEBUGLOG(s, "update_metadata_new_vgid is done for %s %s", arg_name, new_vgid);
+	retval = 1;
+out:
+	unlock_vgid_to_metadata(s);
+	unlock_pvid_to_vgid(s);
+	unlock_vg(s, new_vgid);
+
+out_free:
+	if (!new_vgid_dup || !arg_name_dup || abort_daemon) {
+		ERROR(s, "lvmetad could not be updated and is aborting.");
+		exit(EXIT_FAILURE);
+	}
+
+	if (!retval && new_meta)
+		dm_config_destroy(new_meta);
+	return retval;
+}
+
+/*
+ * Updates for new name and new metadata.
+ * arg_vgid is unchanged.
+ * arg_name is the current/old name to remove.
+ * new_name is the new name to add.
+ */
+
+static int _update_metadata_new_name(lvmetad_state *s, const char *arg_name, const char *arg_vgid,
+				     const char *new_name,
+				     struct dm_config_tree *old_meta,
+				     struct dm_config_tree *new_meta)
+{
+	char *new_name_dup = NULL;
+	char *arg_vgid_dup = NULL;
+	char *rem_str;
+	int abort_daemon = 0;
+	int retval = 0;
+
+	if (!(new_name_dup = dm_strdup(new_name)))
+		goto out_free;
+
+	if (!(arg_vgid_dup = dm_strdup(arg_vgid)))
+		goto out_free;
+
+	lock_vg(s, arg_vgid);
+	lock_pvid_to_vgid(s);
+	lock_vgid_to_metadata(s);
+
+	/*
+	 * Remove the mappings between vgid/name for the old name.
+	 */
+	if ((rem_str = dm_hash_lookup(s->vgid_to_vgname, arg_vgid)))
+		dm_free(rem_str);
+	if ((rem_str = dm_hash_lookup(s->vgname_to_vgid, arg_name)))
+		dm_free(rem_str);
+	dm_hash_remove(s->vgid_to_vgname, arg_vgid);
+	dm_hash_remove(s->vgname_to_vgid, arg_name);
+
+	/*
+	 * Insert new mappings between vgid/name for the new name.
+	 */
+
+	if (!dm_hash_insert(s->vgid_to_vgname, arg_vgid, new_name_dup)) {
+		ERROR(s, "update_metadata_new_name out of memory for name hash insert for %s %s", new_name, arg_vgid);
+		abort_daemon = 1;
+		goto out;
+	}
+
+	if (!dm_hash_insert(s->vgname_to_vgid, new_name, arg_vgid_dup)) {
+		ERROR(s, "update_metadata_new_name out of memory for vgid hash insert for %s %s", new_name, arg_vgid);
+		abort_daemon = 1;
+		goto out;
+	}
+
+	/*
+	 * Temporarily orphan the PVs in the old metadata.
+	 */
+	if (!update_pvid_to_vgid(s, old_meta, "#orphan", 0)) {
+		ERROR(s, "update_metadata_new_name failed to move PVs for %s %s", new_name, arg_vgid);
+		abort_daemon = 1;
+		goto out;
+	}
+
+	/*
+	 * Update to the new metadata.
+	 */
+	if (!dm_hash_insert(s->vgid_to_metadata, arg_vgid, new_meta)) {
+		ERROR(s, "update_metadata_new_name out of memory for meta hash insert for %s %s", new_name, arg_vgid);
+		abort_daemon = 1;
+		goto out;
+	}
+
+	/*
+	 * Reassign PVs based on the new metadata.
+	 */
+	if (!update_pvid_to_vgid(s, new_meta, arg_vgid, 1)) {
+		ERROR(s, "update_metadata_new_name failed to update PVs for %s %s", new_name, arg_vgid);
+		abort_daemon = 1;
+		goto out;
+	}
+
+	dm_config_destroy(old_meta);
+
+	DEBUGLOG(s, "update_metadata_new_name is done for %s %s", new_name, arg_vgid);
+	retval = 1;
+out:
+	unlock_vgid_to_metadata(s);
+	unlock_pvid_to_vgid(s);
+	unlock_vg(s, arg_vgid);
+
+out_free:
+	if (!new_name_dup || !arg_vgid_dup || abort_daemon) {
+		ERROR(s, "lvmetad could not be updated and is aborting.");
+		exit(EXIT_FAILURE);
+	}
+
+	if (!retval && new_meta)
+		dm_config_destroy(new_meta);
+	return retval;
+}
+
+
+/*
+ * Add new entries to all hash tables.
+ */
+
+static int _update_metadata_add_new(lvmetad_state *s, const char *arg_name, const char *arg_vgid,
+				    struct dm_config_tree *new_meta)
+{
+	char *arg_name_dup = NULL;
+	char *arg_vgid_dup = NULL;
+	int abort_daemon = 0;
+	int retval = 0;
+
+	DEBUGLOG(s, "update_metadata_add_new for %s %s", arg_name, arg_vgid);
+
+	if (!(arg_name_dup = dm_strdup(arg_name)))
+		goto out_free;
+
+	if (!(arg_vgid_dup = dm_strdup(arg_vgid)))
+		goto out_free;
+
+	lock_vg(s, arg_vgid);
+	lock_pvid_to_vgid(s);
+	lock_vgid_to_metadata(s);
+
+	if (!dm_hash_insert(s->vgid_to_metadata, arg_vgid, new_meta)) {
+		ERROR(s, "update_metadata_add_new out of memory for meta hash insert for %s %s", arg_name, arg_vgid);
+		abort_daemon = 1;
+		goto out;
+	}
+
+	if (!dm_hash_insert(s->vgid_to_vgname, arg_vgid, arg_name_dup)) {
+		ERROR(s, "update_metadata_add_new out of memory for name hash insert for %s %s", arg_name, arg_vgid);
+		abort_daemon = 1;
+		goto out;
+	}
+
+	if (!dm_hash_insert(s->vgname_to_vgid, arg_name, arg_vgid_dup)) {
+		ERROR(s, "update_metadata_add_new out of memory for vgid hash insert for %s %s", arg_name, arg_vgid);
+		abort_daemon = 1;
+		goto out;
+	}
+
+	if (!update_pvid_to_vgid(s, new_meta, arg_vgid, 1)) {
+		ERROR(s, "update_metadata_add_new failed to update PVs for %s %s", arg_name, arg_vgid);
+		abort_daemon = 1;
+		goto out;
+	}
+
+	DEBUGLOG(s, "update_metadata_add_new is done for %s %s", arg_name, arg_vgid);
+	retval = 1;
+out:
+	unlock_vgid_to_metadata(s);
+	unlock_pvid_to_vgid(s);
+	unlock_vg(s, arg_vgid);
+
+out_free:
+	if (!arg_name_dup || !arg_vgid_dup || abort_daemon) {
+		ERROR(s, "lvmetad could not be updated and is aborting.");
+		exit(EXIT_FAILURE);
+	}
+
+	if (!retval && new_meta)
+		dm_config_destroy(new_meta);
+	return retval;
+}
+
+/*
+ * No locks need to be held. The pointers are never used outside of the scope of
+ * this function, so they can be safely destroyed after update_metadata returns
+ * (anything that might have been retained is copied).
+ *
+ * When this is called from pv_found, the metadata was read from a single
+ * PV specified by the pvid arg and ret_old_seq is not NULL.  The metadata
+ * should match the existing metadata (matching seqno).  If the metadata
+ * from pv_found has a smaller seqno, it means that the PV is outdated
+ * (was previously used in the VG and now reappeared after changes to the VG).
+ * The next command to access the VG will erase the outdated PV and then clear
+ * the outdated pv record here.  If the metadata from pv_found has a larger
+ * seqno than the existing metadata, it means ... (existing pvs are outdated?)
+ *
+ * When this is caleld from vg_update, the metadata is from a command that
+ * has new metadata that should replace the existing metadata.
+ * pvid and ret_old_seq are both NULL.
+ */
+
+static int update_metadata(lvmetad_state *s, const char *arg_name, const char *arg_vgid,
+			   struct dm_config_node *new_metadata, int64_t *ret_old_seq,
+			   const char *pvid)
+{
+	struct dm_config_tree *old_meta = NULL;
+	struct dm_config_tree *new_meta = NULL;
+	const char *arg_name_lookup; /* name lookup result from arg_vgid */
+	const char *arg_vgid_lookup; /* vgid lookup result from arg_name */
+	const char *old_name = NULL;
+	const char *new_name = NULL;
+	const char *old_vgid = NULL;
+	const char *new_vgid = NULL;
+	const char *new_metadata_vgid;
+	int old_seq = -1;
+	int new_seq = -1;
+	int needs_repair = 0;
+	int abort_daemon = 0;
+	int retval = 0;
+
+	DEBUGLOG(s, "Begin update_metadata arg_vgid %s arg_name %s pvid %s",
+		 arg_vgid, arg_name, pvid ?: "none");
+
+	/*
+	 * Begin by figuring out what has changed:
+	 * . the VG could be new - found no existing record of the vgid or name.
+	 * . the VG could have a new vgid - found an existing record of the name.
+	 * . the VG could have a new name - found an existing record of the vgid.
+	 * . the VG could have unchanged vgid and name - found existing record of both.
+	 */
 
 	lock_vgid_to_metadata(s);
-	DEBUGLOG(s, "Mapping %s to %s", vgid, name);
+	arg_name_lookup = dm_hash_lookup(s->vgid_to_vgname, arg_vgid);
+	arg_vgid_lookup = dm_hash_lookup(s->vgname_to_vgid, arg_name);
 
-	retval = ((cfgname = dm_pool_strdup(dm_config_memory(cft), name)) &&
-		  dm_hash_insert(s->vgid_to_metadata, vgid, cft) &&
-		  dm_hash_insert(s->vgid_to_vgname, vgid, cfgname) &&
-		  dm_hash_insert(s->vgname_to_vgid, name, (void*) vgid)) ? 1 : 0;
+	/*
+	 * A new VG when there is no existing record of the name or vgid args.
+	 */
+	if (!arg_name_lookup && !arg_vgid_lookup) {
+		new_vgid = arg_vgid;
+		new_name = arg_name;
 
-	if (retval && oldname && strcmp(name, oldname)) {
-		const char *vgid_prev = dm_hash_lookup(s->vgname_to_vgid, oldname);
-		if (vgid_prev && !strcmp(vgid_prev, vgid))
-			dm_hash_remove(s->vgname_to_vgid, oldname);
+		DEBUGLOG(s, "update_metadata new name %s and new vgid %s",
+			 new_name, new_vgid);
+		goto update;
 	}
 
-	if (haveseq >= 0 && haveseq < seq)
-		dm_config_destroy(old);
+	/*
+	 * An existing name has a new vgid (new_vgid = arg_vgid).
+	 * A lookup of the name arg was successful in finding arg_vgid_lookup,
+	 * but that resulting vgid doesn't match the arg_vgid.
+	 */
+	if (arg_vgid_lookup && arg_vgid && strcmp(arg_vgid_lookup, arg_vgid)) {
+		if (arg_name_lookup) {
+			/*
+			 * This shouldn't happen.
+			 * arg_vgid should be new and should not map to any name.
+			 */
+			ERROR(s, "update_metadata arg_vgid %s arg_name %s unexpected arg_name_lookup %s",
+			      arg_vgid, arg_name, arg_name_lookup);
+			needs_repair = 1;
+			goto update;
+		}
 
+		new_vgid = arg_vgid;
+		old_vgid = dm_hash_lookup(s->vgname_to_vgid, arg_name);
+
+		if (!old_vgid) {
+			/* This shouldn't happen. */
+			ERROR(s, "update_metadata arg_vgid %s arg_name %s no old_vgid",
+			      arg_vgid, arg_name);
+			needs_repair = 1;
+			goto update;
+		}
+
+		if (!(old_meta = dm_hash_lookup(s->vgid_to_metadata, old_vgid))) {
+			/* This shouldn't happen. */
+			ERROR(s, "update_metadata arg_vgid %s arg_name %s old_vgid %s no old_meta",
+			      arg_vgid, arg_name, old_vgid);
+			needs_repair = 1;
+			goto update;
+		}
+
+		DEBUGLOG(s, "update_metadata existing name %s has new vgid %s old vgid %s",
+			 arg_name, new_vgid, old_vgid);
+		goto update;
+	}
+
+	/*
+	 * An existing vgid has a new name (new_name = arg_name).
+	 * A lookup of the vgid arg was successful in finding arg_name_lookup,
+	 * but that resulting name doesn't match the arg_name.
+	 */
+	if (arg_name_lookup && arg_name && strcmp(arg_name_lookup, arg_name)) {
+		if (arg_vgid_lookup) {
+			/*
+			 * This shouldn't happen.
+			 * arg_name should be new and should not map to any vgid.
+			 */
+			ERROR(s, "update_metadata arg_vgid %s arg_name %s unexpected arg_vgid_lookup %s",
+			      arg_vgid, arg_name, arg_vgid_lookup);
+			needs_repair = 1;
+			goto update;
+		}
+
+		new_name = arg_name;
+		old_name = dm_hash_lookup(s->vgid_to_vgname, arg_vgid);
+
+		if (!old_name) {
+			/* This shouldn't happen. */
+			ERROR(s, "update_metadata arg_vgid %s arg_name %s no old_name",
+			      arg_vgid, arg_name);
+			needs_repair = 1;
+			goto update;
+		}
+
+		if (!(old_meta = dm_hash_lookup(s->vgid_to_metadata, arg_vgid))) {
+			/* This shouldn't happen. */
+			ERROR(s, "update_metadata arg_vgid %s arg_name %s old_name %s no old_meta",
+			      arg_vgid, arg_name, old_name);
+			needs_repair = 1;
+			goto update;
+		}
+
+		DEBUGLOG(s, "update_metadata existing vgid %s has new name %s old name %s",
+			 arg_vgid, new_name, old_name);
+		goto update;
+	}
+
+	/*
+	 * An existing VG has unchanged name and vgid.
+	 */
+	if (!new_vgid && !new_name) {
+		if (strcmp(arg_name_lookup, arg_name)) {
+			/* This shouldn't happen. */
+			ERROR(s, "update_metadata arg_vgid %s arg_name %s mismatch arg_name_lookup %s",
+			      arg_vgid, arg_name, arg_name_lookup);
+			needs_repair = 1;
+			goto update;
+		}
+
+		if (strcmp(arg_vgid_lookup, arg_vgid)) {
+			/* This shouldn't happen. */
+			ERROR(s, "update_metadata arg_vgid %s arg_name %s mismatch arg_vgid_lookup %s",
+			      arg_vgid, arg_name, arg_vgid_lookup);
+			needs_repair = 1;
+			goto update;
+		}
+
+		/* old_vgid == arg_vgid, and old_name == arg_name */
+
+		if (!(old_meta = dm_hash_lookup(s->vgid_to_metadata, arg_vgid))) {
+			/* This shouldn't happen. */
+			ERROR(s, "update_metadata arg_vgid %s arg_name %s no old_meta",
+			      arg_vgid, arg_name);
+			needs_repair = 1;
+			goto update;
+		}
+
+		DEBUGLOG(s, "update_metadata existing vgid %s and existing name %s",
+			 arg_vgid, arg_name);
+		goto update;
+	}
+
+ update:
 	unlock_vgid_to_metadata(s);
 
-	if (retval)
-		retval = update_pvid_to_vgid(s, cft, vgid, 1);
+	filter_metadata(new_metadata); /* sanitize */
 
+	if (!(new_meta = dm_config_create()) ||
+	    !(new_meta->root = dm_config_clone_node(new_meta, new_metadata, 0))) {
+		ERROR(s, "update_metadata out of memory for new metadata for %s %s",
+		      arg_name, arg_vgid);
+		/* FIXME: should we purge the old metadata here? */
+		retval = 0;
+		goto out;
+	}
+
+	/*
+	 * Get the seqno from existing (old) and new metadata and perform
+	 * sanity checks for transitions that generally shouldn't happen.
+	 * Sometimes ignore the new metadata and leave the existing metadata
+	 * alone, and sometimes purge the existing metadata and add the new.
+	 * This often depends on whether the new metadata comes from a single
+	 * PV (via pv_found) that's been scanned, or a vg_update sent from a
+	 * command.
+	 */
+
+	new_seq = dm_config_find_int(new_metadata, "metadata/seqno", -1);
+
+	if (old_meta)
+		old_seq = dm_config_find_int(old_meta->root, "metadata/seqno", -1);
+
+	if (ret_old_seq)
+		*ret_old_seq = old_meta ? old_seq : new_seq;
+
+	/*
+	 * The new metadata has an invalid seqno.
+	 * This shouldn't happen, but if it does, ignore the new metadata.
+	 */
+	if (new_seq <= 0) {
+		ERROR(s, "update_metadata ignore new metadata because of invalid seqno for %s %s",
+		      arg_vgid, arg_name);
+		DEBUGLOG_cft(s, "NEW: ", new_metadata);
+		retval = 0;
+		goto out;
+	}
+
+	/*
+	 * The new metadata is missing an internal vgid.
+	 * This shouldn't happen, but if it does, ignore the new metadata.
+	 */
+	if (!(new_metadata_vgid = dm_config_find_str(new_meta->root, "metadata/id", NULL))) {
+		ERROR(s, "update_metadata has no internal vgid for %s %s",
+		      arg_name, arg_vgid);
+		DEBUGLOG_cft(s, "NEW: ", new_metadata);
+		retval = 0;
+		goto out;
+	}
+
+	/*
+	 * The new metadata internal vgid doesn't match the arg vgid.
+	 * This shouldn't happen, but if it does, ignore the new metadata.
+	 */
+	if (strcmp(new_metadata_vgid, arg_vgid)) {
+		ERROR(s, "update_metadata has bad internal vgid %s for %s %s",
+		      new_metadata_vgid, arg_name, arg_vgid);
+		DEBUGLOG_cft(s, "NEW: ", new_metadata);
+		retval = 0;
+		goto out;
+	}
+
+	/*
+	 * A single PV appears with metadata that's inconsistent with
+	 * existing, ignore the PV.  FIXME: make it outdated?
+	 */
+	if (pvid && needs_repair) {
+		ERROR(s, "update_metadata ignore inconsistent metadata on PV %s seqno %d for %s %s seqno %d",
+		      pvid, new_seq, arg_vgid, arg_name, old_seq);
+		DEBUGLOG_cft(s, "OLD: ", old_meta->root);
+		DEBUGLOG_cft(s, "NEW: ", new_metadata);
+		retval = 0;
+		goto out;
+	}
+
+	/*
+	 * A VG update with metadata that's inconsistent with existing.
+	 * This should not happen, but if it does, purge all existing cache
+	 * related to arg_name and arg_vgid, then add the new data using the
+	 * standard method for a new VG.
+	 */
+	if (!pvid && needs_repair) {
+		ERROR(s, "update_metadata repairing cache for vgid %s and name %s",
+		      arg_vgid, arg_name);
+		DEBUGLOG_cft(s, "OLD: ", old_meta->root);
+		DEBUGLOG_cft(s, "NEW: ", new_metadata);
+		_purge_metadata(s, arg_name, arg_vgid);
+		new_name = arg_name;
+		new_vgid = arg_vgid;
+		old_name = NULL;
+		old_vgid = NULL;
+		old_meta = NULL;
+		old_seq = -1;
+	}
+
+	/*
+	 * A single PV appears with metadata that's older than the existing,
+	 * e.g. an old PV that has reappeared after the VG has changed.
+	 * Make the PV outdated so it'll be cleared and keep the existing
+	 * metadata.
+	 */
+	if (pvid && (old_seq > 0) && (new_seq < old_seq)) {
+		ERROR(s, "update_metadata found outdated metadata on PV %s seqno %d for %s %s seqno %d",
+		      pvid, new_seq, arg_vgid, arg_name, old_seq);
+		DEBUGLOG_cft(s, "OLD: ", old_meta->root);
+		DEBUGLOG_cft(s, "NEW: ", new_metadata);
+		mark_outdated_pv(s, arg_vgid, pvid);
+		retval = 0;
+		goto out;
+	}
+
+	/*
+	 * A single PV appears with metadata that's newer than the existing.
+	 * Newer metadata should only come from a command via vg_update.
+	 * Make the existing PVs outdated, and use the new metadata.
+	 */
+	if (pvid && (old_seq > 0) && (new_seq > old_seq)) {
+		ERROR(s, "update_metadata found newer metadata on PV %s seqno %d for %s %s seqno %d",
+		      pvid, new_seq, arg_vgid, arg_name, old_seq);
+		DEBUGLOG_cft(s, "OLD: ", old_meta->root);
+		DEBUGLOG_cft(s, "NEW: ", new_metadata);
+		lock_pvid_to_vgid(s);
+		update_pvid_to_vgid(s, old_meta, arg_vgid, MARK_OUTDATED);
+		unlock_pvid_to_vgid(s);
+	}
+
+	/*
+	 * The existing/old metadata has an invalid seqno.
+	 * This shouldn't happen, but if it does, purge old and add the new.
+	 */
+	if (old_meta && (old_seq <= 0)) {
+		ERROR(s, "update_metadata bad old seqno %d for %s %s",
+		      old_seq, arg_name, arg_vgid);
+		DEBUGLOG_cft(s, "OLD: ", old_meta->root);
+		_purge_metadata(s, arg_name, arg_vgid);
+		new_name = arg_name;
+		new_vgid = arg_vgid;
+		old_name = NULL;
+		old_vgid = NULL;
+		old_meta = NULL;
+		old_seq = -1;
+	}
+
+	/*
+	 * A single PV appears with a seqno matching existing metadata,
+	 * but unmatching metadata content.  This shouldn't happen,
+	 * but if it does, ignore the PV.  FIXME: make it outdated?
+	 */
+	if (pvid && (new_seq == old_seq) && compare_config(new_metadata, old_meta->root)) {
+		ERROR(s, "update_metadata from pv %s same seqno %d with unmatching data for %s %s",
+		      pvid, new_seq, arg_name, arg_vgid);
+		DEBUGLOG_cft(s, "OLD: ", old_meta->root);
+		DEBUGLOG_cft(s, "NEW: ", new_metadata);
+		retval = 0;
+		goto out;
+	}
+
+	/*
+	 * A VG update with metadata matching existing seqno but unmatching content.
+	 * This shouldn't happen, but if it does, purge existing and add the new.
+	 */
+	if (!pvid && (new_seq == old_seq) && compare_config(new_metadata, old_meta->root)) {
+		ERROR(s, "update_metadata same seqno %d with unmatching data for %s %s",
+		      new_seq, arg_name, arg_vgid);
+		DEBUGLOG_cft(s, "OLD: ", old_meta->root);
+		DEBUGLOG_cft(s, "NEW: ", new_metadata);
+		_purge_metadata(s, arg_name, arg_vgid);
+		new_name = arg_name;
+		new_vgid = arg_vgid;
+		old_name = NULL;
+		old_vgid = NULL;
+		old_meta = NULL;
+		old_seq = -1;
+	}
+
+	/*
+	 * A VG update with metadata older than existing.  VG updates should
+	 * have increasing seqno.  This shouldn't happen, but if it does,
+	 * purge existing and add the new.
+	 */
+	if (!pvid && (new_seq < old_seq)) {
+		ERROR(s, "update_metadata new seqno %d less than old seqno %d for %s %s",
+		      new_seq, old_seq, arg_name, arg_vgid);
+		DEBUGLOG_cft(s, "OLD: ", old_meta->root);
+		DEBUGLOG_cft(s, "NEW: ", new_metadata);
+		_purge_metadata(s, arg_name, arg_vgid);
+		new_name = arg_name;
+		new_vgid = arg_vgid;
+		old_name = NULL;
+		old_vgid = NULL;
+		old_meta = NULL;
+		old_seq = -1;
+	}
+
+	/*
+	 * All the checks are done, do one of the four possible updates
+	 * outlined above:
+	 */
+
+	/*
+	 * Add metadata for a new VG to the cache.
+	 */
+	if (new_name && new_vgid)
+		return _update_metadata_add_new(s, arg_name, arg_vgid, new_meta);
+
+	/*
+	 * Update cached metadata for a VG with a new vgid.
+	 */
+	if (new_vgid)
+		return _update_metadata_new_vgid(s, arg_name, arg_vgid, new_vgid, old_meta, new_meta);
+
+	/*
+	 * Update cached metadata for a renamed VG.
+	 */
+	if (new_name)
+		return _update_metadata_new_name(s, arg_name, arg_vgid, new_name, old_meta, new_meta);
+
+	/*
+	 * Update cached metdata for a VG with unchanged name and vgid.
+	 * Replace the old metadata with the new metadata.
+	 * old_meta is the old copy of the metadata from the cache.
+	 * new_meta is the new copy of the metadata from the command.
+	 */
+	DEBUGLOG(s, "update_metadata for %s %s from %d to %d", arg_name, arg_vgid, old_seq, new_seq);
+
+	lock_vg(s, arg_vgid);
+	lock_pvid_to_vgid(s);
+	lock_vgid_to_metadata(s);
+
+	/*
+	 * The PVs in the VG may have changed in the new metadata, so
+	 * temporarily orphan all of the PVs in the existing VG.
+	 * The PVs that are still in the VG will be reassigned to this
+	 * VG below by the next call to update_pvid_to_vgid().
+	 */
+	if (!update_pvid_to_vgid(s, old_meta, "#orphan", 0)) {
+		ERROR(s, "update_metadata failed to move PVs for %s %s", arg_name, arg_vgid);
+		unlock_vgid_to_metadata(s);
+		unlock_pvid_to_vgid(s);
+		unlock_vg(s, arg_vgid);
+		abort_daemon = 1;
+		retval = 0;
+		goto out;
+	}
+
+	/*
+	 * The only hash table update that is needed is the actual
+	 * metadata config tree in vgid_to_metadata.  The VG name
+	 * and vgid are unchanged.
+	 */
+	if (!dm_hash_insert(s->vgid_to_metadata, arg_vgid, new_meta)) {
+		ERROR(s, "update_metadata out of memory for hash insert for %s %s", arg_name, arg_vgid);
+		unlock_vgid_to_metadata(s);
+		unlock_pvid_to_vgid(s);
+		unlock_vg(s, arg_vgid);
+		abort_daemon = 1;
+		retval = 0;
+		goto out;
+	}
+
+	/*
+	 * The new metadata has been added, so we can drop the old.
+	 */
+	dm_config_destroy(old_meta);
+
+	/*
+	 * Map the PVs in the new metadata to the vgid.
+	 * All pre-existing PVs were temporarily orphaned above.
+	 * Previous PVs that were removed from the VG will not
+	 * be remapped.  New PVs that were added to the VG will
+	 * be newly mapped to this vgid, and previous PVs that
+	 * remain in the VG will be remapped to the VG again.
+	 */
+	if (!update_pvid_to_vgid(s, new_meta, arg_vgid, 1)) {
+		ERROR(s, "update_metadata failed to update PVs for %s %s", arg_name, arg_vgid);
+		abort_daemon = 1;
+		retval = 0;
+	} else {
+		DEBUGLOG(s, "update_metadata is done for %s %s", arg_name, arg_vgid);
+		retval = 1;
+	}
+
+	unlock_vgid_to_metadata(s);
 	unlock_pvid_to_vgid(s);
-out: /* FIXME: We should probably abort() on partial failures. */
-	if (!retval && cft)
-		dm_config_destroy(cft);
-	unlock_vg(s, _vgid);
+	unlock_vg(s, arg_vgid);
+
+out:
+	if (abort_daemon) {
+		ERROR(s, "lvmetad could not be updated is aborting.");
+		exit(EXIT_FAILURE);
+	}
+
+	if (!retval && new_meta)
+		dm_config_destroy(new_meta);
 	return retval;
 }
 
@@ -1064,167 +1745,460 @@ static response pv_clear_all(lvmetad_state *s, request r)
 	return daemon_reply_simple("OK", NULL);
 }
 
+/*
+ * pv_found: a PV has appeared and been scanned
+ * It contains PV metadata, and optionally VG metadata.
+ * Both kinds of metadata should be added to the cache
+ * and hash table mappings related to the PV and device
+ * should be updated.
+ *
+ * Input values from request:
+ * . arg_pvmeta:  PV metadata from the found pv
+ * . arg_pvid:    pvid from arg_pvmeta (pvmeta/id)
+ * . arg_device:  device from arg_pvmeta (pvmeta/device)
+ * . arg_vgmeta:  VG metadata from the found pv (optional)
+ * . arg_name:    VG name from found pv (optional)
+ * . arg_vgid:    VG vgid from arg_vgmeta  (optional)
+ *
+ * Input pvid and device are used to search existing cache state:
+ * . arg_pvid (pvmeta/id)
+ * . arg_device (pvmeta/device)
+ *
+ * Search for existing mappings in hash tables:
+ * . pvid_to_pvmeta (which produces pvid to device)
+ * . device_to_pvid
+ * . pvid_to_vgid
+ *
+ * Existing data from cache:
+ * . old_pvmeta:        result of pvid_to_pvmeta using arg_pvid
+ * . arg_device_lookup: result of old_pvmeta:pvmeta/device using arg_pvid
+ * . arg_pvid_lookup:   result of device_to_pvid using arg_device
+ * . arg_vgid_lookup:   result of pvid_to_vgid using arg_pvid
+ *
+ * When arg_pvid doesn't match arg_pvid_lookup (new PV on device):
+ * . prev_pvid_on_dev:    set to arg_pvid_lookup
+ * . prev_pvmeta_on_dev:  result pvid_to_pvmeta using prev_pvid_on_dev
+ * . prev_vgid_on_dev:    result of pvid_to_vgid using prev_pvid_on_dev
+ *
+ * Old PV on old device
+ * . no PV/device mappings have changed
+ * . arg_pvid_lookup == arg_pvid && arg_device_lookup == arg_device
+ * . arg_device was used to look up a PV and found a PV with
+ *   the same pvid as arg_pvid
+ * . arg_pvid was used to look up a PV and found a PV on the
+ *   same device as arg_device
+ * . new_pvmeta may be more recent than old_pvmeta
+ *
+ * New PV on new device
+ * . add new mappings in hash tables
+ * . !arg_pvid_lookup && !arg_device_lookup
+ * . arg_device was used to look up a PV and found nothing
+ * . arg_pvid was used to look up a PV and found nothing
+ *
+ * New PV on old device
+ * . a new PV replaces an old PV on a device
+ * . arg_pvid_lookup != arg_pvid
+ * . arg_device was used to look up a PV and found a PV with
+ *   a different pvid than arg_pvid
+ * . replace existing pvid/device mappings
+ * . replace existing old_pvmeta with new_pvmeta
+ * . prev_pvid_on_dev = arg_pvid_lookup
+ * . prev_pvid_on_dev is the pvid of the previous PV,
+ *   which arg_device currently maps to in device_to_pvid
+ * . prev_pvmeta_on_dev is the pvmeta for the previous PV,
+ *   which prev_pvid_on_dev currently maps to in pvid_to_pvmeta
+ *
+ * Old PV on new device
+ * . a duplicate PV
+ * . arg_device_lookup != arg_device
+ * . arg_pvid was used to look up a PV, and found that the PV
+ *   has a different device than arg_device.
+ */
+
 static response pv_found(lvmetad_state *s, request r)
 {
-	struct dm_config_node *metadata = dm_config_find_node(r.cft->root, "metadata");
-	const char *pvid = daemon_request_str(r, "pvmeta/id", NULL);
-	const char *vgname = daemon_request_str(r, "vgname", NULL);
-	const char *vgid = daemon_request_str(r, "metadata/id", NULL);
-	const char *vgid_old = NULL;
-	struct dm_config_node *pvmeta = dm_config_find_node(r.cft->root, "pvmeta"), *altdev = NULL;
+	struct dm_config_node *metadata;
+	struct dm_config_node *pvmeta;
+	struct dm_config_node *altdev = NULL;
 	struct dm_config_value *altdev_v;
-	uint64_t device, device_old_pvid = 0;
-	struct dm_config_tree *cft, *pvmeta_old_dev = NULL, *pvmeta_old_pvid = NULL;
+	struct dm_config_tree *cft;
+	struct dm_config_tree *pvmeta_old_dev = NULL;
+	struct dm_config_tree *pvmeta_old_pvid = NULL;
+	const char *pvid;
+	const char *vgname;
+	const char *vgid;
+	const char *vgid_old = NULL;
 	char *old;
-	int complete = 0, orphan = 0;
-	int64_t seqno = -1, seqno_old = -1, changed = 0;
+	uint64_t device;
+	uint64_t device_old_pvid = 0;
+	int64_t seqno = -1;
+	int64_t seqno_old = -1;
+	int64_t changed = 0;
+	int complete = 0;
+	int orphan = 0;
 
-	if (!pvid)
-		return reply_fail("need PV UUID");
-	if (!pvmeta)
-		return reply_fail("need PV metadata");
+	/*
+	 * Gather new input values.
+	 */
 
-	if (!dm_config_get_uint64(pvmeta, "pvmeta/device", &device))
-		return reply_fail("need PV device number");
+	arg_vgmeta = dm_config_find_node(r.cft->root, "metadata");
+	arg_pvmeta = dm_config_find_node(r.cft->root, "pvmeta");
 
-	if (!(cft = dm_config_create()))
-		return reply_fail("out of memory");
+	if (!arg_pvmeta)
+		return reply_fail("Ignore PV without PV metadata");
+
+	arg_pvid = daemon_request_str(r, "pvmeta/id", NULL);
+
+	if (!arg_pvid) {
+		ERROR(s, "Ignore PV without PV UUID");
+		return reply_fail("Ignore PV without PV UUID");
+	}
+
+	if (!dm_config_get_uint64(arg_pvmeta, "pvmeta/device", &arg_device)) {
+		ERROR(s, "Ignore PV without device pvid %s", arg_pvid);
+		return reply_fail("Ignore PV without device");
+	}
+
+	/* Make a copy of the new pvmeta that can be inserted into cache. */
+	if (!(new_pvmeta = dm_config_create()) ||
+	    !(new_pvmeta->root = dm_config_clone_node(new_pvmeta, arg_pvmeta, 0))) {
+		ERROR("s, "pv_found out of memory for new pvmeta %s", arg_pvid);
+		goto nomem;
+	}
 
 	lock_pvid_to_pvmeta(s);
 
-	if ((pvmeta_old_pvid = dm_hash_lookup(s->pvid_to_pvmeta, pvid)))
-		dm_config_get_uint64(pvmeta_old_pvid->root, "pvmeta/device", &device_old_pvid);
+	/*
+	 * Gather existing (old) cache values.
+	 */
 
-	if ((old = dm_hash_lookup_binary(s->device_to_pvid, &device, sizeof(device)))) {
-		pvmeta_old_dev = dm_hash_lookup(s->pvid_to_pvmeta, old);
-		vgid_old = dm_hash_lookup(s->pvid_to_vgid, old);
+	old_pvmeta = dm_hash_lookup(s->pvid_to_pvmeta, arg_pvid);
+	if (old_pvmeta)
+		dm_config_get_uint64(old_pvmeta->root, "pvmeta/device", &arg_device_lookup);
+
+	arg_pvid_lookup = dm_hash_lookup_binary(s->device_to_pvid, &arg_device, sizeof(arg_device));
+
+	/*
+	 * Determine which of the four possible changes is happening
+	 * by comparing the existing/old and new values.
+	 */
+
+	if (arg_pvid_lookup && arg_device_lookup &&
+	    (arg_device == arg_device_lookup) &&
+	    !strcmp(arg_pvid_lookup, arg_pvid)) {
+		/*
+		 * Old PV on old device (unchanged)
+		 */
+		new_pvid = NULL;
+		new_device = NULL;
+
+		DEBUGLOG(s, "pv_found pvid %s vgid %s on device %" PRIu64 " matches existing",
+			arg_pvid, arg_vgid ?: "none", arg_device);
+
+	} else if (!arg_pvid_lookup && !arg_device_lookup) {
+		/*
+		 * New PV on new device (new entry)
+		 */
+		new_pvid = arg_pvid;
+		new_device = arg_device;
+
+		DEBUGLOG(s, "pv_found pvid %s vgid %s on device %" PRIu64 " new",
+			arg_pvid, arg_vgid ?: "none", arg_device);
+
+	} else if (arg_pvid_lookup && strcmp(arg_pvid_lookup, arg_pvid)) {
+		/*
+		 * New PV on old device (existing device reused for new PV)
+		 */
+		new_pvid = arg_pvid;
+		new_device = NULL;
+		prev_pvid_on_dev = arg_pvid_lookup;
+		prev_pvmeta_on_dev = dm_hash_lookup(s->pvid_to_pvmeta, arg_pvid_lookup);
+		prev_vgid_on_dev = dm_hash_lookup(s->pvid_to_vgid, arg_pvid_lookup);
+
+		DEBUGLOG(s, "pv_found pvid %s vgid %s on device %" PRIu64 " prev pvid %s vgid %s",
+			arg_pvid, arg_vgid ?: "none", arg_device,
+			prev_pvid_on_dev, prev_vgid_on_dev ?: "none");
+
+	} else if (arg_device_lookup && (arg_device_lookup != arg_device)) {
+		/*
+		 * Old PV on new device (duplicate)
+		 */
+		new_device = arg_device;
+		new_pvid = NULL;
+		old_device = arg_device_lookup;
+
+		DEBUGLOG(s, "pv_found pvid %s vgid %s on device %" PRIu64 " duplicate %" PRIu64,
+			arg_pvid, arg_vgid ?: "none", arg_device, arg_device_lookup);
+
+	} else {
+		ERROR(s, "pv_found pvid %s vgid %s on device %" PRIu64 " unknown lookup %s %s " PRIu64,
+		      arg_pvid,
+		      arg_vgid ?: "none", arg_device,
+		      arg_pvid_lookup ?: "none",
+		      arg_vgid_lookup ?: "none",
+		      arg_device_lookup);
+		unlock_pvid_to_pvmeta(s);
+		goto out;
 	}
 
-	DEBUGLOG(s, "pv_found %s, vgid = %s, device = %" PRIu64 " (previously %" PRIu64 "), old = %s",
-		 pvid, vgid, device, device_old_pvid, old);
+	/*
+	 * Make changes to hashes device_to_pvid and pvid_to_pvmeta for each case.
+	 */
 
-	if (!(cft->root = dm_config_clone_node(cft, pvmeta, 0)))
-                goto out_of_mem;
+	if (!new_pvid && !new_device) {
+		/*
+		 * Old PV on old device (unchanged)
+		 * . add new_pvmeta, replacing old_pvmeta
+		 */
+		if (compare_config(old_pvmeta->root, new_pvmeta->root))
+			changed |= 1;
 
-	pvid = dm_config_find_str(cft->root, "pvmeta/id", NULL);
+		if (!dm_hash_insert(s->pvid_to_pvmeta, arg_pvid, new_pvmeta))
+			goto nomem;
 
-	if (!pvmeta_old_pvid || compare_config(pvmeta_old_pvid->root, cft->root))
+	} else if (new_pvid && new_device) {
+		/*
+		 * New PV on new device (new entry)
+		 * . add new_device/new_pvid mapping
+		 * . add new_pvmeta
+		 */
 		changed |= 1;
 
-	if (pvmeta_old_pvid && device != device_old_pvid) {
-		DEBUGLOG(s, "PV %s duplicated on device %" PRIu64, pvid, device_old_pvid);
-		dm_hash_remove_binary(s->device_to_pvid, &device_old_pvid, sizeof(device_old_pvid));
-		if (!dm_hash_insert_binary(s->device_to_pvid, &device_old_pvid,
-					   sizeof(device_old_pvid), (void*)pvid))
-			goto out_of_mem;
-		if ((altdev = dm_config_find_node(pvmeta_old_pvid->root, "pvmeta/devices_alternate"))) {
-			altdev = dm_config_clone_node(cft, altdev, 0);
-			chain_node(altdev, cft->root, 0);
-		} else
-			if (!(altdev = make_config_node(cft, "devices_alternate", cft->root, 0)))
-				goto out_of_mem;
-                altdev_v = altdev->v;
-                while (1) {
-			if (altdev_v && altdev_v->v.i == device_old_pvid)
+		DEBUGLOG(s, "pv_found new entry device_to_pvid %s to %s",
+			 new_device, new_pvid);
+
+		if (!(new_pvid_dup = dm_strdup(new_pvid)))
+			goto nomem;
+
+		if (!dm_hash_insert_binary(s->device_to_pvid, &new_device, sizeof(new_device), new_pvid_dup))
+			goto nomem;
+
+		if (!dm_hash_insert(s->pvid_to_pvmeta, new_pvid, new_pvmeta))
+			goto nomem;
+
+	} else if (new_pvid && !new_device) {
+		/*
+		 * New PV on old device (existing device reused for new PV)
+		 * . remove existing prev_pvid_on_dev/prev_pvmeta_on_dev mapping
+		 * . free the pvmeta for the previous PV (prev_pvmeta_on_dev)
+		 * . remove existing arg_device/prev_pvid_on_dev mapping
+		 * . add arg_device/new_pvid mapping
+		 * . add new_pvmeta, replacing old_pvmeta
+		 * . don't free prev_pvid_on_dev or prev_vgid_on_dev strings,
+		 *   they are used below to do any necessary VG updating.
+		 */
+		changed |= 1;
+
+		DEBUGLOG(s, "pv_found new pvid device_to_pvid %s to %s replaces %s to %s",
+			 arg_device, new_pvid, arg_device, prev_pvid_on_dev);
+
+		if (prev_pvid_on_dev)
+			dm_hash_remove(s->pvid_to_pvmeta, prev_pvid_on_dev);
+
+		if (prev_pvmeta_on_dev)
+			dm_config_destroy(prev_pvmeta_on_dev);
+		prev_pvmeta_on_dev = NULL;
+
+		/* Just removes the mapping from device to prev_pvid_on_dev. */
+		dm_hash_remove(s->device_to_pvid, arg_device);
+
+		if (!(new_pvid_dup = dm_strdup(new_pvid)))
+			goto nomem;
+
+		if (!dm_hash_insert_binary(s->device_to_pvid, &arg_device, sizeof(arg_device), new_pvid_dup))
+			goto nomem;
+
+		if (!dm_hash_insert(s->pvid_to_pvmeta, new_pvid, new_pvmeta))
+			goto nomem;
+
+	} else if (new_device && !new_pvid) {
+		/*
+		 * Old PV on new device (duplicate)
+		 * . add new_device/arg_pvid mapping
+		 * . leave existing old_device/arg_pvid mapping
+		 * . add new_pvmeta, replacing old_pvmeta
+		 * . modify new_pvmeta, adding an alternate device entry for old_device
+		 */
+		changed |= 1;
+
+		DEBUGLOG(s, "pv_found new device device_to_pvid %s to %s also %s to %s",
+			 new_device, arg_pvid, old_device, arg_pvid);
+
+		if (!(arg_pvid_dup = dm_strdup(arg_pvid)))
+			goto nomem;
+
+		if (!dm_hash_insert_binary(s->device_to_pvid, &new_device, sizeof(new_device), arg_pvid_dup))
+			goto nomem;
+
+		if (!dm_hash_insert(s->pvid_to_pvmeta, arg_pvid, new_pvmeta))
+			goto nomem;
+
+		/* Copy existing altdev info, or create new, and add it to new pvmeta. */
+		if ((altdev = dm_config_find_node(old_pvmeta->root, "pvmeta/devices_alternate"))) {
+			if (!(altdev = dm_config_clone_node(new_pvmeta, altdev, 0)))
+				goto nomem;
+			chain_node(altdev, new_pvmeta->root, 0);
+		} else {
+			if (!(altdev = make_config_node(new_pvmeta, "devices_alternate", new_pvmeta->root, 0)))
+				goto nomem;
+		}
+
+		/* Add an altdev entry for old_device. */
+		altdev_v = altdev->v;
+		while (1) {
+			if (altdev_v && altdev_v->v.i == old_device)
 				break;
 			if (altdev_v)
 				altdev_v = altdev_v->next;
 			if (!altdev_v) {
-				if (!(altdev_v = dm_config_create_value(cft)))
-					goto out_of_mem;
+				if (!(altdev_v = dm_config_create_value(new_pvmeta)))
+					goto nomem;
 				altdev_v->next = altdev->v;
 				altdev->v = altdev_v;
-				altdev->v->v.i = device_old_pvid;
+				altdev->v->v.i = old_device;
 				break;
 			}
 		};
 		altdev_v = altdev->v;
 		while (altdev_v) {
-			if (altdev_v->next && altdev_v->next->v.i == device)
+			if (altdev_v->next && altdev_v->next->v.i == new_device)
 				altdev_v->next = altdev_v->next->next;
 			altdev_v = altdev_v->next;
 		}
-		changed |= 1;
-	}
-
-	if (!dm_hash_insert(s->pvid_to_pvmeta, pvid, cft) ||
-	    !dm_hash_insert_binary(s->device_to_pvid, &device, sizeof(device), (void*)pvid)) {
-		dm_hash_remove(s->pvid_to_pvmeta, pvid);
-out_of_mem:
-		unlock_pvid_to_pvmeta(s);
-		dm_config_destroy(cft);
-		dm_free(old);
-		return reply_fail("out of memory");
 	}
 
 	unlock_pvid_to_pvmeta(s);
 
-	if (pvmeta_old_pvid)
-		dm_config_destroy(pvmeta_old_pvid);
-	if (pvmeta_old_dev && pvmeta_old_dev != pvmeta_old_pvid) {
+	if (old_pvmeta)
+		dm_config_destroy(old_pvmeta);
+
+#if 0
+	/*
+	 * FIXME: old code, what case is this, how does it happen?
+	 */
+	if (prev_pvmeta_on_dev && (prev_pvmeta_on_dev != old_pvmeta)) {
 		dev_t d = dm_config_find_int64(pvmeta_old_dev->root, "pvmeta/device", 0);
 		WARN(s, "pv_found: stray device %"PRId64, d);
 		if (!device_remove(s, pvmeta_old_dev, device)) {
 			dm_hash_remove(s->pvid_to_pvmeta, old);
-			dm_config_destroy(pvmeta_old_dev);
+			dm_config_destroy(prev_pvmeta_on_dev);
 		}
 	}
+#endif
 
-	if (metadata) {
-		if (!vgid)
-			return reply_fail("need VG UUID");
-		DEBUGLOG(s, "obtained vgid = %s, vgname = %s", vgid, vgname);
-		if (!vgname)
-			return reply_fail("need VG name");
-		if (daemon_request_int(r, "metadata/seqno", -1) < 0)
-			return reply_fail("need VG seqno");
+	/*
+	 * Update VG metadata cache with arg_vgmeta from the PV, or
+	 * if the PV holds no VG metadata, then look up the vgid and
+	 * name of the VG so we can check if the VG is complete.
+	 */
+	if (arg_vgmeta) {
+		arg_name = daemon_request_str(r, "vgname", NULL);
+		arg_vgid = daemon_request_str(r, "metadata/id", NULL);
+		arg_seqno = daemon_request_int(r, "metadata/seqno", -1);
 
-		if (!update_metadata(s, vgname, vgid, metadata, &seqno_old, pvid))
-			return reply_fail("metadata update failed");
-		changed |= (seqno_old != dm_config_find_int(metadata, "metadata/seqno", -1));
+		if (!arg_name)
+			return reply_fail("Ignore VG metadata from PV without VG name");
+		if (!arg_vgid)
+			return reply_fail("Ignore VG metadata from PV without VG vgid");
+		if (arg_seqno < 0)
+			return reply_fail("Ignore VG metadata from PV without VG seqno");
+
+		DEBUGLOG(s, "pv_found %s has VG metadata %s %s %ld", pvid, arg_name, arg_vgid, arg_seqno);
+
+		if (!update_metadata(s, arg_name, arg_vgid, arg_vgmeta, &old_seqno, pvid))
+			return reply_fail("Cannot use VG metadata from PV");
+
+		changed |= (old_seqno != arg_seqno);
+
 	} else {
 		lock_pvid_to_vgid(s);
-		vgid = dm_hash_lookup(s->pvid_to_vgid, pvid);
+		arg_vgid = dm_hash_lookup(s->pvid_to_vgid, arg_pvid);
 		unlock_pvid_to_vgid(s);
-	}
 
-	if (vgid) {
-		if ((cft = lock_vg(s, vgid))) {
-			complete = update_pv_status(s, cft, cft->root, 0);
-			seqno = dm_config_find_int(cft->root, "metadata/seqno", -1);
-		} else if (!strcmp(vgid, "#orphan"))
-			orphan = 1;
-		else {
-			unlock_vg(s, vgid);
-			return reply_fail("non-orphan VG without metadata encountered");
-		}
-		unlock_vg(s, vgid);
-
-		// TODO: separate vgid->vgname lock
 		lock_vgid_to_metadata(s);
-		vgname = dm_hash_lookup(s->vgid_to_vgname, vgid);
+		arg_name = dm_hash_lookup(s->vgid_to_vgname, arg_vgid);
 		unlock_vgid_to_metadata(s);
 	}
 
-	if (vgid_old && (!vgid || strcmp(vgid, vgid_old))) {
-		/* make a copy, because vg_remove_if_missing will deallocate the
-		 * storage behind vgid_old */
-		vgid_old = dm_strdup(vgid_old);
-		lock_vg(s, vgid_old);
-		vg_remove_if_missing(s, vgid_old, 1);
-		unlock_vg(s, vgid_old);
-		dm_free((char*)vgid_old);
+	/*
+	 * Check if the VG is complete (all PVs have been found) because
+	 * the reply states if the the VG is complete or partial.
+	 * The "vgmeta" from lock_vg will be a copy of arg_vgmeta that
+	 * was cloned and added to the cache by update_metadata.
+	 */
+	if (!arg_vgid || !strcmp(arg_vgid, "#orphan")) {
+		DEBUGLOG(s, "");
+		vg_status = "orphan";
+		goto prev_vals;
 	}
 
+	if (!(vgmeta = lock_vg(s, arg_vgid))) {
+		ERROR(s, "");
+	} else {
+		vg_status = _vg_is_complete(s, vgmeta) ? "complete" : "partial";
+		vg_status_seqno = dm_config_find_int(vgmeta->root, "metadata/seqno", -1);
+	}
+	unlock_vg(s, arg_vgid);
+
+ prev_vals:
+	/*
+	 * If the device previously held a different VG (prev_vgid_on_dev),
+	 * then that VG should be removed if no devices are left for it.
+	 * The mapping from the device's previous pvid to the previous vgid
+	 * is removed here.
+	 *
+	 * If the device previously held a different PV (prev_pvid_on_dev),
+	 * the mapping from device to prev_pvid_on_dev was removed above;
+	 * now free the prev_pvid_on_dev string.
+	 */
+	if (prev_vgid_on_dev) {
+	       	if (!arg_vgid || strcmp(arg_vgid, prev_vgid_on_dev)) {
+			lock_vg(s, prev_vgid_on_dev);
+			vg_remove_if_missing(s, prev_vgid_on_dev, 1);
+			unlock_vg(s, prev_vgid_on_dev);
+		}
+
+		/* Remove mapping prev_pvid_on_dev/prev_vgid_on_dev. */
+		dm_hash_remove(s->pvid_to_vgid, prev_pvid_on_dev);
+		dm_free(prev_vgid_on_dev);
+	}
+	if (prev_pvid_on_dev)
+		dm_free(prev_pvid_on_dev);
+
 	return daemon_reply_simple("OK",
-				   "status = %s", orphan ? "orphan" :
-				                     (complete ? "complete" : "partial"),
+				   "status = %s", vg_status,
 				   "changed = %d", changed,
-				   "vgid = %s", vgid ? vgid : "#orphan",
-				   "vgname = %s", vgname ? vgname : "#orphan",
-				   "seqno_before = %"PRId64, seqno_old,
-				   "seqno_after = %"PRId64, seqno,
+				   "vgid = %s", arg_vgid ? arg_vgid : "#orphan",
+				   "vgname = %s", arg_name ? arg_name : "#orphan",
+				   "seqno_before = %"PRId64, old_seqno,
+				   "seqno_after = %"PRId64, vg_status_seqno,
 				   NULL);
+}
+
+/*
+ * Returns 1 if PV metadata exists for all PVs in a VG.
+ */
+static int _vg_is_complete(lvmetad_state *s, struct dm_config_node *vgmeta)
+{
+	struct dm_config_node *vg = vgmeta->root;
+	struct dm_config_node *pv;
+	int complete = 1;
+	const char *pvid;
+
+	lock_pvid_to_pvmeta(s);
+
+	for (pv = pvs(vg); pv; pv = pv->sib) {
+		if (!(pvid = dm_config_find_str(pv->child, "id", NULL)))
+			continue;
+
+		if (!dm_hash_lookup(s->pvid_to_pvmeta, pvid)) {
+			complete = 0;
+			break;
+		}
+	}
+	unlock_pvid_to_pvmeta(s);
+
+	return complete;
 }
 
 static response vg_clear_outdated_pvs(lvmetad_state *s, request r)
