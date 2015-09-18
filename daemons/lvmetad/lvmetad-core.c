@@ -843,13 +843,26 @@ static int update_metadata(lvmetad_state *s, const char *name, const char *_vgid
 	int seq;
 	int haveseq = -1;
 	const char *oldname = NULL;
+	const char *oldvgid = NULL;
 	const char *vgid;
 	char *cfgname;
 
 	lock_vgid_to_metadata(s);
 	old = dm_hash_lookup(s->vgid_to_metadata, _vgid);
 	oldname = dm_hash_lookup(s->vgid_to_vgname, _vgid);
+	/* If _vgid is unknown, it may be a new vgid for an existing vg. */
+	if (!oldname)
+		oldvgid = dm_hash_lookup(s->vgname_to_vgid, name);
 	unlock_vgid_to_metadata(s);
+
+	if (oldvgid) {
+		DEBUGLOG(s, "Existing name %s with vgid %s has new vgid %s",
+			 name, oldvgid, _vgid);
+		remove_metadata(s, oldvgid, 1);
+		oldname = NULL;
+		oldvgid = NULL;
+	}
+
 	lock_vg(s, _vgid);
 
 	seq = dm_config_find_int(metadata, "metadata/seqno", -1);
