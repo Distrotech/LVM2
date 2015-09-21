@@ -1639,6 +1639,9 @@ int lvm_run_command(struct cmd_context *cmd, int argc, char **argv)
 		goto_out;
 	}
 
+	if (!_cmd_no_meta_proc(cmd) && !lvmnotify_init(cmd))
+		log_verbose("Unable to initialize notifications.");
+
 	/*
 	 * Other hosts might have changed foreign VGs so enforce a rescan
 	 * before processing any command using them.
@@ -1655,6 +1658,7 @@ int lvm_run_command(struct cmd_context *cmd, int argc, char **argv)
 	ret = cmd->command->fn(cmd, argc, argv);
 
 	lvmlockd_disconnect();
+	lvmnotify_exit();
 	fin_locking();
 
       out:
