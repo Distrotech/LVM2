@@ -109,6 +109,11 @@ ifeq ("@DMEVENTD@", "yes")
 	LVMLIBS += -ldevmapper-event
 endif
 
+ifeq ("@BUILD_NOTIFYDBUS@", "yes")
+	EXTRA_EXEC_CFLAGS += $(GIO_CFLAGS)
+	EXTRA_EXEC_LDFLAGS += $(GIO_LIBS)
+endif
+
 LVMLIBS += -ldevmapper
 
 EXPORTED_HEADER = $(srcdir)/lvm2cmd.h
