@@ -115,6 +115,7 @@ SOURCES =\
 	misc/lvm-wrappers.c \
 	misc/lvm-percent.c \
 	mm/memlock.c \
+	notify/lvmnotify.c \
 	properties/prop_common.c \
 	report/properties.c \
 	report/report.c \
@@ -205,6 +206,11 @@ ifeq ("@DMEVENTD@", "yes")
   LIBS += -ldevmapper-event
 endif
 
+ifeq ("@BUILD_NOTIFYDBUS@", "yes")
+  LIBS += $(GIO_LIBS)
+  CFLAGS += $(GIO_CFLAGS)
+endif
+
 LIB_NAME = liblvm-internal
 LIB_STATIC = $(LIB_NAME).a
 
@@ -214,6 +220,7 @@ ifeq ($(MAKECMDGOALS),distclean)
 	format_pool \
 	snapshot \
 	mirror \
+	notify \
 	raid \
 	replicator \
 	thin \
@@ -226,7 +233,7 @@ CFLOW_LIST_TARGET = $(LIB_NAME).cflow
 
 include $(top_builddir)/make.tmpl
 
-CFLAGS += $(BLKID_CFLAGS) $(UDEV_CFLAGS) $(VALGRIND_CFLAGS)
+CFLAGS += $(BLKID_CFLAGS) $(UDEV_CFLAGS) $(VALGRIND_CFLAGS) $(GIO_CFLAGS)
 
 $(SUBDIRS): $(LIB_STATIC)
 
