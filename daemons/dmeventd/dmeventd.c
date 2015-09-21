@@ -1043,32 +1043,32 @@ static int _register_for_event(struct message_data *message_data)
 		goto out;
 	}
 
-	/* Preallocate thread status struct to avoid deadlock. */
-	if (!(thread_new = _alloc_thread_status(message_data, dso_data))) {
-		stack;
-		ret = -ENOMEM;
-		goto out;
-	}
-
-	if (!_fill_device_data(thread_new)) {
-		stack;
-		ret = -ENODEV;
-		goto out;
-	}
-
-	/* If creation of timeout thread fails (as it may), we fail
-	   here completely. The client is responsible for either
-	   retrying later or trying to register without timeout
-	   events. However, if timeout thread cannot be started, it
-	   usually means we are so starved on resources that we are
-	   almost as good as dead already... */
-	if ((thread_new->events & DM_EVENT_TIMEOUT) &&
-	    (ret = -_register_for_timeout(thread_new)))
-		goto out;
-
 	_lock_mutex();
 	if (!(thread = _lookup_thread_status(message_data))) {
 		_unlock_mutex();
+
+		/* Preallocate thread status struct to avoid deadlock. */
+		if (!(thread_new = _alloc_thread_status(message_data, dso_data))) {
+			stack;
+			ret = -ENOMEM;
+			goto out;
+		}
+        
+		if (!_fill_device_data(thread_new)) {
+			stack;
+			ret = -ENODEV;
+			goto out;
+		}
+        
+		/* If creation of timeout thread fails (as it may), we fail
+		   here completely. The client is responsible for either
+		   retrying later or trying to register without timeout
+		   events. However, if timeout thread cannot be started, it
+		   usually means we are so starved on resources that we are
+		   almost as good as dead already... */
+		if ((thread_new->events & DM_EVENT_TIMEOUT) &&
+		    (ret = -_register_for_timeout(thread_new)))
+			goto out;
 
 		if (!(ret = _do_register_device(thread_new)))
 			goto out;
@@ -1081,24 +1081,40 @@ static int _register_for_event(struct message_data *message_data)
 		if ((ret = -_create_thread(thread))) {
 			_unlock_mutex();
 			_do_unregister_device(thread);
+			_unregister_for_timeout(thread);
 			_free_thread_status(thread);
 			goto out;
 		}
 
 		LINK_THREAD(thread);
+		_unlock_mutex();
+	} else {
+		/* Or event # into events bitfield. */
+		thread->events |= message_data->events_field;
+		if ((thread->events & DM_EVENT_TIMEOUT)) {
+			_unlock_mutex();
+			if (!(ret = -_register_for_timeout(thread_new))) {
+				/* In case previous calls failed we do not
+				 * force unregister event. Reset events for
+				 * consistency. */
+				_lock_mutex();
+				thread->events &= ~DM_EVENT_TIMEOUT;
+				_unlock_mutex();
+			}
+		} else {
+			_unlock_mutex();
+		}
 	}
-
-	/* Or event # into events bitfield. */
-	thread->events |= message_data->events_field;
-	_unlock_mutex();
 
       out:
 	/*
 	 * Deallocate thread status after releasing
 	 * the lock in case we haven't used it.
 	 */
-	if (thread_new)
+	if (thread_new) {
+		_unregister_for_timeout(thread);
 		_free_thread_status(thread_new);
+	}
 
 	return ret;
 }
