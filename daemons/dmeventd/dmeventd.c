@@ -1031,6 +1031,7 @@ static int _register_for_event(struct message_data *message_data)
 	int ret = 0;
 	struct thread_status *thread, *thread_new = NULL;
 	struct dso_data *dso_data;
+	enum dm_event_mask orig_events;
 
 	if (!(dso_data = _lookup_dso(message_data)) &&
 	    !(dso_data = _load_dso(message_data))) {
@@ -1087,10 +1088,23 @@ static int _register_for_event(struct message_data *message_data)
 		}
 
 		LINK_THREAD(thread);
+	} else {
+		/* Or event # into events bitfield. */
+		orig_events = thread->events;
+		thread->events |= message_data->events_field;
+		if ((~orig_events & thread->events & DM_EVENT_TIMEOUT)) {
+			_unlock_mutex();
+			if (!(ret = -_register_for_timeout(thread))) {
+				/* In case previous calls failed we do not
+				 * force unregister event. Reset events for
+				 * consistency. */
+				_lock_mutex();
+				thread->events &= ~DM_EVENT_TIMEOUT;
+			} else
+				_lock_mutex();
+		}
 	}
 
-	/* Or event # into events bitfield. */
-	thread->events |= message_data->events_field;
 	_unlock_mutex();
 
       out:
