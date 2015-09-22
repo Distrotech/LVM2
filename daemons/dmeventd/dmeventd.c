@@ -1088,6 +1088,7 @@ static int _register_for_event(struct message_data *message_data)
 		}
 
 		LINK_THREAD(thread);
+		_unlock_mutex();
 	} else {
 		/* Or event # into events bitfield. */
 		orig_events = thread->events;
@@ -1100,12 +1101,11 @@ static int _register_for_event(struct message_data *message_data)
 				 * consistency. */
 				_lock_mutex();
 				thread->events &= ~DM_EVENT_TIMEOUT;
-			} else
-				_lock_mutex();
-		}
+				_unlock_mutex();
+			}
+		} else
+			_unlock_mutex();
 	}
-
-	_unlock_mutex();
 
       out:
 	/*
