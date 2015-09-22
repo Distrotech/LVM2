@@ -1031,7 +1031,7 @@ static int _register_for_event(struct message_data *message_data)
 	int ret = 0;
 	struct thread_status *thread, *thread_new = NULL;
 	struct dso_data *dso_data;
-	enum dm_event_mask orig_events
+	enum dm_event_mask orig_events;
 
 	if (!(dso_data = _lookup_dso(message_data)) &&
 	    !(dso_data = _load_dso(message_data))) {
