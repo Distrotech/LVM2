@@ -1044,32 +1044,32 @@ static int _register_for_event(struct message_data *message_data)
 		goto out;
 	}
 
-	/* Preallocate thread status struct to avoid deadlock. */
-	if (!(thread_new = _alloc_thread_status(message_data, dso_data))) {
-		stack;
-		ret = -ENOMEM;
-		goto out;
-	}
-
-	if (!_fill_device_data(thread_new)) {
-		stack;
-		ret = -ENODEV;
-		goto out;
-	}
-
-	/* If creation of timeout thread fails (as it may), we fail
-	   here completely. The client is responsible for either
-	   retrying later or trying to register without timeout
-	   events. However, if timeout thread cannot be started, it
-	   usually means we are so starved on resources that we are
-	   almost as good as dead already... */
-	if ((thread_new->events & DM_EVENT_TIMEOUT) &&
-	    (ret = -_register_for_timeout(thread_new)))
-		goto out;
-
 	_lock_mutex();
 	if (!(thread = _lookup_thread_status(message_data))) {
 		_unlock_mutex();
+
+		/* Preallocate thread status struct to avoid deadlock. */
+		if (!(thread_new = _alloc_thread_status(message_data, dso_data))) {
+			stack;
+			ret = -ENOMEM;
+			goto out;
+		}
+
+		if (!_fill_device_data(thread_new)) {
+			stack;
+			ret = -ENODEV;
+			goto out;
+		}
+
+		/* If creation of timeout thread fails (as it may), we fail
+		   here completely. The client is responsible for either
+		   retrying later or trying to register without timeout
+		   events. However, if timeout thread cannot be started, it
+		   usually means we are so starved on resources that we are
+		   almost as good as dead already... */
+		if ((thread_new->events & DM_EVENT_TIMEOUT) &&
+		    (ret = -_register_for_timeout(thread_new)))
+			goto out;
 
 		if (!(ret = _do_register_device(thread_new)))
 			goto out;
