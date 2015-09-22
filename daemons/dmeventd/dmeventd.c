@@ -1081,6 +1081,7 @@ static int _register_for_event(struct message_data *message_data)
 		if ((ret = -_create_thread(thread))) {
 			_unlock_mutex();
 			_do_unregister_device(thread);
+			_unregister_for_timeout(thread);
 			_free_thread_status(thread);
 			goto out;
 		}
@@ -1097,8 +1098,10 @@ static int _register_for_event(struct message_data *message_data)
 	 * Deallocate thread status after releasing
 	 * the lock in case we haven't used it.
 	 */
-	if (thread_new)
+	if (thread_new) {
+		_unregister_for_timeout(thread);
 		_free_thread_status(thread_new);
+	}
 
 	return ret;
 }
