@@ -3373,6 +3373,7 @@ static int _lvconvert_single(struct cmd_context *cmd, struct logical_volume *lv,
 			return_ECMD_FAILED;
 	} else if (segtype_is_raid(lp->segtype) ||
 segtype_is_striped(lp->segtype) ||
+(segtype_is_mirror(lp->segtype) && !arg_is_set(cmd, mirrorlog_ARG)) ||
 		   lv_is_raid(lv) || lp->merge_mirror) {
 		if (!archive(lv->vg))
 			return_ECMD_FAILED;

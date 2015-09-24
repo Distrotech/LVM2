@@ -5571,7 +5571,9 @@ TAKEOVER_FN(_r10_r1)
 	       _raid10_r1456(lv, new_segtype, yes, force, 2, 2, 0, 0, allocate_pvs);
 }
 
-
+/*
+ * raid01 (mirrors on top of stripes
+ */
 static int _lv_create_raid01_image_lvs(struct logical_volume *lv,
 				       const struct segment_type *segtype,
 				       uint32_t len, uint32_t stripe_size,
@@ -5738,11 +5740,12 @@ TAKEOVER_FN(_r01_r01)
  * FSM of possible/impossible or noop (i.e. requested
  * conversion already given on the lv) conversions
  *
- * Rows define from segtype and columns to segtype
+ * Rows define segtype from and columns segtype to
  */
 static takeover_fn_t _takeover_fn[][10] = {
-	/* from |, to ->   linear  striped   mirror   raid0    raid0_meta  raid1    raid4/5    raid6    raid10  raid01 */
-	/*      v */
+	/* from, to ->     linear   striped  mirror   raid0    raid0_meta  raid1    raid4/5    raid6    raid10  raid01 */
+	/*   | */
+	/*   v */
 	/* linear     */ { _noop,   _error,  _error,  _l_r0,   _l_r0,      _l_r1,   _l_r45,    _error,  _l_r10  , _error   },
 	/* striped    */ { _error,  _noop,   _error,  _s_r0,   _s_r0m,     _l_r1,   _s_r45,    _s_r6,   _s_r10  , _s_r01   },
 	/* mirror     */ { _error,  _error,  _noop,   _m_r0,   _m_r0m,     _m_r1,   _m_r45,    _error,  _m_r10  , _error   },
