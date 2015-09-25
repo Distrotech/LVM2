@@ -1159,16 +1159,7 @@ PFLA("meta_area_reduction=%u" , meta_area_reduction);
 			    !lv_reduce(mlv, meta_area_reduction))
 				return_0; /* FIXME: any upper level reporting */
 		}
-#if 1
-		/* HM FIXME: find better way to go by mirrors=2 */
-		if (seg->lv) {
-			struct lv_segment *seg1 = first_seg(seg->lv);
 
-			if (seg1 && (seg_is_raid10(seg1)))
-				area_reduction *= seg->data_copies;
-		}
-PFLA("lv=%s lv->le_count=%u seg=%p area_reduction=%u", lv->name, lv->le_count, seg, area_reduction);
-#endif
 		if (!lv_reduce(lv, area_reduction))
 			return_0; /* FIXME: any upper level reporting */
 
@@ -1335,7 +1326,7 @@ PFLA("segtype=%s stripes=%u data_copies=%u", seg->segtype->name, stripes, seg->d
 
 		r = lv_raid_rimage_extents(extents, stripes, seg->data_copies ?: 1);
 	} else
-		r= extents;
+		r = extents;
 
 PFLA("area_len=%u", r);
 
@@ -1382,7 +1373,7 @@ static int _lv_segment_reduce(struct lv_segment *seg, uint32_t reduction)
 	uint32_t area_reduction, s;
 
 	area_reduction = _area_len(seg, reduction);
-PFLA("reduction=%u, area_reduction=%u", reduction, area_reduction);
+PFLA("seg->lv=%s reduction=%u, area_reduction=%u", display_lvname(seg->lv), reduction, area_reduction);
 
 	/* Release extents from all segment areas */
 	for (s = 0; s < seg->area_count; s++)
@@ -1408,7 +1399,8 @@ static uint32_t _calc_area_multiple(const struct segment_type *segtype,
 	if (!area_count)
 		return 1;
 
-	if (segtype_is_raid01(segtype))
+	if (segtype_is_raid1(segtype) ||
+	    segtype_is_raid01(segtype))
 		return 1;
 
 	/* Striped */
@@ -1535,7 +1527,7 @@ PFLA("seg->len=%u count=%u extents=%u", seg->len, count, extents);
 		} else
 			reduction = count;
 
-PFLA("reduction=%u", reduction);
+PFLA("seg->lv=%s reduction=%u", display_lvname(seg->lv), reduction);
 		if (!_lv_segment_reduce(seg, reduction))
 			return_0;
 

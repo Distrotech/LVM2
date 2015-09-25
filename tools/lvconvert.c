@@ -1817,7 +1817,7 @@ PFLA("lp->segtype=%s\n", lp->segtype->name);
 		if (seg_is_reshapable_raid(seg) || seg_is_raid1(seg))
 			seg->region_size = lp->region_size ?: 1024;
 
-		return lv_raid_convert(lv, lp->segtype, lp->yes, lp->force, arg_count(cmd, duplicate_ARG),
+		return lv_raid_convert(lv, lp->segtype, lp->yes, lp->force, arg_is_set(cmd, duplicate_ARG),
 				       image_count, lp->mirrors + 1, stripes, stripe_size, lp->pvh);
 	}
 
