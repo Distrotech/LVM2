@@ -3868,7 +3868,7 @@ static struct logical_volume *_lv_create(struct volume_group *vg, const char *lv
 {
 	struct logical_volume *r;
 	struct lvcreate_params lp = {
-		.activate = CHANGE_ALN,
+		.activate = CHANGE_AN,
 		.alloc = ALLOC_INHERIT,
 		.extents = extents,
 		.major = -1,
@@ -4126,8 +4126,8 @@ TAKEOVER_HELPER_FN(_raid_conv_duplicate)
 	struct lv_segment *seg = first_seg(lv);
 
 	/*
-	 * In case of conversion duplication, remove top-level raid1 lv with
-	 * either source/destination legs selected by --type argument option
+	 * In case of active conversion duplication, remove top-level raid1 lv with either
+	 * source/destination legs selected by --type/--mirrors/--stripes argument options
 	 */
 	if (_lv_is_duplicating(lv))
 		return _raid_conv_unduplicate(lv, new_segtype, new_image_count, new_data_copies, yes);
@@ -4174,7 +4174,7 @@ PFLA("new_image_count=%u extents=%u", new_image_count, extents);
 	 * HM FIXME: If non-redundant source/destination given/requested -> set force?
 	 */
 	if (!force) {
-		log_debug_metadata("Avoiding coallocation on source LV %s PVs", display_lvname(lv));
+		log_debug_metadata("Avoiding coallocation  on source LV %s PVs", display_lvname(lv));
 		if (!_avoid_pvs_with_other_images_of_lv(lv, allocate_pvs)) {
 			log_error("Failed to prevent PVs holding image components "
 				  "of source lv %s from being used for allocation.",
@@ -4245,7 +4245,6 @@ PFL();
 
 	/* Must update area count after resizing it */
 	seg->area_count = 2;
-
 PFL();
 	log_debug_metadata("Add destination LV %s to top-level LV %s as second raid1 leg",
 			   display_lvname(dst_lv), display_lvname(lv));
@@ -4268,12 +4267,13 @@ PFLA("lv->name=%s meta_areas=%p", lv->name, seg->meta_areas);
 	lv->status |= RAID;
 	lv->status &= ~LV_NOTSYNCED;
 	seg_lv(seg, 0)->status |= RAID_IMAGE;
-	seg_lv(seg, 1)->status |= RAID_IMAGE;
 	lv_set_visible(lv);
-
-	if (!activate_lv_excl_local(lv->vg->cmd, dst_lv))
-		return_0;
-
+#if 1
+	if (!activate_lv_excl_local(lv->vg->cmd, dst_lv)) {
+		log_error("Failed to deactivate LV %s exlusive locally", display_lvname(dst_lv));
+		return 0;
+	}
+#endif
 PFLA("lv0->le_count=%u lv1->le_count=%u", seg_lv(seg, 0)->le_count, seg_lv(seg, 1)->le_count);
 
 	/*
