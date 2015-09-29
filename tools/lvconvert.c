@@ -1809,6 +1809,10 @@ PFLA("lp->segtype=%s\n", lp->segtype->name);
 		/* Special case "linear", which is no individual segtype */
 		if (arg_count(cmd, type_ARG) &&
 		    !strcmp(arg_str_value(cmd, type_ARG, NULL), "linear")) {
+			if (lp->mirrors || stripes > 1 || image_count > 1) {
+				log_error("--mirrors/--stripes invalid with linear");
+				return 0;
+			}
 			image_count = stripes = 1;
 			stripe_size = 0;
 		}

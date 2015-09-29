@@ -160,6 +160,8 @@ static const char *_lvname_has_reserved_string(const char *lvname)
 		"_pmspare",
 		"_rimage",
 		"_rmeta",
+		"_rdimage",
+		"_rdmeta",
 		"_tdata",
 		"_tmeta",
 		"_vorigin"

@@ -1105,7 +1105,7 @@ static int _release_and_discard_lv_segment_area(struct lv_segment *seg, uint32_t
 	struct lv_segment *cache_seg;
 	struct logical_volume *lv = seg_lv(seg, s);
 
-PFLA("seg_lv(seg, %u)=%s, area_reduction=%u, with_discard=%d", s, seg_type(seg, s) == AREA_LV ? seg_lv(seg,s)->name: NULL, area_reduction, with_discard);
+PFLA("lv=%s,s=%u area_reduction=%u, with_discard=%d", seg_type(seg, s) == AREA_LV ? display_lvname(lv): NULL, s, area_reduction, with_discard);
 	if (seg_type(seg, s) == AREA_UNASSIGNED)
 		return 1;
 
@@ -1148,7 +1148,7 @@ PFLA("seg_lv(seg, %u)=%s, area_reduction=%u, with_discard=%d", s, seg_type(seg, 
 			if (!(mlv = seg_metalv(seg, s)))
 				return 0;
 
-PFLA("area_reduction=%u lv->le_count=%u mlv->le_count=%u" , area_reduction, lv->le_count, mlv->le_count);
+PFLA("mlv=%s area_reduction=%u lv->le_count=%u mlv->le_count=%u" , mlv->name, area_reduction, lv->le_count, mlv->le_count);
 			meta_area_reduction = raid_rmeta_extents_delta(vg->cmd, lv->le_count, lv->le_count - area_reduction,
 								       seg->region_size, vg->extent_size);
 PFLA("meta_area_reduction=%u" , meta_area_reduction);
@@ -1368,20 +1368,25 @@ PFLA("*area_len=%u", *area_len);
 /*
  * Reduce the size of an lv_segment.  New size can be zero.
  */
-static int _lv_segment_reduce(struct lv_segment *seg, uint32_t reduction)
+static int _lv_segment_reduce(struct lv_segment *seg, uint32_t reduction, int delete)
 {
-	uint32_t area_reduction, s;
+	uint32_t area_reduction = _area_len(seg, reduction), s;
 
-	area_reduction = _area_len(seg, reduction);
-PFLA("seg->lv=%s reduction=%u, area_reduction=%u", display_lvname(seg->lv), reduction, area_reduction);
+PFLA("seg->lv=%s reduction=%u, area_reduction=%u delete=%u", display_lvname(seg->lv), reduction, area_reduction, delete);
 
 	/* Release extents from all segment areas */
-	for (s = 0; s < seg->area_count; s++)
-{
-PFLA("seg_lv(seg, %u)=%s area_reduction=%u", s, seg_type(seg, s) == AREA_LV ? seg_lv(seg, s)->name : NULL, area_reduction);
+	for (s = 0; s < seg->area_count; s++) {
+		/*
+		 * If called for a duplicating LV on remove, area_len is bogus
+		 * for sub LVs which may differ in size because of stripe boundary
+		 * rounding, so retrieve the different reduction from the sub LV
+		 */
+		if (delete && seg_type(seg, s) == AREA_LV)
+			area_reduction = seg_lv(seg, s)->le_count;
+PFLA("seg_lv(seg, %u)=%s area_reduction=%u seg->area_len=%u", s, seg_type(seg, s) == AREA_LV ? seg_lv(seg, s)->name : NULL, area_reduction, seg->area_len);
 		if (!release_and_discard_lv_segment_area(seg, s, area_reduction))
 			return_0;
-}
+	}
 
 	seg->len -= reduction;
 	seg->lv->size -= reduction * seg->lv->vg->extent_size;
@@ -1447,16 +1452,46 @@ PFL();
  */
 static int _lv_reduce(struct logical_volume *lv, uint32_t extents, int delete)
 {
-	struct lv_segment *seg = last_seg(lv);;
+	int reduced = 0;
+	struct lv_segment *seg = last_seg(lv), *seg1;
+	uint32_t s;
 	uint32_t count;
 	uint32_t reduction;
-	uint32_t stripes = seg->area_count - seg->segtype->parity_devs;
+	uint32_t stripes;
 	struct logical_volume *pool_lv;
 
-PFLA("lv=%s lv->le_count=%u seg=%p extents=%u stripes=%u data_copies=%u", lv->name, lv->le_count, seg, extents, stripes, seg->data_copies);
+	if (!lv->le_count)
+		return 1;
+
+	stripes = seg->area_count - seg->segtype->parity_devs;
+PFLA("lv=%s lv->le_count=%u seg=%p extents=%u stripes=%u data_copies=%u delete=%u", lv->name, lv->le_count, seg, extents, stripes, seg->data_copies, delete);
+#if 1
+	/* Check for multi-level stack (e.g. extension of a duplicated LV stack) */
+	for (s = 0; s < seg->area_count; s++) {
+		if (seg_type(seg, s) == AREA_LV &&
+		    (seg1 = last_seg(seg_lv(seg, s))) && /* <- segment of #s LV underneath top-level */
+		    seg_type(seg1, 0) == AREA_LV &&
+		    seg1->area_count > 1) {
+PFLA("recursive seg_lv(seg, %u)=%s", s, display_lvname(seg_lv(seg, s)));
+			if (!_lv_reduce(seg_lv(seg, s), seg_lv(seg, s)->le_count - (lv->le_count - extents), delete))
+				return_0;
+PFLA("end recursive seg_lv(seg, %u)=%s", s, display_lvname(seg_lv(seg, s)));
+			reduced++;
+		}
+	}
+
+	if (reduced) {
+PFLA("reduce recursive lv=%s le_count=%u extents=%u", display_lvname(lv), lv->le_count, extents);
+		seg->len -= extents;
+		seg->area_len = _area_len(seg, seg->len);
+		lv->le_count = seg->len;
+		lv->size = (uint64_t) lv->le_count * lv->vg->extent_size;
+		return 1;
+	}
+#endif
+
 	if (seg_is_striped(seg) || seg_is_striped_raid(seg))
-		extents = _round_to_stripe_boundary(lv, extents, seg->area_count - seg->segtype->parity_devs,
-						    seg->data_copies, 0);
+		extents = _round_to_stripe_boundary(lv, extents, stripes, seg->data_copies, 0);
 
 PFLA("lv=%s lv->le_count=%u seg=%p extents=%u", lv->name, lv->le_count, seg, extents);
 
@@ -1528,26 +1563,38 @@ PFLA("seg->len=%u count=%u extents=%u", seg->len, count, extents);
 			reduction = count;
 
 PFLA("seg->lv=%s reduction=%u", display_lvname(seg->lv), reduction);
-		if (!_lv_segment_reduce(seg, reduction))
+		if (!_lv_segment_reduce(seg, reduction, delete))
 			return_0;
 
 		count -= reduction;
 	}
 
+out:
 	lv->le_count -= extents;
 	lv->size = (uint64_t) lv->le_count * lv->vg->extent_size;
 
 	if (!delete)
 		return 1;
 
-PFLA("deleting %s", lv->name);
+#if 0
+	if (seg_is_raid1(seg)) {
+		uint32_t s;
+
+		for (s = 0; s < seg->area_count; s++) {
+			lv_remove(seg_lv(seg, s));
+			lv_remove(seg_metalv(seg, s));
+		}
+	}
+#endif
+
+PFLA("deleting %s le_count=%u", lv->name, lv->le_count);
 	if (lv == lv->vg->pool_metadata_spare_lv) {
 		lv->status &= ~POOL_METADATA_SPARE;
 		lv->vg->pool_metadata_spare_lv = NULL;
 	}
 
 	/* Remove the LV if it is now empty */
-	if (!lv->le_count && !unlink_lv_from_vg(lv))
+	if (!lv->le_count && find_lv_in_vg(lv->vg, lv->name) && !unlink_lv_from_vg(lv))
 		return_0;
 	else if (lv->vg->fid->fmt->ops->lv_setup &&
 		   !lv->vg->fid->fmt->ops->lv_setup(lv->vg->fid, lv))
@@ -1623,7 +1670,7 @@ int lv_refresh_suspend_resume(struct cmd_context *cmd, struct logical_volume *lv
  */
 int lv_reduce(struct logical_volume *lv, uint32_t extents)
 {
-	return _lv_reduce(lv, extents, 1);
+	return _lv_reduce(lv, extents, extents == lv->le_count ? 1 : 0);
 }
 
 /*
@@ -4098,7 +4145,7 @@ static int _lv_extend_layered_lv(struct alloc_handle *ah,
 
 	if (!(segtype = get_segtype_from_string(lv->vg->cmd, "striped")))
 		return_0;
-PFLA("extents=%u mirrors=%u stripes=%u", extents, mirrors, stripes);
+PFLA("lv=%s extents=%u mirrors=%u stripes=%u", display_lvname(lv), extents, mirrors, stripes);
 	/*
 	 * The component devices of a "striped" LV all go in the same
 	 * LV.  However, RAID has an LV for each device - making the
@@ -4202,14 +4249,44 @@ int lv_extend(struct logical_volume *lv,
 {
 	int r = 1;
 	int log_count = 0;
+	uint32_t s;
 	struct alloc_handle *ah;
 	uint32_t sub_lv_count;
 	uint32_t old_extents;
 	uint32_t prev_region_size;
 	uint64_t lv_size;
-	struct lv_segment *seg = last_seg(lv);
+	struct lv_segment *seg = last_seg(lv), *seg1;
 
-	log_very_verbose("Adding segment of type %s to LV %s.", segtype->name, lv->name);
+	log_very_verbose("Adding segment of type %s to LV %s.", segtype->name, display_lvname(lv));
+
+#if 1
+	/* Check for multi-level stack (e.g. extension of a duplicated LV stack) */
+	if (seg) {
+		int extended = 0;
+
+		for (s = 0; s < seg->area_count; s++) {
+			if (seg_type(seg, s) == AREA_LV &&
+			    (seg1 = first_seg(seg_lv(seg, s))) && /* <- segment of #s LV underneath top-level */
+			    seg_type(seg1, 0) == AREA_LV &&
+			    seg1->area_count > 1) {
+PFLA("recursive seg_lv(seg, %u)=%s", s, display_lvname(seg_lv(seg, s)));
+				if (!lv_extend(seg_lv(seg, s), seg1->segtype, seg1->area_count, seg1->stripe_size, seg1->data_copies, seg1->region_size, extents, allocatable_pvs, alloc, approx_alloc))
+					return_0;
+
+				extended++;
+			}
+		}
+
+		if (extended) {
+			seg->len += extents;
+			seg->area_len = _area_len(seg, seg->len);
+			lv->le_count += extents;
+			lv->size = (uint64_t) lv->le_count * lv->vg->extent_size;
+			return 1;
+		}
+		
+	}
+#endif
 
 #if 1
 	/* HM FIXME: caller should ensure... */

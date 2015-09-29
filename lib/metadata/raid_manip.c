@@ -1270,8 +1270,8 @@ static int _alloc_rmeta_devs_for_rimage_devs(struct logical_volume *lv,
 	struct lv_list *lvl, *lvl_array;
 
 	dm_list_iterate(l, new_data_lvs)
-
 		raid_devs++;
+
 PFLA("raid_devs=%u", raid_devs);
 
 	if (!raid_devs)
@@ -3868,7 +3868,7 @@ static struct logical_volume *_lv_create(struct volume_group *vg, const char *lv
 {
 	struct logical_volume *r;
 	struct lvcreate_params lp = {
-		.activate = CHANGE_AN,
+		.activate = CHANGE_ALY, /* Active to avoid "unsafe table load" for destination LV */
 		.alloc = ALLOC_INHERIT,
 		.extents = extents,
 		.major = -1,
@@ -3923,9 +3923,6 @@ PFLA("data_copies=%u", data_copies);
 	if (segtype_is_mirror(segtype))
 		first_seg(r)->meta_areas = NULL;
 
-	r->status |= RAID_IMAGE;
-	lv_set_hidden(r);
-
 	return r;
 }
 
@@ -3974,7 +3971,7 @@ static void _rename_lv(struct logical_volume *lv, const char *from, const char *
  * suffixes to/from duplication conversion namespace
  */
 /* HM FIXME: enhance to support "mirror" log LV(s) */
-static void _rename_sub_lvs(struct logical_volume *lv, int to_dup)
+static void __rename_sub_lvs(struct logical_volume *lv, int to_dup, uint64_t flags)
 {
 	uint32_t s;
 	struct lv_segment *seg = first_seg(lv);
@@ -3993,15 +3990,25 @@ static void _rename_sub_lvs(struct logical_volume *lv, int to_dup)
 	struct from_to *ft = seg_is_mirror(seg) ? &ft_mirror : &ft_raid;
 
 	for (s = 0; s < seg->area_count; s++) {
-		if (seg_type(seg, s) == AREA_LV)
+		if (seg_type(seg, s) == AREA_LV && (flags & RAID_IMAGE))
 			_rename_lv(seg_lv(seg, s), ft->image[!to_dup], ft->image[!!to_dup]);
 
-		if (seg->meta_areas)
+		if (seg->meta_areas && (flags & RAID_META))
 			_rename_lv(seg_metalv(seg, s), ft->meta[!to_dup], ft->meta[!!to_dup]);
 	}
 
 	if (seg->log_lv)
 		_rename_lv(seg->log_lv, ft->meta[!to_dup], ft->meta[!!to_dup]);
+}
+
+static void _rename_sub_lvs(struct logical_volume *lv, int to_dup)
+{
+	return __rename_sub_lvs(lv, to_dup, RAID_IMAGE | RAID_META);
+}
+
+static void _rename_metasub_lvs(struct logical_volume *lv, int to_dup)
+{
+	return __rename_sub_lvs(lv, to_dup, RAID_META);
 }
 
 /*
@@ -4120,10 +4127,13 @@ static int _raid_conv_unduplicate(struct logical_volume *lv,
  */
 TAKEOVER_HELPER_FN(_raid_conv_duplicate)
 {
-	uint32_t extents, region_size = 1024;
-	char *lv_name, *suffix;
+	uint32_t extents, region_size = 1024, s;
+	char *lv_name, *p, *suffix;
 	struct logical_volume *dst_lv;
 	struct lv_segment *seg = first_seg(lv);
+#if 1
+	const char *lv_name_sav[2];
+#endif
 
 	/*
 	 * In case of active conversion duplication, remove top-level raid1 lv with either
@@ -4145,6 +4155,12 @@ PFLA("segtype=%s area_count=%u data_copies=%u stripe_size=%u", seg->segtype->nam
 	    new_data_copies == seg->data_copies &&
 	    new_stripe_size == seg->stripe_size) {
 		log_error("No change on duplicating conversion of LV %s", display_lvname(lv));
+		return 0;
+	}
+
+	if (seg_is_linear(seg) &&
+	    (new_image_count > 1 || new_data_copies > 1 || new_stripes > 1)) {
+		log_error("No stripes/mirrors with %s", new_segtype->name);
 		return 0;
 	}
 
@@ -4182,15 +4198,6 @@ PFLA("new_image_count=%u extents=%u", new_image_count, extents);
 			return 0;
 		}
 	}
-PFL();
-	if (segtype_is_linear(new_segtype)) {
-		if (!(new_segtype = get_segtype_from_string(lv->vg->cmd, SEG_TYPE_NAME_STRIPED)))
-			return_0;
-
-		region_size = new_stripe_size = 0;
-		new_image_count = 1;
-	}
-PFLA("new_image_count=%u new_data_copies=%u", new_image_count, new_data_copies);
 
 	log_debug_metadata("Creating unique LV name for source sub LV");
 	if (!(lv_name = _unique_lv_name(lv, "_dsrc")))
@@ -4224,6 +4231,8 @@ PFLA("lv->name=%s lv->le_count=%u seg_lv(seg, 0)=%s", lv->name, lv->le_count, se
 		log_error("Failed to create destination lv %s/%s", lv->vg->name, lv_name);
 		return 0;
 	}
+	lv_set_hidden(dst_lv);
+	dst_lv->status |= RAID_IMAGE;
 
 	if (lv->le_count != dst_lv->le_count) {
 		log_warn("Destination LV with %u extents is larger than source with %u due to stripe boundary rounding",
@@ -4254,26 +4263,51 @@ PFL();
 			  display_lvname(dst_lv), display_lvname(lv));
 		return 0;
 	}
-
+#if 1
+	/*
+	 * Rename top-level raid1 sub LVs temporarily to create
+	 * metadata sub LVs with "_rmeta" names.
+	 *
+	 * Need double '_' to not collide with dst_lv namespace
+	 */
+	for (s = 0; s < 2; s++) {
+		lv_name_sav[s] = seg_lv(seg, s)->name;
+		if (!(seg_lv(seg, s)->name = _generate_raid_name(lv, "_rimage", s)))
+			return_0;
+	}
+#endif
 PFLA("lv->name=%s meta_areas=%p", lv->name, seg->meta_areas);
 	/* Enforce metadata image creation for top-level raid1 */
 	seg->meta_areas = NULL;
 	if (!_alloc_and_add_rmeta_devs_for_lv(lv))
 		return 0;
-
-	/* Set destination lv to be synced */
-	seg_lv(seg, 0)->status &= ~LV_REBUILD;
-	seg_lv(seg, 1)->status |= LV_REBUILD;
-	lv->status |= RAID;
-	lv->status &= ~LV_NOTSYNCED;
-	seg_lv(seg, 0)->status |= RAID_IMAGE;
-	lv_set_visible(lv);
 #if 1
-	if (!activate_lv_excl_local(lv->vg->cmd, dst_lv)) {
-		log_error("Failed to deactivate LV %s exlusive locally", display_lvname(dst_lv));
-		return 0;
+	/* Rename top-level raid1 sub LVs back */
+	for (s = 0; s < 2; s++) {
+		if ((p = strstr(seg_metalv(seg, s)->name, "__")))
+			strcpy(p + 1, p + 2);
+
+		seg_lv(seg, s)->name = lv_name_sav[s];
+PFLA("seg_lv(seg, %u)=%s", s, seg_lv(seg, s)->name);
+PFLA("seg_metalv(seg, %u)=%s", s, seg_metalv(seg, s)->name);
+	}
+
+	_rename_metasub_lvs(lv, 1);
+
+	for (s = 0; s < 2; s++) {
+PFLA("seg_lv(seg, %u)=%s", s, seg_lv(seg, s)->name);
+PFLA("seg_metalv(seg, %u)=%s", s, seg_metalv(seg, s)->name);
 	}
 #endif
+	/* Enforce destination lv to be synced */
+	seg_lv(seg, 0)->status &= ~LV_REBUILD;
+	seg_lv(seg, 1)->status |= LV_REBUILD;
+
+	/* Set top-level LV status */
+	lv->status |= RAID | RAID_IMAGE;
+	lv->status &= ~LV_NOTSYNCED;
+	lv_set_visible(lv);
+
 PFLA("lv0->le_count=%u lv1->le_count=%u", seg_lv(seg, 0)->le_count, seg_lv(seg, 1)->le_count);
 
 	/*
@@ -5646,6 +5680,8 @@ static int _lv_create_raid01_image_lvs(struct logical_volume *lv,
 			log_error("Failed to create striped image lv %s/%s", lv->vg->name, image_name);
 			return 0;
 		}
+		lv_set_hidden(image_lv);
+		image_lv->status |= RAID_IMAGE;
 
 		log_debug_metadata("Setting %u stripe segment area for %s", s + 1, display_lvname(lv));
 		if (!set_lv_segment_area_lv(seg, s, image_lv, 0 /* le */, seg->status | RAID_IMAGE))
