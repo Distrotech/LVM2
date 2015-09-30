@@ -1465,8 +1465,8 @@ static int _lv_reduce(struct logical_volume *lv, uint32_t extents, int delete)
 
 	stripes = seg->area_count - seg->segtype->parity_devs;
 PFLA("lv=%s lv->le_count=%u seg=%p extents=%u stripes=%u data_copies=%u delete=%u", lv->name, lv->le_count, seg, extents, stripes, seg->data_copies, delete);
-#if 1
-	/* Check for multi-level stack (e.g. extension of a duplicated LV stack) */
+#if 0
+	/* Check for multi-level stack (e.g. reduction of a duplicated LV stack) */
 	for (s = 0; s < seg->area_count; s++) {
 		if (seg_type(seg, s) == AREA_LV &&
 		    (seg1 = last_seg(seg_lv(seg, s))) && /* <- segment of #s LV underneath top-level */
@@ -1486,6 +1486,15 @@ PFLA("reduce recursive lv=%s le_count=%u extents=%u", display_lvname(lv), lv->le
 		seg->area_len = _area_len(seg, seg->len);
 		lv->le_count = seg->len;
 		lv->size = (uint64_t) lv->le_count * lv->vg->extent_size;
+		if (delete) {
+			if (seg->meta_areas)
+				for (s = 0; s < seg->area_count; s++)
+					if (!lv_remove(seg_metalv(seg, s)))
+						return_0;
+
+			goto out;
+		}
+
 		return 1;
 	}
 #endif
@@ -1569,13 +1578,12 @@ PFLA("seg->lv=%s reduction=%u", display_lvname(seg->lv), reduction);
 		count -= reduction;
 	}
 
-out:
 	lv->le_count -= extents;
 	lv->size = (uint64_t) lv->le_count * lv->vg->extent_size;
 
 	if (!delete)
 		return 1;
-
+out:
 #if 0
 	if (seg_is_raid1(seg)) {
 		uint32_t s;
@@ -6752,7 +6760,6 @@ PFL();
 		return 0;
 	}
 PFL();
-
 	/*
 	 * Before removal, the layer should be cleaned up,
 	 * i.e. additional segments and areas should have been removed.

@@ -150,9 +150,12 @@ static int _lv_is_duplicating(const struct logical_volume *lv)
 	struct lv_segment *seg = first_seg(lv);
 
 	/* Needs to be raid1 with 2 legs and the legs must have the proper names suffixes */
-	return (seg_is_raid1(seg) &&
+	return (seg &&
+		seg_is_raid1(seg) &&
 		seg->area_count == 2 &&
+		seg_type(seg, 0) == AREA_LV &&
 		strstr(seg_lv(seg, 0)->name, "_dsrc") &&
+		seg_type(seg, 1) == AREA_LV &&
 		strstr(seg_lv(seg, 1)->name, "_ddst"));
 }
 
@@ -3942,73 +3945,77 @@ static char *_unique_lv_name(struct logical_volume *lv, const char *suffix)
 	return name;
 }
 
-static void _rename_lv(struct logical_volume *lv, const char *from, const char *to)
+static int _rename_lv(struct logical_volume *lv, const char *from, const char *to)
 {
 	size_t sz;
 	char *name = (char *) lv->name, *p;
 
 	if (!(p = strstr(lv->name, from))) {
 		log_error(INTERNAL_ERROR "Failed to find %s in lv name %s", from, display_lvname(lv));
-		return;
+		return 0;
 	}
 
 	sz = p - lv->name + strlen(to) + (strlen(p) - strlen(from)) + 1;
 	if (!(name = dm_pool_alloc(lv->vg->vgmem, sz))) {
 		log_error(INTERNAL_ERROR "Failed to allocate name for %s", display_lvname(lv));
-		return;
+		return 0;
 	}
 		
 	sz = p - lv->name;
 	strncpy(name, lv->name, sz);
 	strncpy(name + sz, to, strlen(to));
 	strcpy(name + sz + strlen(to), p + strlen(from));
-
 	lv->name = name;
+
+	return 1;
 }
 
 /*
  * Helper to rename rimage/rmeta or mimage/mlog name
  * suffixes to/from duplication conversion namespace
  */
-/* HM FIXME: enhance to support "mirror" log LV(s) */
-static void __rename_sub_lvs(struct logical_volume *lv, int to_dup, uint64_t flags)
+enum rename_dir { to_dup = 0, from_dup };
+static int __rename_sub_lvs(struct logical_volume *lv, enum rename_dir dir, uint64_t flags)
 {
 	uint32_t s;
 	struct lv_segment *seg = first_seg(lv);
 	struct from_to {
 		const char *image[2];
 		const char *meta[2];
-	};
-	static struct from_to ft_raid = {
-		{ "_rimage", "_rdimage" },
-		{ "_rmeta" , "_rdmeta"  }
-	};
-	static struct from_to ft_mirror = {
-		{ "_mimage", "_mdimage" },
-		{ "_mlog" ,  "_mdlog"  }
-	};
-	struct from_to *ft = seg_is_mirror(seg) ? &ft_mirror : &ft_raid;
+	} ft_raid[2] = {
+		/* raid namespace */
+		{ { "_rimage", "_rdimage" },
+		  { "_rmeta" , "_rdmeta"  } },
+		/* mirror namespace */
+		{ { "_mimage", "_mdimage" },
+		  { "_mlog" ,  "_mdlog"  } }
+	}, *ft = ft_raid + seg_is_mirror(seg);
 
 	for (s = 0; s < seg->area_count; s++) {
 		if (seg_type(seg, s) == AREA_LV && (flags & RAID_IMAGE))
-			_rename_lv(seg_lv(seg, s), ft->image[!to_dup], ft->image[!!to_dup]);
+			if (!_rename_lv(seg_lv(seg, s), ft->image[!!dir], ft->image[!dir]))
+				return 0;
 
 		if (seg->meta_areas && (flags & RAID_META))
-			_rename_lv(seg_metalv(seg, s), ft->meta[!to_dup], ft->meta[!!to_dup]);
+			if (!_rename_lv(seg_metalv(seg, s), ft->meta[!!dir], ft->meta[!dir]))
+				return 0;
 	}
 
 	if (seg->log_lv)
-		_rename_lv(seg->log_lv, ft->meta[!to_dup], ft->meta[!!to_dup]);
+		if (!_rename_lv(seg->log_lv, ft->meta[!!dir], ft->meta[!dir]))
+			return 0;
+
+	return 1;
 }
 
-static void _rename_sub_lvs(struct logical_volume *lv, int to_dup)
+static int _rename_sub_lvs(struct logical_volume *lv, enum rename_dir dir)
 {
-	return __rename_sub_lvs(lv, to_dup, RAID_IMAGE | RAID_META);
+	return __rename_sub_lvs(lv, dir, RAID_IMAGE | RAID_META);
 }
 
-static void _rename_metasub_lvs(struct logical_volume *lv, int to_dup)
+static int _rename_metasub_lvs(struct logical_volume *lv, enum rename_dir dir)
 {
-	return __rename_sub_lvs(lv, to_dup, RAID_META);
+	return __rename_sub_lvs(lv, dir, RAID_META);
 }
 
 /*
@@ -4032,10 +4039,17 @@ static int _raid_conv_unduplicate(struct logical_volume *lv,
 	uint32_t idx;
 	struct dm_list removal_lvs;
 	struct logical_volume *lv_tmp;
-	struct lv_segment *seg = first_seg(lv);
-	struct lv_segment *seg0 = first_seg(seg_lv(seg, 0));
-	struct lv_segment *seg1 = first_seg(seg_lv(seg, 1));
+	struct lv_segment *seg = first_seg(lv), *seg0, *seg1;
 
+PFL();
+	if (seg_type(seg, 0) != AREA_LV ||
+	    seg_type(seg, 1) != AREA_LV) {
+		log_error(INTERNAL_ERROR "Called with bogis stack");
+		return 0;
+	}
+
+	seg0 = first_seg(seg_lv(seg, 0));
+	seg1 = first_seg(seg_lv(seg, 1));
 	if (seg0->segtype == seg1->segtype) {
 		if (seg0->area_count == seg1->area_count)
 			idx = (seg1->data_copies == new_data_copies) ? 1 : 0;
@@ -4056,6 +4070,7 @@ static int _raid_conv_unduplicate(struct logical_volume *lv,
 		return 0;
 	}
 
+PFL();
 	/* Removing the source requires the destination to be fully in sync! */
 	if (!idx && !_raid_in_sync(lv)) {
 		log_error("Can't convert to destination when LV %s is not in sync",
@@ -4075,12 +4090,17 @@ static int _raid_conv_unduplicate(struct logical_volume *lv,
 	if (idx)
 		log_warn("Keeping source lv %s", display_lvname(seg_lv(seg, 0)));
 
-	_rename_sub_lvs(seg_lv(seg, idx), 0);
+PFL();
+	if (!_rename_sub_lvs(seg_lv(seg, idx), from_dup)) {
+		log_error(INTERNAL_ERROR "Failed to rename %s sub LVs", display_lvname(seg_lv(seg, idx)));
+		return 0;
+	}
 
 	/*
 	 * Extract image components of the raid1 top-level LV and set to error segment
 	 * but the source/destination lv extracted, so that the sublvs get deactivated
 	 */
+PFL();
 	dm_list_init(&removal_lvs);
 	if (!_extract_image_component_sublist(seg, RAID_META, 0, 1, &removal_lvs, 1) ||
 	    !_extract_image_component_sublist(seg, RAID_META, 1, 2, &removal_lvs, 1) ||
@@ -4090,7 +4110,7 @@ static int _raid_conv_unduplicate(struct logical_volume *lv,
 			  display_lvname(seg_lv(seg, idx)));
 		return 0;
 	}
-
+PFL();
 	/* If we drop source, move destination areas across */
 	if (!idx) {
 		seg->areas[0] = seg->areas[1];
@@ -4098,22 +4118,31 @@ static int _raid_conv_unduplicate(struct logical_volume *lv,
 	}
 	seg->area_count = 1;
 
+PFL();
 	/* Add source/destination last image lv to removal_lvs */
 	lv_tmp = seg_lv(seg, 0);
 	if (!_lv_reset_raid_add_to_list(lv_tmp, &removal_lvs))
 		return 0;
-
+PFL();
 	/* Adjust size, because the 2 legs may differ caused by stripe rounding */
 	lv->le_count = max(lv->le_count, lv_tmp->le_count);
 	lv->size = lv->le_count * lv->vg->extent_size;
-
+PFL();
 	/* Remove the raid1 layer from the LV */
 	if (!remove_layer_from_lv(lv, lv_tmp))
 		return_0;
-
-	_rename_sub_lvs(lv, 0);
+#if 1
+	if (!first_seg(lv)) {
+		log_error(INTERNAL_ERROR "No first segment!?");
+		return 0;
+	}
+#endif
+	if (!_rename_sub_lvs(lv, from_dup)) {
+		log_error(INTERNAL_ERROR "Failed to rename %s sub LVs", display_lvname(lv));
+		return 0;
+	}
 	lv_set_visible(lv);
-
+PFL();
 	return _lv_update_and_reload_origin_eliminate_lvs(lv, &removal_lvs);
 }
 
@@ -4215,7 +4244,10 @@ PFLA("new_image_count=%u extents=%u", new_image_count, extents);
 
 	/* Rename soure lvs sub lvs */
 	log_debug_metadata("Renaming source LV %s sub LVs", display_lvname(seg_lv(seg, 0)));
-	_rename_sub_lvs(seg_lv(seg, 0), 1);
+	if (!_rename_sub_lvs(seg_lv(seg, 0), to_dup)) {
+		log_error(INTERNAL_ERROR "Failed to rename %s sub LVs", display_lvname(seg_lv(seg, 0)));
+		return 0;
+	}
 
 PFLA("seg->area_count=%u", seg->area_count);
 PFLA("lv->name=%s lv->le_count=%u seg_lv(seg, 0)=%s", lv->name, lv->le_count, seg_lv(seg, 0)->name);
@@ -4243,7 +4275,10 @@ PFLA("lv->name=%s lv->le_count=%u seg_lv(seg, 0)=%s", lv->name, lv->le_count, se
 PFL();
 	/* Rename destination lvs sub lvs */
 	log_debug_metadata("Renaming destination LV %s sub LVs", display_lvname(dst_lv));
-	_rename_sub_lvs(dst_lv, 1);
+	if (!_rename_sub_lvs(dst_lv, to_dup)) {
+		log_error(INTERNAL_ERROR "Failed to rename %s sub LVs", display_lvname(dst_lv));
+		return 0;
+	}
 
 	/* Grow areas arrays for data and metadata devs to add destination lv */
 	log_debug_metadata("Realocating areas array of %s", display_lvname(lv));
@@ -4292,7 +4327,10 @@ PFLA("seg_lv(seg, %u)=%s", s, seg_lv(seg, s)->name);
 PFLA("seg_metalv(seg, %u)=%s", s, seg_metalv(seg, s)->name);
 	}
 
-	_rename_metasub_lvs(lv, 1);
+	if (!_rename_metasub_lvs(lv, to_dup)) {
+		log_error(INTERNAL_ERROR "Failed to rename metadata %s sub LVs", display_lvname(lv));
+		return 0;
+	}
 
 	for (s = 0; s < 2; s++) {
 PFLA("seg_lv(seg, %u)=%s", s, seg_lv(seg, s)->name);
@@ -4301,7 +4339,7 @@ PFLA("seg_metalv(seg, %u)=%s", s, seg_metalv(seg, s)->name);
 #endif
 	/* Enforce destination lv to be synced */
 	seg_lv(seg, 0)->status &= ~LV_REBUILD;
-	seg_lv(seg, 1)->status |= LV_REBUILD;
+	seg_lv(seg, 1)->status |= LV_REBUILD | LV_NOTSYNCED;
 
 	/* Set top-level LV status */
 	lv->status |= RAID | RAID_IMAGE;
@@ -4314,10 +4352,12 @@ PFLA("lv0->le_count=%u lv1->le_count=%u", seg_lv(seg, 0)->le_count, seg_lv(seg, 
 	 * Prevent dst_lv from syncing, because the top-level
 	 * raid1 will rewrite it anyway during full resync
 	 */
-	init_mirror_in_sync(0);
+	// init_mirror_in_sync(0);
 
 	if (!_lv_update_and_reload_origin_eliminate_lvs(lv, NULL))
 		return_0;
+
+	return 1;
 
 	/* HM FIXME: have to send message to correctly start rebuilding or it stops even w/o init_mirror_in_sync(0) ? */ 
 	return _lv_cond_repair(lv);
