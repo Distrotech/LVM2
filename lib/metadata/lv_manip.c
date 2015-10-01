@@ -1018,7 +1018,6 @@ PFL();
 	return seg;
 }
 
-#if 1
 /* Round up @extents to next stripe boundary for number of @stripes */
 static uint32_t _round_to_stripe_boundary(struct logical_volume *lv, uint32_t extents,
 					  uint32_t stripes, uint32_t data_copies, int extend)
@@ -1050,27 +1049,6 @@ PFLA("lv=%s lv->le_count=%u extents=%u stripes=%u", lv->name, lv->le_count, exte
 PFLA("extents=%u r=%u", extents, r);
 	return r;
 }
-#else
-/* Round up @extents to next stripe boundary for number of @stripes */
-static uint32_t _round_to_stripe_boundary(struct logical_volume *lv, uint32_t extents, uint32_t stripes, int extend)
-{
-	uint32_t rest;
-
-PFLA("lv=%s extents=%u stripes=%u", lv->name, extents, stripes);
-	if (!stripes)
-		return extents;
-
-	/* Round up extents to stripe divisable amount */
-	if ((rest = extents % stripes)) {
-		extents += extend ? stripes - rest : -rest;
-		log_print_unless_silent("Rounding up size to full stripe size %s",
-			  		display_size(lv->vg->cmd, extents * lv->vg->extent_size));
-	}
-PFLA("extents=%u stripes=%u rest=%u", extents, stripes, rest);
-
-	return extents;
-}
-#endif
 
 struct lv_segment *alloc_snapshot_seg(struct logical_volume *lv,
 				      uint64_t status, uint32_t old_le_count)
@@ -1447,17 +1425,33 @@ PFL();
 	return 1;
 }
 
+static int _is_multilayered_lv(struct logical_volume *lv, uint32_t s)
+{
+
+#if 0
+	struct lv_segment *seg = last_seg(lv);
+
+	return seg_type(seg, s) == AREA_LV && last_seg(seg_lv(seg, s));
+#else
+	struct lv_segment *seg = last_seg(lv), *seg1;
+
+	return seg_type(seg, s) == AREA_LV &&
+	       (seg1 = last_seg(seg_lv(seg, s))) && /* <- segment of #s LV underneath top-level */
+	       seg_type(seg1, 0) == AREA_LV &&
+	       (strstr(seg_lv(seg1, 0)->name, "_rimage") ||
+	        strstr(seg_lv(seg1, 0)->name, "_rdimage"));
+#endif
+}
+
 /*
  * Entry point for all LV reductions in size.
  */
 static int _lv_reduce(struct logical_volume *lv, uint32_t extents, int delete)
 {
+	int dont_recurse = !delete && extents == lv->le_count;
 	int reduced = 0;
-	struct lv_segment *seg = last_seg(lv), *seg1;
-	uint32_t s;
-	uint32_t count;
-	uint32_t reduction;
-	uint32_t stripes;
+	struct lv_segment *seg = last_seg(lv);
+	uint32_t count, extents_sav = extents, reduction, s, stripes;
 	struct logical_volume *pool_lv;
 
 	if (!lv->le_count)
@@ -1465,42 +1459,54 @@ static int _lv_reduce(struct logical_volume *lv, uint32_t extents, int delete)
 
 	stripes = seg->area_count - seg->segtype->parity_devs;
 PFLA("lv=%s lv->le_count=%u seg=%p extents=%u stripes=%u data_copies=%u delete=%u", lv->name, lv->le_count, seg, extents, stripes, seg->data_copies, delete);
-#if 0
+#if 1
 	/* Check for multi-level stack (e.g. reduction of a duplicated LV stack) */
-	for (s = 0; s < seg->area_count; s++) {
-		if (seg_type(seg, s) == AREA_LV &&
-		    (seg1 = last_seg(seg_lv(seg, s))) && /* <- segment of #s LV underneath top-level */
-		    seg_type(seg1, 0) == AREA_LV &&
-		    seg1->area_count > 1) {
+	if (!dont_recurse) {
+		for (s = 0; s < seg->area_count; s++) {
+			if (_is_multilayered_lv(lv, s)) {
 PFLA("recursive seg_lv(seg, %u)=%s", s, display_lvname(seg_lv(seg, s)));
-			if (!_lv_reduce(seg_lv(seg, s), seg_lv(seg, s)->le_count - (lv->le_count - extents), delete))
-				return_0;
+				if (!_lv_reduce(seg_lv(seg, s), seg_lv(seg, s)->le_count - (lv->le_count - extents), delete))
+					return_0;
 PFLA("end recursive seg_lv(seg, %u)=%s", s, display_lvname(seg_lv(seg, s)));
-			reduced++;
+				reduced++;
+			}
 		}
-	}
 
-	if (reduced) {
+		if (reduced) {
 PFLA("reduce recursive lv=%s le_count=%u extents=%u", display_lvname(lv), lv->le_count, extents);
-		seg->len -= extents;
-		seg->area_len = _area_len(seg, seg->len);
-		lv->le_count = seg->len;
-		lv->size = (uint64_t) lv->le_count * lv->vg->extent_size;
-		if (delete) {
-			if (seg->meta_areas)
+			seg->len -= extents;
+			seg->area_len = _area_len(seg, seg->len);
+			lv->le_count = seg->len;
+			lv->size = (uint64_t) lv->le_count * lv->vg->extent_size;
+			if (delete &&
+			    !lv->le_count &&
+			    seg->meta_areas) {
 				for (s = 0; s < seg->area_count; s++)
 					if (!lv_remove(seg_metalv(seg, s)))
 						return_0;
+				goto out;
+			}
 
-			goto out;
+			return 1;
 		}
-
-		return 1;
 	}
 #endif
 
+	extents_sav = extents;
 	if (seg_is_striped(seg) || seg_is_striped_raid(seg))
 		extents = _round_to_stripe_boundary(lv, extents, stripes, seg->data_copies, 0);
+
+	if (extents > extents_sav) {
+		log_warn("LV %s would be %u extents smaller than requested due to stripe boundary rounding!",
+			 display_lvname(lv), extents - extents_sav);
+		if (yes_no_prompt("Do you really want to reduce %s? [y/n]: ",
+				  display_lvname(lv)) == 'n') {
+			log_error("Logical volume %s NOT reduced", display_lvname(lv));
+			return 0;
+		}
+		if (sigint_caught())
+			return_0;
+	}
 
 PFLA("lv=%s lv->le_count=%u seg=%p extents=%u", lv->name, lv->le_count, seg, extents);
 
@@ -4263,22 +4269,21 @@ int lv_extend(struct logical_volume *lv,
 	uint32_t old_extents;
 	uint32_t prev_region_size;
 	uint64_t lv_size;
-	struct lv_segment *seg = last_seg(lv), *seg1;
+	struct lv_segment *seg = last_seg(lv);
 
 	log_very_verbose("Adding segment of type %s to LV %s.", segtype->name, display_lvname(lv));
-
 #if 1
 	/* Check for multi-level stack (e.g. extension of a duplicated LV stack) */
 	if (seg) {
 		int extended = 0;
 
 		for (s = 0; s < seg->area_count; s++) {
-			if (seg_type(seg, s) == AREA_LV &&
-			    (seg1 = first_seg(seg_lv(seg, s))) && /* <- segment of #s LV underneath top-level */
-			    seg_type(seg1, 0) == AREA_LV &&
-			    seg1->area_count > 1) {
-PFLA("recursive seg_lv(seg, %u)=%s", s, display_lvname(seg_lv(seg, s)));
-				if (!lv_extend(seg_lv(seg, s), seg1->segtype, seg1->area_count, seg1->stripe_size, seg1->data_copies, seg1->region_size, extents, allocatable_pvs, alloc, approx_alloc))
+			if (_is_multilayered_lv(lv, s)) {
+				struct logical_volume *lv1 = seg_lv(seg, s);
+				struct lv_segment *seg1 = last_seg(lv1);
+
+PFLA("recursive seg_lv(seg, %u)=%s", s, display_lvname(lv1));
+				if (!lv_extend(lv1, seg1->segtype, seg1->area_count, seg1->stripe_size, seg1->data_copies, seg1->region_size, extents, allocatable_pvs, alloc, approx_alloc))
 					return_0;
 
 				extended++;

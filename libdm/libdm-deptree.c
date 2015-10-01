@@ -2441,7 +2441,7 @@ static int _raid_emit_segment_line(struct dm_task *dmt, uint32_t major,
 	else if (seg->type == SEG_RAID10_OFFSET)
 		EMIT_PARAMS(pos, " raid10_format offset");
 
-	if (seg->data_copies > 1)
+	if (seg->data_copies > 1 && type == SEG_RAID10_NEAR)
 		EMIT_PARAMS(pos, " raid10_copies %u", seg->data_copies);
 
 	if (seg->flags & DM_NOSYNC)
@@ -2469,7 +2469,10 @@ static int _raid_emit_segment_line(struct dm_task *dmt, uint32_t major,
 	if (seg->writebehind)
 		EMIT_PARAMS(pos, " max_write_behind %u", seg->writebehind);
 
-	/* Has to be before "min_recovery_rate" or the kernels check will fail when both set */
+	/*
+	 * Has to be before "min_recovery_rate" or the kernels
+	 * check will fail when both set and min > previous max
+	 */
 	if (seg->max_recovery_rate)
 		EMIT_PARAMS(pos, " max_recovery_rate %u",
 			    seg->max_recovery_rate);
