@@ -151,17 +151,15 @@ static int _lv_is_duplicating(const struct logical_volume *lv)
 	struct lv_segment *seg = first_seg(lv);
 
 	/* Needs to be raid1 with 2 legs and the legs must have the proper names suffixes */
-	if (!(seg &&
-	      seg_is_raid1(seg) &&
-	      seg->area_count >= 2 &&
-	      seg_type(seg, 0) == AREA_LV &&
-	      strstr(seg_lv(seg, 0)->name, "_dsrc")))
+	if (!seg ||
+	    seg->area_count < 2 ||
+	    !seg_is_raid1(seg))
 		return 0;
 
-	for (s = 1; s < seg->area_count; s++)
-		if (!(seg_type(seg, 1) == AREA_LV &&
-		     strstr(seg_lv(seg, 1)->name, "_ddst")))
-		return 0;
+	for (s = 0; s < seg->area_count; s++)
+		if (seg_type(seg, s) != AREA_LV ||
+		    !strstr(seg_lv(seg, s)->name, "_dup"))
+			return 0;
 
 	return 1;
 }
@@ -4226,10 +4224,10 @@ PFLA("new_image_count=%u extents=%u", new_image_count, extents);
 	/* If not yet duplicating -> add the top-level raid1 mapping */
 	if (!duplicating) {
 		log_debug_metadata("Creating unique LV name for source sub LV");
-		if (!(lv_name = _unique_lv_name(lv, "_dsrc")))
+		if (!(lv_name = _unique_lv_name(lv, "_dup")))
 			return 0;
 
-		if (!(suffix = strstr(lv_name, "_dsrc"))) {
+		if (!(suffix = strstr(lv_name, "_dup"))) {
 			log_error(INTERNAL_ERROR "Failed to find source prefix in source lv name %s", lv_name);
 			return 0;
 		}
@@ -4251,7 +4249,7 @@ PFLA("seg->area_count=%u", seg->area_count);
 PFLA("lv->name=%s lv->le_count=%u seg_lv(seg, 0)=%s", lv->name, lv->le_count, seg_lv(seg, 0)->name);
 
 	log_debug_metadata("Creating unique LV name for destination sub LV");
-	if (!(lv_name = _unique_lv_name(lv, "_ddst")))
+	if (!(lv_name = _unique_lv_name(lv, "_dup")))
 		return 0;
 
 	/* Create the destination lv */
@@ -4380,8 +4378,9 @@ PFLA("lv0->le_count=%u lv1->le_count=%u", seg_lv(seg, 0)->le_count, seg_lv(seg, 
  	 * raid6 as well would suffer from bogus parity
  	 * if not initially synchronizsed!
  	 */
-	if (segtype_is_striped_raid(new_segtype) &&
-	    !segtype_is_any_raid0(new_segtype) &&
+	if ((segtype_is_raid4(new_segtype) ||
+	     segtype_is_any_raid5(new_segtype) ||
+	     segtype_is_any_raid6(new_segtype)) &&
 	    !_lv_cond_repair(dst_lv))
 		return 0;
 
