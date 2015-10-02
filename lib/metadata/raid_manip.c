@@ -3865,10 +3865,9 @@ TAKEOVER_FN(_error)
 
 /****************************************************************************/
 /*
- * HM FIXME: Bastelkeller ;-)
- *
  * Conversion via creation of a new LV to put
- * top-level raid1 on top of source and destination
+ * top-level raid1 on top of initial maping and
+ * N addtitional ones with arbitrayr supported layout.
  */
 /* Create a new LV with type @segtype */
 static struct logical_volume *_lv_create(struct volume_group *vg, const char *lv_name,
@@ -3903,6 +3902,7 @@ static struct logical_volume *_lv_create(struct volume_group *vg, const char *lv
 PFLA("lv_name=%s segtype=%s data_copies=%u stripes=%u region_size=%u stripe_size=%u extents=%u",
      lv_name, segtype->name, data_copies, stripes, region_size, stripe_size, extents);
 
+	/* Caller should ensure all this... */
 	if (segtype_is_raid1(segtype) && stripes != 1) {
 		log_warn("Adjusting stripes to 1i for raid1");
 		lp.stripes = 1;
@@ -3932,10 +3932,11 @@ PFLA("data_copies=%u", data_copies);
 	}
 
 	/* FIXME: Maybe using silent mode ? */
-	log_verbose("Preparing pool metadata spare volume for Volume group %s.", vg->name);
+	log_debug_metadata("Creating new logical volume %s/%s.", vg->name, lp.lv_name);
 	if (!(r = lv_create_single(vg, &lp)))
 		return_NULL;
 
+	/* HM FIXME: needed at all? */
 	if (segtype_is_mirror(segtype))
 		first_seg(r)->meta_areas = NULL;
 
@@ -4037,6 +4038,7 @@ static int _rename_metasub_lvs(struct logical_volume *lv, enum rename_dir dir)
  * remove top-level raid1 lv with either source/destination
  * legs selected by --type/--stripes/--mirrors arguments option
  */
+#define CONVERSION_HELPER_FN(function_name) TAKEOVER_FN(function_name)
 static int _raid_conv_unduplicate(struct logical_volume *lv,	
 				  const struct segment_type *new_segtype,
 				  unsigned new_image_count,
@@ -4164,7 +4166,8 @@ PFL();
  * creates and allocates a destination lv of ~ (rounding) the
  * same size with the requested @new_segtype and properties (e.g. stripes).
  */
-TAKEOVER_HELPER_FN(_raid_conv_duplicate)
+#define CONVERSION_HELPER_FN(function_name) TAKEOVER_FN(function_name)
+CONVERSION_HELPER_FN(_raid_conv_duplicate)
 {
 	int duplicating = _lv_is_duplicating(lv);
 	uint32_t extents, region_size = 1024, s;
@@ -4295,7 +4298,7 @@ PFL();
 			  display_lvname(dst_lv), display_lvname(lv));
 		return 0;
 	}
-#if 1
+
 	/*
 	 * Rename top-level raid1 sub LVs temporarily to create
 	 * metadata sub LVs with "_rmeta" names.
@@ -4307,7 +4310,7 @@ PFL();
 		if (!(seg_lv(seg, s)->name = _generate_raid_name(lv, "_rimage", s)))
 			return_0;
 	}
-#endif
+
 PFLA("lv->name=%s meta_areas=%p", lv->name, seg->meta_areas);
 	if (duplicating) {
 		struct logical_volume *meta_lv;
@@ -4329,7 +4332,7 @@ PFLA("lv->name=%s meta_areas=%p", lv->name, seg->meta_areas);
 		if (!_alloc_and_add_rmeta_devs_for_lv(lv))
 			return 0;
 	}
-#if 1
+
 	/* Rename top-level raid1 sub LVs back */
 	for (s = 0; s < seg->area_count; s++) {
 		if ((p = strstr(seg_metalv(seg, s)->name, "__")))
@@ -4343,7 +4346,7 @@ PFLA("lv->name=%s meta_areas=%p", lv->name, seg->meta_areas);
 		log_error(INTERNAL_ERROR "Failed to rename metadata %s sub LVs", display_lvname(lv));
 		return 0;
 	}
-
+#if 1
 	for (s = 0; s < seg->area_count; s++) {
 PFLA("seg_lv(seg, %u)=%s", s, seg_lv(seg, s)->name);
 PFLA("seg_metalv(seg, %u)=%s", s, seg_metalv(seg, s)->name);
@@ -4361,24 +4364,29 @@ PFLA("seg_metalv(seg, %u)=%s", s, seg_metalv(seg, s)->name);
 PFLA("lv0->le_count=%u lv1->le_count=%u", seg_lv(seg, 0)->le_count, seg_lv(seg, 1)->le_count);
 
 	init_mirror_in_sync(0);
-#if 0
-	/* HM FIXME: LV_NOTSYNCED needed to start repair this way, but that leaves it in the metadata */
 	lv->status |= LV_NOTSYNCED;
 
-	return _lv_update_and_reload_origin_eliminate_lvs(lv, NULL);
-#else
 	if (!_lv_update_and_reload_origin_eliminate_lvs(lv, NULL))
 		return_0;
 
-	/* Ensure initial sync on striped parity raid */
+	/*
+	 * HM FIXME: LV_NOTSYNCED would be needed to start repair,
+	 * but that leaves it in the metadata, so I use lv_cond_repair()
+	 * to kick initial resynchronization off in order to avoid
+	 * another metadata update.
+	 *
+ 	 * Ensure initial sync on striped parity raid.
+ 	 * raid1 does not need it _but_ raid4/5 and maybe
+ 	 * raid6 as well would suffer from bogus parity
+ 	 * if not initially synchronizsed!
+ 	 */
 	if (segtype_is_striped_raid(new_segtype) &&
 	    !segtype_is_any_raid0(new_segtype) &&
 	    !_lv_cond_repair(dst_lv))
 		return 0;
 
-	/* HM FIXME: this does not touch LV_NOTSYNCED in the metadata */
+	/* Ensure resynchronisation of new top-level raid1 leg */
 	return _lv_cond_repair(lv);
-#endif
 }
 
 /*
