@@ -4243,6 +4243,8 @@ PFLA("new_image_count=%u extents=%u", new_image_count, extents);
 			log_error(INTERNAL_ERROR "Failed to rename %s sub LVs", display_lvname(seg_lv(seg, 0)));
 			return 0;
 		}
+
+		lv->status &= ~LV_NOTSYNCED;
 	} 
 
 PFLA("seg->area_count=%u", seg->area_count);
@@ -4362,7 +4364,7 @@ PFLA("seg_metalv(seg, %u)=%s", s, seg_metalv(seg, s)->name);
 PFLA("lv0->le_count=%u lv1->le_count=%u", seg_lv(seg, 0)->le_count, seg_lv(seg, 1)->le_count);
 
 	init_mirror_in_sync(0);
-	lv->status |= LV_NOTSYNCED;
+	// lv->status |= LV_NOTSYNCED;
 
 	if (!_lv_update_and_reload_origin_eliminate_lvs(lv, NULL))
 		return_0;
@@ -6492,6 +6494,7 @@ int lv_raid_replace(struct logical_volume *lv,
 		}
 	}
 
+	init_mirror_in_sync(0);
 #if 0
 	/* HM FIXME: LV_NOTSYNCED needed to start repair this way, but that leaves it in the metadata */
 	lv->status |= LV_NOTSYNCED;

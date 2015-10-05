@@ -1272,8 +1272,8 @@ PFLA("lp->stripes=%u lp->mirrors=%u", lp->stripes, lp->mirrors);
 
 PFLA("lp->stripes=%u lp->mirrors=%u", lp->stripes, lp->mirrors);
 
-		if (lp->stripes < (seg_is_raid10_near(lp) ? 3 : 2)) {
-			log_error("Unable to create RAID(1)0 LV,"
+		if (lp->stripes < 2) {
+			log_error("Unable to create RAID LV,"
 				  " insufficient number of devices.");
 			return 0;
 		}
