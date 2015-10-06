@@ -164,7 +164,7 @@ FIELD(VGS, vg, SIZ, "VMdaSize", cmd, 9, vgmdasize, vg_mda_size, "Size of smalles
 FIELD(VGS, vg, NUM, "#VMdaCps", cmd, 8, vgmdacopies, vg_mda_copies, "Target number of in use metadata areas in the VG.", 1)
 
 FIELD(SEGS, seg, STR, "Type", list, 4, segtype, segtype, "Type of LV segment.", 0)
-FIELD(SEGS, seg, NUM, "#Str", area_count, 4, uint32, stripes, "Number of stripes or mirror legs.", 0)
+FIELD(SEGS, seg, NUM, "#Str", list, 4, segstripes, stripes, "Number of stripes or mirror legs.", 0)
 FIELD(SEGS, seg, NUM, "SReshape", list, 4, segreshape_len, reshape_len, "Number of reshape extents.", 0)
 FIELD(SEGS, seg, NUM, "SReshape", list, 4, segreshape_len, reshapelen, "Number of reshape extents.", 0)
 FIELD(SEGS, seg, NUM, "#Cpy", list, 4, segdata_copies, datacopies, "Number of data copies.", 0)

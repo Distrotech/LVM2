@@ -1984,6 +1984,20 @@ static int _segmonitor_disp(struct dm_report *rh, struct dm_pool *mem,
 				GET_FIELD_RESERVED_VALUE(seg_monitor_undef));
 }
 
+static int _segstripes_disp(struct dm_report *rh, struct dm_pool *mem,
+			    struct dm_report_field *field,
+			    const void *data, void *private)
+{
+	const struct lv_segment *seg = (const struct lv_segment *) data;
+	uint32_t stripes = seg->area_count;
+
+	if (seg_is_striped_raid(seg) &&
+	    seg->segtype)
+		stripes -= seg->segtype->parity_devs;
+
+	return dm_report_field_uint32(rh, field, &stripes);
+}
+
 static int _segreshape_len_disp(struct dm_report *rh, struct dm_pool *mem,
 				struct dm_report_field *field,
 				const void *data, void *private)
