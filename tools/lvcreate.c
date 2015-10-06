@@ -453,7 +453,7 @@ static int _read_mirror_params(struct cmd_context *cmd,
 static int _read_raid_params(struct cmd_context *cmd,
 			     struct lvcreate_params *lp)
 {
-	if (seg_is_raid10_near(lp)) {
+	if (seg_is_any_raid10(lp)) {
 		if (lp->stripes * lp->mirrors < 2) {
 			if (arg_count(cmd, stripes_ARG) || arg_count(cmd, mirrors_ARG)) {
 				/* User supplied the bad argument */

@@ -4037,6 +4037,17 @@ static int _rename_metasub_lvs(struct logical_volume *lv, enum rename_dir dir)
 	return __rename_sub_lvs(lv, dir, RAID_META);
 }
 
+/* Remove any infox in @seg_lv_name between @suffix and @lv_name */
+static void _remove_any_infix(const char *lv_name, char *seg_lv_name, const char *suffix)
+{
+	char *s;
+
+	if ((s = strstr(seg_lv_name, suffix))) {
+		strcpy(seg_lv_name, lv_name);
+		strcat(seg_lv_name, s);
+	}
+}
+
 /*
  * HM Helper:
  *
@@ -4065,7 +4076,7 @@ static int _raid_split_duplicate(struct logical_volume *lv, const char *split_na
 		return 0;
 	}
 
-	if (new_image_count != 1) {
+	if (seg->area_count - new_image_count != 1) {
 		log_error("Only suitable on duplicating LV %s with \"lvconvert --splitmirrors 1\"",
 			  display_lvname(lv));
 		return 0;
@@ -4131,7 +4142,6 @@ PFL();
 	    !lv_update_and_reload_origin(split_lv))
 		return 0;
 PFL();
-#if 1
 	/* We are down to the last sub lv -> remove the top-level raid1 mapping */
 	if (seg->area_count == 1) {
 		struct logical_volume *slv = seg_lv(seg, 0);
@@ -4164,29 +4174,19 @@ PFL();
 		if (!_lv_reset_raid_add_to_list(slv, &removal_lvs))
 			return 0;
 
+		/* Remove "_dup_N" infixes if sub LVs present */
 		for (s = 0; s < seg->area_count; s++)
 			if (seg_type(seg, s) == AREA_LV) {
-				char *suffix, *p;
-
-				p = (char *) seg_lv(seg, s)->name;
-				if ((suffix = strstr(p, "_rimage"))) {
-					strcpy(p, lv->name);
-					strcat(p, suffix);
-				}
-
-				if (seg->meta_areas) {
-					p = (char *) seg_metalv(seg, s)->name;
-					if ((suffix = strstr(p, "_rmeta"))) {
-						strcpy(p, lv->name);
-						strcat(p, suffix);
-					}
-				}
+				_remove_any_infix(lv->name, (char*) seg_lv(seg,s)->name, "_rimage");
+				if (seg->meta_areas)
+					_remove_any_infix(lv->name, (char*) seg_metalv(seg,s)->name, "_rmeta");
 			}
 
+		log_debug_metadata("Updating VG metadata and reactivating %s",
+				   display_lvname(lv));
 		if (!_lv_update_and_reload_origin_eliminate_lvs(lv, &removal_lvs))
 			return_0;
 	}
-#endif
 PFL();
 	return 1;
 }
@@ -4211,6 +4211,7 @@ static int _raid_conv_unduplicate(struct logical_volume *lv,
 	 * else withdraw the source LV
 	 */
 	int s, keep_idx = UINT_MAX;
+	uint32_t segtype_count = 0;
 	struct dm_list removal_lvs;
 	struct logical_volume *lv_tmp;
 	struct lv_segment *seg = first_seg(lv), *seg0;
@@ -4222,18 +4223,27 @@ PFL();
 		return 0;
 	}
 
-PFLA("new_segtype=%s new_image_count=%u new_datacopes=%u", new_segtype->name, new_image_count, new_data_copies);
+PFLA("new_segtype=%s new_image_count=%u new_stripes=%u new_datacopies=%u", new_segtype->name, new_image_count, new_stripes, new_data_copies);
 	/* Find sublv to keep based on passed in properties */
-	for (s = seg->area_count - 1; s > -1; s--) {
-		seg0 = first_seg(seg_lv(seg, s));
-		if (seg0->segtype == new_segtype &&
-		    _data_rimages_count(seg0, seg0->area_count) == new_stripes &&
-		    (new_data_copies > 1 ? (seg0->data_copies == new_data_copies) : 1)) {
+	for (s = 0; s < seg->area_count; s++) {
+		if (first_seg(seg_lv(seg, s))->segtype == new_segtype) {
+			segtype_count++;
 			keep_idx = s;
-PFLA("keep_idx=%u", keep_idx);
-			break;
 		}
 	}
+
+	/* If segtype isn't unique -> select again */
+	if (segtype_count != 1)
+		for (s = seg->area_count - 1; s > -1; s--) {
+			seg0 = first_seg(seg_lv(seg, s));
+			if (seg0->segtype == new_segtype &&
+			    _data_rimages_count(seg0, seg0->area_count) == new_stripes &&
+			    (new_data_copies > 1 ? (seg0->data_copies == new_data_copies) : 1)) {
+				keep_idx = s;
+PFLA("keep_idx=%u", keep_idx);
+				break;
+			}
+		}
 
 	if (keep_idx > seg->area_count) {
 		log_error("Wrong raid type %s/stripes=%u/mirrors=%u requested to remove duplicating conversion",
@@ -6984,6 +6994,9 @@ int lv_create_raid01(struct logical_volume *lv, const struct segment_type *segty
 	struct segment_type *image_segtype;
 	struct volume_group *vg = lv->vg;
 
+#if 0
+	return 0;
+#endif
 PFLA("data_copies=%u region_size=%u stripes=%u stripe_size=%u", data_copies, region_size, stripes, stripe_size);
 	if (data_copies < 2 || stripes < 2)
 		return 0;

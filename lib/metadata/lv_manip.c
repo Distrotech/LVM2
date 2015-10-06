@@ -7739,7 +7739,7 @@ static struct logical_volume *_lv_create_an_lv(struct volume_group *vg,
 
 	dm_list_splice(&lv->tags, &lp->tags);
 
-PFLA("lp->stripe_size=%u", lp->stripe_size);
+PFLA("lp->stripes=%u lp->stripe_size=%u lp->mirrors=%u", lp->stripes, lp->stripe_size, lp->mirrors);
 	if (!lv_extend(lv, create_segtype,
 		       lp->stripes, lp->stripe_size,
 		       lp->mirrors,
