@@ -1980,6 +1980,9 @@ static struct logical_volume *_set_up_mirror_log(struct cmd_context *cmd,
 		return NULL;
 	}
 
+
+	first_seg(log_lv)->data_copies = log_count;
+
 	return log_lv;
 }
 

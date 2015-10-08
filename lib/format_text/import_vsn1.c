@@ -395,6 +395,9 @@ static int _read_segment(struct logical_volume *lv, const struct dm_config_node 
 	    !segtype->ops->text_import_area_count(sn_child, &area_count))
 		return_0;
 
+	if (segtype_is_mirror(segtype) || segtype_is_raid1(segtype))
+		data_copies = area_count;
+
 	if (!(seg = alloc_lv_segment(segtype, lv, start_extent,
 				     extent_count, reshape_count, 0, 0, NULL, area_count,
 				     extent_count, data_copies, 0, 0, 0, NULL))) {

@@ -134,15 +134,15 @@ static int _raid_text_import(struct lv_segment *seg,
 	for (i = 0; i < DM_ARRAY_SIZE(attr_import); i++, aip++) {
 		if (dm_config_has_node(sn, aip->name)) {
 			if (!dm_config_get_uint32(sn, aip->name, aip->var)) {
-				if (strcmp(aip->name, "data_copies")) {
+				if (!strcmp(aip->name, "data_copies")) {
 					log_error("Couldn't read '%s' for segment %s of logical volume %s.",
 						  aip->name, dm_config_parent_name(sn), seg->lv->name);
 					return 0;
 				}
+			} 
 
-				seg->data_copies = 1;
-			}
-		}
+		} else if (!strcmp(aip->name, "data_copies"))
+			seg->data_copies = seg_is_raid1(seg) ? seg->area_count : 1;
 	}
 
 	if (!dm_config_get_list(sn, "raids", &cv)) {

@@ -641,7 +641,7 @@ PFLA("seg_lv(seg, %u)->name=%s", s, seg_lv(seg, s)->name);
 			if (!lv_is_raid_image(seg_lv(seg, s)) ||
 			    (seg->meta_areas && seg_metalv(seg, s) && !lv_is_raid_metadata(seg_metalv(seg, s)))) {
 PFLA("image=%u, meta=%u", lv_is_raid_image(seg_lv(seg, s)), (seg->meta_areas && seg_metalv(seg, s) && lv_is_raid_metadata(seg_metalv(seg, s))) ? 1 : 0);
-				log_error("RAID segment has non-RAID areas");
+				log_error("RAID segment of %s has non-RAID areas", display_lvname(seg->lv));
 				return 0;
 			}
 

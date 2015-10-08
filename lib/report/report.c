@@ -2095,7 +2095,7 @@ static int _segsizepe_disp(struct dm_report *rh,
 
 PFL();
 	if (seg) {
-		uint32_t len = seg->len - seg->reshape_len;
+		uint32_t len = seg->len; //  - seg->reshape_len;
 
 		return dm_report_field_uint32(rh, field, &len);
 	}
