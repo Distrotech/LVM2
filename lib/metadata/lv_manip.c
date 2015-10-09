@@ -1022,25 +1022,21 @@ PFL();
 static uint32_t _round_to_stripe_boundary(struct logical_volume *lv, uint32_t extents,
 					  uint32_t stripes, uint32_t data_copies, int extend)
 {
-	uint32_t r = extents, rest;
+	uint32_t r = extents;
 
+	/* Caller should ensure... */
 	if (!stripes)
 		stripes = 1;
 
-PFLA("lv=%s lv->le_count=%u extents=%u stripes=%u", lv->name, lv->le_count, extents, stripes);
+PFLA("lv=%s lv->le_count=%u extents=%u stripes=%u data_copies=%u", lv->name, lv->le_count, extents, stripes, data_copies);
+
 	if (stripes > 1) {
-		rest = extents % stripes;
-		if (rest)
-			r += extend ? (stripes - rest) : -rest;
+		uint32_t chunks = data_copies * stripes;
+		uint32_t mod;
 
-		if (!r)
-			r = stripes;
-
-		if (data_copies > 1) {
-			r = lv_raid_rimage_extents(r, stripes, data_copies);
-			r *= stripes;
-			r = dm_div_up(r, data_copies);
-		}
+		if ((mod = r % chunks))
+			r += extend ? (chunks - mod) : -mod;
+PFLA("extents=%u r=%u", extents, r);
 	}
 
 	if (r != extents)
@@ -4145,7 +4141,12 @@ static int _clear_metadata(struct logical_volume *lv)
 	return 1;
 }
 
+/*
+ * Create @sub_lv_countfor @stripes raid metadata images from allocation
+ * handle @ah, commit and clear them passing them back listed on @meta_lvs
+ */
 static int _lv_create_and_clear_metadata_lvs(struct logical_volume *lv,
+					     uint32_t extents,
 					     uint32_t sub_lv_count,
 					     uint32_t stripes,
 					     struct alloc_handle *ah,
@@ -4191,8 +4192,19 @@ static int _lv_create_and_clear_metadata_lvs(struct logical_volume *lv,
 		fa += stripes;
 	}
 
+#if 1
+	if (first_seg(lv)) {
+		log_error(INTERNAL_ERROR "Called for %s with segment", display_lvname(lv));
+		return 0;
+	}
+
+	lv->status &= ~(MIRROR|MIRRORED|RAID|RAID_IMAGE|RAID_META|PVMOVE|LOCKED);
+	if (!lv_add_virtual_segment(lv, 0, extents, get_segtype_from_string(lv->vg->cmd, "error")))
+		return_0;
+#else
 	if (!replace_lv_with_error_segment(lv))
 		return_0;
+#endif
 
 	/* Write and commit vg with @lv wit one error segment and the sub_lv_count metadata LVs */
 	if (!vg_write(lv->vg) || !vg_commit(lv->vg))
@@ -4440,7 +4452,7 @@ PFLA("extents=%u segtype=%s mirrors=%u stripes=%u log_count=%u", extents, segtyp
 	if (segtype_is_mirror(segtype))
 		log_count = 1;
 	else if (segtype_is_raid(segtype) && !segtype_is_raid0(segtype))
-		log_count = stripes + segtype->parity_devs;
+		log_count = (segtype_is_striped_raid(segtype) ? stripes : mirrors) + segtype->parity_devs;
 #endif
 PFLA("extents=%u mirrors=%u stripes=%u log_count=%u", extents, mirrors, stripes, log_count);
 
@@ -4457,8 +4469,7 @@ PFLA("extents=%u mirrors=%u stripes=%u log_count=%u", extents, mirrors, stripes,
 		return 0;
 	}
 
-	if (!(ah = allocate_extents(lv->vg, lv, segtype, stripes,
-				    lv->le_count ? last_seg(lv)->data_copies : mirrors,
+	if (!(ah = allocate_extents(lv->vg, lv, segtype, stripes, mirrors,
 				    log_count, region_size, extents,
 				    allocatable_pvs, alloc, approx_alloc, NULL)))
 		return_0;
@@ -4495,8 +4506,8 @@ PFLA("extents=%u mirrors=%u stripes=%u log_count=%u", extents, mirrors, stripes,
 		if (!old_extents) {
 			if (segtype_is_raid(segtype) &&
 			    !segtype_is_raid0(segtype) &&
-			    !_lv_create_and_clear_metadata_lvs(lv, sub_lv_count, stripes, ah, &meta_lvs))
-				return 0;
+			    !_lv_create_and_clear_metadata_lvs(lv, extents, sub_lv_count, stripes, ah, &meta_lvs))
+					return 0;
 
 			if (!(r = _lv_insert_empty_data_sublvs(lv, segtype, stripe_size,
 							       region_size, sub_lv_count))) {

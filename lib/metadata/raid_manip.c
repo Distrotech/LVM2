@@ -4295,6 +4295,7 @@ PFLA("new_segtype=%s new_image_count=%u new_stripes=%u new_datacopies=%u", new_s
 		if (first_seg(seg_lv(seg, s))->segtype == new_segtype) {
 			segtype_count++;
 			keep_idx = s;
+			seg0 = first_seg(seg_lv(seg, s));
 		}
 	}
 
