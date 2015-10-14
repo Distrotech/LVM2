@@ -1028,21 +1028,17 @@ static uint32_t _round_to_stripe_boundary(struct logical_volume *lv, uint32_t ex
 	if (!stripes)
 		stripes = 1;
 
-PFLA("lv=%s lv->le_count=%u extents=%u stripes=%u data_copies=%u", lv->name, lv->le_count, extents, stripes, data_copies);
-
 	if (stripes > 1) {
 		uint32_t chunks = data_copies * stripes;
 		uint32_t mod;
 
 		if ((mod = r % chunks))
 			r += extend ? (chunks - mod) : -mod;
-PFLA("extents=%u r=%u", extents, r);
 	}
 
 	if (r != extents)
 		log_print_unless_silent("Rounding up size to full stripe size %s",
 			  		display_size(lv->vg->cmd, r * lv->vg->extent_size));
-PFLA("extents=%u r=%u", extents, r);
 	return r;
 }
 
@@ -1662,7 +1658,7 @@ PFLA("lv->le_count=%u", lv->le_count);
 	 * that suggest it is anything other than "error".
 	 */
 	/* FIXME Check for other flags that need removing */
-	lv->status &= ~(MIRROR|MIRRORED|RAID|RAID_IMAGE|RAID_META|PVMOVE|LOCKED);
+	lv->status &= ~(MIRROR|MIRRORED|RAID|RAID_IMAGE|RAID_META|PVMOVE|LOCKED|PARTIAL_LV);
 
 	/* FIXME Check for any attached LVs that will become orphans e.g. mirror logs */
 

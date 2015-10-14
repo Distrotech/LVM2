@@ -83,10 +83,12 @@ static int _make_vg_consistent(struct cmd_context *cmd, struct volume_group *vg)
 
  restart:
 	vg_mark_partial_lvs(vg, 1);
+PFL();
 
 	dm_list_iterate_items(lvl, &vg->lvs) {
 		lv = lvl->lv;
 
+PFLA("lv=%s", display_lvname(lv));
 		/* Are any segments of this LV on missing PVs? */
 		if (lv->status & PARTIAL_LV) {
 			if (seg_is_raid(first_seg(lv))) {
