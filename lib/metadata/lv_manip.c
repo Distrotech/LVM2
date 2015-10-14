@@ -1029,11 +1029,10 @@ static uint32_t _round_to_stripe_boundary(struct logical_volume *lv, uint32_t ex
 		stripes = 1;
 
 	if (stripes > 1) {
-		uint32_t chunks = data_copies * stripes;
 		uint32_t mod;
 
-		if ((mod = r % chunks))
-			r += extend ? (chunks - mod) : -mod;
+		if ((mod = r % stripes))
+			r += extend ? (stripes - mod) : -mod;
 	}
 
 	if (r != extents)

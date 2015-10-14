@@ -4397,7 +4397,7 @@ PFL();
 CONVERSION_HELPER_FN(_raid_conv_duplicate)
 {
 	int duplicating = _lv_is_duplicating(lv);
-	uint32_t extents, region_size = 1024, s;
+	uint32_t data_copies, extents, region_size = 1024, s;
 	char *lv_name, *p, *suffix;
 	struct logical_volume *dst_lv;
 	struct lv_segment *seg = first_seg(lv);
@@ -4406,6 +4406,14 @@ CONVERSION_HELPER_FN(_raid_conv_duplicate)
 PFLA("new_segtype=%s new_data_copies=%u new_stripes=%u new_image_count=%u new_stripe_size=%u", new_segtype->name, new_data_copies, new_stripes, new_image_count, new_stripe_size);
 PFLA("segtype=%s area_count=%u data_copies=%u stripe_size=%u", lvseg_name(seg), seg->area_count, seg->data_copies, seg->stripe_size);
 	new_stripe_size = new_stripe_size ?: seg->stripe_size;
+	data_copies = new_data_copies;
+	if (data_copies < 2 &&
+	    (segtype_is_mirror(new_segtype) ||
+	     segtype_is_raid1(new_segtype) ||
+	     segtype_is_any_raid10(new_segtype))) {
+		data_copies = seg->data_copies;
+		log_warn("Adjusting data copies to %u", data_copies);
+	}
 
 	log_warn("This is a conversion by duplication request for source LV %s!", display_lvname(lv));
 	log_warn("A new %s destination LV will be allocated and %s will be synced to it.",
@@ -4414,7 +4422,7 @@ PFLA("segtype=%s area_count=%u data_copies=%u stripe_size=%u", lvseg_name(seg), 
 		_get_segtype_name(seg->segtype, seg->area_count), display_lvname(lv));
 	log_warn("or the destination LV via 'lvconvert --type %s %s' at any point in time (even during synchronization).",
 		 _get_segtype_name(new_segtype, new_image_count), display_lvname(lv));
-	if (!_yes_no_conversion(lv, new_segtype, yes, force, new_image_count, new_data_copies, new_stripes, 0))
+	if (!_yes_no_conversion(lv, new_segtype, yes, force, new_image_count, data_copies, new_stripes, 0))
 		return 0;
 
 	/*
@@ -6439,7 +6447,7 @@ PFLA("new_segtype=%s new_image_count=%u new_stripes=%u stripes=%u", new_segtype-
 	if (!segtype_is_raid(new_segtype))
 		stripes = new_stripes ?: 1;
 
-PFLA("yes=%d new_segtype=%s new_image_count=%u new_stripes=%u stripes=%u", yes, new_segtype->name, new_image_count, new_stripes, stripes);
+PFLA("yes=%d new_segtype=%s new_image_count=%u data_copies=%u new_stripes=%u stripes=%u", yes, new_segtype->name, new_image_count, data_copies, new_stripes, stripes);
 
 	/* A conversion by duplication has been requested (i.e. create a new lv of the requested segtype etc.) */
 	if (_lv_is_duplicating(lv) || duplicate)
