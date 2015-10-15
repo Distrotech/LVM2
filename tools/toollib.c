@@ -2802,7 +2802,6 @@ static int _process_pvs_in_vg(struct cmd_context *cmd,
 	struct physical_volume *pv;
 	struct pv_list *pvl;
 	struct device_id_list *dil;
-	struct device *dev_orig;
 	const char *pv_name;
 	int selected;
 	int process_pv;
@@ -2882,83 +2881,6 @@ static int _process_pvs_in_vg(struct cmd_context *cmd,
 					stack;
 				if (ret > ret_max)
 					ret_max = ret;
-			}
-
-			/*
-			 * We have processed the PV on device pv->dev.  Now
-			 * deal with any duplicates of this PV on other
-			 * devices.
-			 */
-
-			/*
-			 * This is a very rare and obscure case where multiple
-			 * duplicate devices are specified on the command line
-			 * referring to this PV.  In this case we want to
-			 * process this PV once for each specified device.
-			 */
-			if (!skip && !dm_list_empty(arg_devices)) {
-				while ((dil = _device_list_find_pvid(arg_devices, pv))) {
-					_device_list_remove(arg_devices, dil->dev);
-
-					/*
-					 * Replace pv->dev with this dil->dev
-					 * in lvmcache so the duplicate dev
-					 * info will be reported.  FIXME: it
-					 * would be nicer to override pv->dev
-					 * without munging lvmcache content.
-					 */
-					dev_orig = pv->dev;
-					lvmcache_replace_dev(cmd, pv, dil->dev);
-
-					log_very_verbose("Processing PV %s device %s in VG %s.",
-							 pv_name, dev_name(dil->dev), vg->name);
-
-					ret = process_single_pv(cmd, vg, pv, handle);
-					if (ret != ECMD_PROCESSED)
-						stack;
-					if (ret > ret_max)
-						ret_max = ret;
-
-					/* Put the cache state back as it was. */
-					lvmcache_replace_dev(cmd, pv, dev_orig);
-				}
-			}
-
-			/*
-			 * This is another rare and obscure case where multiple
-			 * duplicate devices are being displayed by pvs -a, and
-			 * we want each of them to be displayed in the context
-			 * of this VG, so that this VG name appears next to it.
-			 */
-			if (process_all_devices && lvmcache_found_duplicate_pvs()) {
-				while ((dil = _device_list_find_pvid(all_devices, pv))) {
-					_device_list_remove(all_devices, dil->dev);
-
-					dev_orig = pv->dev;
-					lvmcache_replace_dev(cmd, pv, dil->dev);
-
-					ret = process_single_pv(cmd, vg, pv, handle);
-					if (ret != ECMD_PROCESSED)
-						stack;
-					if (ret > ret_max)
-						ret_max = ret;
-
-					lvmcache_replace_dev(cmd, pv, dev_orig);
-				}
-			}
-
-			/*
-			 * Remove any duplicates of the processed device from
-			 * the list of all devices.  If they were left in the
-			 * list of all devices, they would be considered
-			 * "missed" at the end.
-			 */
-			if (process_all_pvs && lvmcache_found_duplicate_pvs()) {
-				while ((dil = _device_list_find_pvid(all_devices, pv))) {
-					log_very_verbose("Skip duplicate device %s of processed device %s",
-							 dev_name(dil->dev), dev_name(pv->dev));
-					_device_list_remove(all_devices, dil->dev);
-				}
 			}
 		}
 
