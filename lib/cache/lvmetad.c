@@ -1386,6 +1386,7 @@ static int _lvmetad_pvscan_all_devs(struct cmd_context *cmd, activation_handler 
 	struct dev_iter *iter;
 	struct device *dev;
 	daemon_reply reply;
+	struct lvmcache_info *info;
 	int r = 1;
 	char *future_token;
 	int was_silent;
@@ -1425,6 +1426,21 @@ static int _lvmetad_pvscan_all_devs(struct cmd_context *cmd, activation_handler 
 		}
 		if (!lvmetad_pvscan_single(cmd, dev, handler, ignore_obsolete))
 			r = 0;
+
+		/*
+		 * The fact that lvmcache is used to transport data between
+		 * steps within pvscan_single is an implementation detail;
+		 * we don't really need or want any caching since we're just
+		 * scanning each device once to populate lvmetad.  We need
+		 * to clear lvmcache after scanning each PV to avoid a side
+		 * effect of lvmcache, which is that it eliminates duplicate
+		 * PVs and prevents duplicate PVs from being sent to lvmetad.
+		 * lvmetad wants to know about duplicate PVs.  So, we just
+		 * drop the lvmcache data after scanning each PV so that
+		 * state from scanning one PV will not affect the next one.
+		 */
+		if ((info = lvmcache_info_from_pvid(dev->pvid, 0)))
+			lvmcache_del(info);
 	}
 
 	init_silent(was_silent);
