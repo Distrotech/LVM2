@@ -68,7 +68,6 @@ struct lvmcache_vginfo {
 	unsigned vg_use_count;	/* Counter of vg reusage */
 	unsigned precommitted;	/* Is vgmetadata live or precommitted? */
 	unsigned cached_vg_invalidated;	/* Signal to regenerate cached_vg */
-	unsigned preferred_duplicates; /* preferred duplicate pvs have been set */
 };
 
 static struct dm_hash_table *_pvid_hash = NULL;
@@ -80,7 +79,6 @@ static int _scanning_in_progress = 0;
 static int _has_scanned = 0;
 static int _vgs_locked = 0;
 static int _vg_global_lock_held = 0;	/* Global lock held when cache wiped? */
-static int _found_duplicate_pvs = 0;	/* If we never see a duplicate PV we can skip checking for them later. */
 
 int lvmcache_init(void)
 {
@@ -115,47 +113,6 @@ int lvmcache_init(void)
 	}
 
 	return 1;
-}
-
-/*
- * Once PV info has been populated in lvmcache and
- * lvmcache has chosen preferred duplicate devices,
- * set this flag so that lvmcache will not try to
- * compare and choose preferred duplicate devices
- * again (which may result in different preferred
- * devices.)  PV info can be populated in lvmcache
- * multiple times, each time causing lvmcache to
- * compare the duplicate devices, so we need to
- * record that the comparison/preferences have
- * already been done, so the preferrences from the
- * first time through are not changed.
- *
- * This is something of a hack to work around the
- * fact that the code isn't really designed to
- * handle duplicate PVs, and the fact that lvmetad
- * has its own way of picking a preferred duplicate
- * and lvmcache has another way based on having
- * more information than lvmetad does.
- *
- * If we come up with a better overall method to
- * handle duplicate PVs, then this can probably be
- * removed.
- *
- * FIXME: if we want to make lvmetad work with clvmd,
- * then this may need to be changed to set
- * preferred_duplicates back to 0.
- */
-
-void lvmcache_set_preferred_duplicates(const char *vgid)
-{
-	struct lvmcache_vginfo *vginfo;
-
-	if (!(vginfo = lvmcache_vginfo_from_vgid(vgid))) {
-		stack;
-		return;
-	}
-
-	vginfo->preferred_duplicates = 1;
 }
 
 void lvmcache_seed_infos_from_lvmetad(struct cmd_context *cmd)
@@ -449,16 +406,6 @@ void lvmcache_unlock_vgname(const char *vgname)
 int lvmcache_vgs_locked(void)
 {
 	return _vgs_locked;
-}
-
-/*
- * When lvmcache sees a duplicate PV, this is set.
- * process_each_pv() can avoid searching for duplicates
- * by checking this and seeing that no duplicate PVs exist.
- */
-int lvmcache_found_duplicate_pvs(void)
-{
-	return _found_duplicate_pvs;
 }
 
 static void _vginfo_attach_info(struct lvmcache_vginfo *vginfo,
@@ -1597,92 +1544,11 @@ int lvmcache_update_vg(struct volume_group *vg, unsigned precommitted)
 	return 1;
 }
 
-/*
- * Replace pv->dev with dev so that dev will appear for reporting.
- */
-
-void lvmcache_replace_dev(struct cmd_context *cmd, struct physical_volume *pv,
-			  struct device *dev)
-{
-	struct lvmcache_info *info;
-	char pvid_s[ID_LEN + 1] __attribute__((aligned(8)));
-
-	strncpy(pvid_s, (char *) &pv->id, sizeof(pvid_s) - 1);
-	pvid_s[sizeof(pvid_s) - 1] = '\0';
-
-	if (!(info = lvmcache_info_from_pvid(pvid_s, 0)))
-		return;
-
-	info->dev = dev;
-	info->label->dev = dev;
-	pv->dev = dev;
-}
-
-/*
- * We can see multiple different devices with the
- * same pvid, i.e. duplicates.
- *
- * There may be different reasons for seeing two
- * devices with the same pvid:
- * - multipath showing two paths to the same thing
- * - one device copied to another, e.g. with dd,
- *   also referred to as cloned devices.
- * - a "subsystem" taking a device and creating
- *   another device of its own that represents the
- *   underlying device it is using, e.g. using dm
- *   to create an identity mapping of a PV.
- *
- * Given duplicate devices, we have to choose one
- * of them to be the "preferred" dev, i.e. the one
- * that will be referenced in lvmcache, by pv->dev.
- * We can keep the existing dev, that's currently
- * used in lvmcache, or we can replace the existing
- * dev with the new duplicate.
- *
- * Regardless of which device is preferred, we need
- * to print messages explaining which devices were
- * found so that a user can sort out for themselves
- * what has happened if the preferred device is not
- * the one they are interested in.
- *
- * If a user wants to use the non-preferred device,
- * they will need to filter out the device that
- * lvm is preferring.
- *
- * The dev_subsystem calls check if the major number
- * of the dev is part of a subsystem like DM/MD/DRBD.
- * A dev that's part of a subsystem is preferred over a
- * duplicate of that dev that is not part of a
- * subsystem.
- *
- * The has_holders calls check if the device is being
- * used by another, and prefers one that's being used.
- *
- * FIXME: why do we prefer a device without holders
- * over a device with holders?  We should understand
- * the reason for that choice.
- *
- * FIXME: there may be other reasons to prefer one
- * device over another:
- *
- * . are there other use/open counts we could check
- *   beyond the holders?
- *
- * . check if either is bad/usable and prefer
- *   the good one?
- *
- * . prefer the one with smaller minor number?
- *   Might avoid disturbing things due to a new
- *   transient duplicate?
- */
-
 struct lvmcache_info *lvmcache_add(struct labeller *labeller, const char *pvid,
 				   struct device *dev,
 				   const char *vgname, const char *vgid,
 				   uint32_t vgstatus)
 {
-	const struct format_type *fmt = labeller->fmt;
-	struct dev_types *dt = fmt->cmd->dev_types;
 	struct label *label;
 	struct lvmcache_info *existing, *info;
 	char pvid_s[ID_LEN + 1] __attribute__((aligned(8)));
@@ -1723,142 +1589,10 @@ struct lvmcache_info *lvmcache_add(struct labeller *labeller, const char *pvid,
 		lvmcache_del_bas(info);
 	} else {
 		if (existing->dev != dev) {
-			int old_in_subsystem = 0;
-			int new_in_subsystem = 0;
-			int old_is_dm = 0;
-			int new_is_dm = 0;
-			int old_has_holders = 0;
-			int new_has_holders = 0;
-
-			/*
-			 * Here are different devices with the same pvid:
-			 * duplicates.  See comment above.
-			 */
-
-			/*
-			 * This flag tells the process_each_pv code to search
-			 * the devices list for duplicates, so that devices
-			 * can be processed together with their duplicates
-			 * (while processing the VG, rather than reporting
-			 * pv->dev under the VG, and its duplicate outside
-			 * the VG context.)
-			 */
-			_found_duplicate_pvs = 1;
-
-			/*
-			 * The new dev may not have pvid set.
-			 * The process_each_pv code needs to have the pvid
-			 * set in each device to detect that the devices
-			 * are duplicates.
-			 */
-			strncpy(dev->pvid, pvid_s, sizeof(dev->pvid));
-
-			/*
-			 * Now decide if we are going to ignore the new
-			 * device, or replace the existing/old device in
-			 * lvmcache with the new one.
-			 */
-			old_in_subsystem = dev_subsystem_part_major(dt, existing->dev);
-			new_in_subsystem = dev_subsystem_part_major(dt, dev);
-
-			old_is_dm = dm_is_dm_major(MAJOR(existing->dev->dev));
-			new_is_dm = dm_is_dm_major(MAJOR(dev->dev));
-
-			old_has_holders = dm_device_has_holders(MAJOR(existing->dev->dev), MINOR(existing->dev->dev));
-			new_has_holders = dm_device_has_holders(MAJOR(dev->dev), MINOR(dev->dev));
-
-			if (old_has_holders && new_has_holders) {
-				/*
-				 * This is not a selection of old or new, but
-				 * just a warning to be aware of.
-				 */
-				log_warn("WARNING: duplicate PV %s is being used from both devices %s and %s",
-					 pvid_s,
-					 dev_name(existing->dev),
-					 dev_name(dev));
-			}
-
-			if (existing->vginfo->preferred_duplicates) {
-				/*
-				 * The preferred duplicate devs have already
-				 * been chosen during a previous populating of
-				 * lvmcache, so just use the existing preferences.
-				 */
-				log_warn("Found duplicate PV %s: using existing dev %s",
-					 pvid_s,
-					 dev_name(existing->dev));
-				return NULL;
-			}
-
-			if (old_in_subsystem && !new_in_subsystem) {
-				/* Use old, ignore new. */
-				log_warn("Found duplicate PV %s: using %s not %s",
-					 pvid_s,
-					 dev_name(existing->dev),
-					 dev_name(dev));
-				log_warn("Using duplicate PV %s from subsystem %s, ignoring %s",
-					 dev_name(existing->dev),
-					 dev_subsystem_name(dt, existing->dev),
-					 dev_name(dev));
-				return NULL;
-
-			} else if (!old_in_subsystem && new_in_subsystem) {
-				/* Use new, replace old. */
-				log_warn("Found duplicate PV %s: using %s not %s",
-					 pvid_s,
-					 dev_name(dev),
-					 dev_name(existing->dev));
-				log_warn("Using duplicate PV %s from subsystem %s, replacing %s",
-					 dev_name(dev),
-					 dev_subsystem_name(dt, dev),
-					 dev_name(existing->dev));
-
-			} else if (old_has_holders && !new_has_holders) {
-				/* Use new, replace old. */
-				/* FIXME: why choose the one without olders? */
-				log_warn("Found duplicate PV %s: using %s not %s",
-					 pvid_s,
-					 dev_name(dev),
-					 dev_name(existing->dev));
-				log_warn("Using duplicate PV %s without holders, replacing %s",
-					 dev_name(dev),
-					 dev_name(existing->dev));
-
-			} else if (!old_has_holders && new_has_holders) {
-				/* Use old, ignore new. */
-				log_warn("Found duplicate PV %s: using %s not %s",
-					 pvid_s,
-					 dev_name(existing->dev),
-					 dev_name(dev));
-				log_warn("Using duplicate PV %s without holders, ignoring %s",
-					 dev_name(existing->dev),
-					 dev_name(dev));
-				return NULL;
-
-			} else if (old_is_dm && new_is_dm) {
-				/* Use new, replace old. */
-				/* FIXME: why choose the new instead of the old? */
-				log_warn("Found duplicate PV %s: using %s not %s",
-					 pvid_s,
-					 dev_name(dev),
-					 dev_name(existing->dev));
-				log_warn("Using duplicate PV %s which is last seen, replacing %s",
-					 dev_name(dev),
-					 dev_name(existing->dev));
-
-			} else if (!strcmp(pvid_s, existing->dev->pvid)) {
-				/* No criteria to use for preferring old or new. */
-				/* FIXME: why choose the new instead of the old? */
-				/* FIXME: a transient duplicate would be a reason
-				 * to select the old instead of the new. */
-				log_warn("Found duplicate PV %s: using %s not %s",
-					 pvid_s,
-					 dev_name(dev),
-					 dev_name(existing->dev));
-				log_warn("Using duplicate PV %s which is last seen, replacing %s",
-					 dev_name(dev),
-					 dev_name(existing->dev));
-			}
+			log_warn("Ignore duplicate PV on device %s. Already using PV from device %s. (%s)",
+				 dev_name(dev), dev_name(existing->dev), pvid_s);
+			log_warn("Use the global_filter to select a different device.");
+			return NULL;
 		} else {
 			/*
 			 * The new dev is the same as the existing dev.
