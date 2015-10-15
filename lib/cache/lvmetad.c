@@ -206,6 +206,54 @@ void lvmetad_set_socket(const char *sock)
 	_lvmetad_socket = sock;
 }
 
+int lvmetad_token_matches(struct cmd_context *cmd)
+{
+	daemon_reply reply;
+	const char *daemon_token;
+	int ret = 1;
+
+	reply = daemon_send_simple(_lvmetad, "get_global_info",
+				   "token = %s", "skip",
+				   NULL);
+	if (reply.error) {
+		log_error("lvmetad_token_matches get_global_info error %d", reply.error);
+		ret = 0;
+		goto out;
+	}
+
+	if (strcmp(daemon_reply_str(reply, "response", ""), "OK")) {
+		log_error("lvmetad_token_matches get_global_info not ok");
+		ret = 0;
+		goto out;
+	}
+
+	daemon_token = daemon_reply_str(reply, "token", NULL);
+
+	if (!daemon_token) {
+		log_error("lvmetad_token_matches no token returned");
+		ret = 0;
+		goto out;
+	}
+
+	if (!strcmp(daemon_token, "none")) {
+		/* lvmetad is not yet populated */
+		ret = 0;
+		goto out;
+	}
+
+	if (strcmp(daemon_token, _lvmetad_token)) {
+		/*
+		 * lvmetad has an unmatching token; it was last populated
+		 * using a different global filter.
+		 */
+		ret = 0;
+		goto out;
+	}
+out:
+	daemon_reply_destroy(reply);
+	return ret;
+}
+
 static int _lvmetad_pvscan_all_devs(struct cmd_context *cmd, activation_handler handler,
 				    int ignore_obsolete);
 
@@ -246,6 +294,13 @@ retry:
 	 * we re-scan immediately, but if we lose the potential race for
 	 * the update, we back off for a short while (0.05-0.5 seconds) and
 	 * try again.
+	 *
+	 * FIXME: remove the retry/pvscan and just fail the command.
+	 * Running pvscan here is likely to mess up the state of
+	 * the original command.  This should be very unlikely
+	 * since the token is verified to match at the start
+	 * of the command now.  Also there's no recursion check to
+	 * prevent _lvmetad_pvscan_all_devs->lvmetad_send->_lvmetad_pvscan_all_devs...
 	 */
 	if (!repl.error && !strcmp(daemon_reply_str(repl, "response", ""), "token_mismatch") &&
 	    num_rescans < MAX_RESCANS && total_usecs_waited < (SCAN_TIMEOUT_SECONDS * 1000000) && !test_mode()) {
@@ -1744,7 +1799,12 @@ void lvmetad_validate_global_cache(struct cmd_context *cmd, int force)
 
 	/*
 	 * Update the local lvmetad cache so it correctly reflects any
-	 * changes made on remote hosts.
+	 * changes made on remote hosts.  (It's possible that this command
+	 * already refreshed the local lvmetad because of a token change,
+	 * but we need to do it again here since we now hold the global
+	 * lock.  Another host may have changed things between the time
+	 * we rescanned for the token, and the time we acquired the global
+	 * lock.)
 	 */
 	lvmetad_pvscan_all_devs(cmd, NULL);
 

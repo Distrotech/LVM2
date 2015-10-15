@@ -168,6 +168,7 @@ int lvmetad_pvscan_foreign_vgs(struct cmd_context *cmd, activation_handler handl
 
 int lvmetad_vg_clear_outdated_pvs(struct volume_group *vg);
 void lvmetad_validate_global_cache(struct cmd_context *cmd, int force);
+int lvmetad_token_matches(struct cmd_context *cmd);
 
 #  else		/* LVMETAD_SUPPORT */
 
@@ -197,6 +198,7 @@ void lvmetad_validate_global_cache(struct cmd_context *cmd, int force);
 #    define lvmetad_pvscan_foreign_vgs(cmd, handler)	(0)
 #    define lvmetad_vg_clear_outdated_pvs(vg)           (1)
 #    define lvmetad_validate_global_cache(cmd, force)	do { } while (0)
+#    define lvmetad_token_matches(cmd) (1)
 
 #  endif	/* LVMETAD_SUPPORT */
 
