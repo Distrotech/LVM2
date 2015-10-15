@@ -146,6 +146,11 @@ void lvmetad_connect_or_warn(void)
 	}
 }
 
+int lvmetad_is_connected(void)
+{
+	return _lvmetad_connected;
+}
+
 int lvmetad_used(void)
 {
 	return _lvmetad_use;
@@ -206,6 +211,109 @@ void lvmetad_set_socket(const char *sock)
 	_lvmetad_socket = sock;
 }
 
+/*
+ * Check if lvmetad's token matches our token.  The token is a hash
+ * of the global filter used to populate lvmetad.  The lvmetad token
+ * was set by the last command to populate lvmetad, and it was set to
+ * the hash of the global filter that command used when scanning to
+ * populate lvmetad.
+ *
+ * Our token is a hash of the global filter this command is using.
+ *
+ * If the lvmetad token is not set (or "none"), then lvmetad has not
+ * been populated.  If the lvmetad token is "update in progress", then
+ * lvmetad is currently being populated (this should be temporary).
+ * If the lvmetad token otherwise differs from ours, then lvmetad was
+ * populated using a different global filter that we are using.
+ *
+ * Return 1 if the lvmetad token matches ours.  We can use it as is.
+ *
+ * Return 0 if the lvmetad token does not match ours (lvmetad is
+ * empty or populated using a different global filter).
+ * We cannot use the lvmetad cache until we repopulate it
+ * (and set lvmetad's token to match ours.)
+ *
+ * Return an error if lvmetad is stuck being updated.
+ * We can't use it.  This shouldn't happen, but could if
+ * the command updating lvmetad gets stuck, e.g. trying to
+ * read a bad device.  We could fail this command, or adjust
+ * this command to not use lvmetad (depending on which command
+ * it is?)
+ */
+
+int lvmetad_token_matches(struct cmd_context *cmd)
+{
+	daemon_reply reply;
+	const char *daemon_token;
+	int retries = 0;
+	int ret = 1;
+
+retry:
+	log_debug_lvmetad("lvmetad send get_global_info");
+
+	reply = daemon_send_simple(_lvmetad, "get_global_info",
+				   "token = %s", "skip",
+				   NULL);
+	if (reply.error) {
+		log_error("lvmetad_token_matches get_global_info error %d", reply.error);
+		ret = 0;
+		goto out;
+	}
+
+	if (strcmp(daemon_reply_str(reply, "response", ""), "OK")) {
+		log_error("lvmetad_token_matches get_global_info not ok");
+		ret = 0;
+		goto out;
+	}
+
+	daemon_token = daemon_reply_str(reply, "token", NULL);
+
+	if (!daemon_token) {
+		log_error("lvmetad_token_matches no token returned");
+		ret = 0;
+		goto out;
+	}
+
+	/*
+	 * If lvmetad is being updated by another command, then sleep and retry
+	 * until the token shows the update is done, and go on to the token
+	 * comparison.  FIXME: after retrying enough, quit and disable the use
+	 * of lvmetad for this command.
+	 */
+	if (!strcmp(daemon_token, "update in progress")) {
+		if (retries > 120) {
+			/* FIXME: disable lvmetad for this command. */
+			log_error("Not using lvmetad which is busy.");
+			ret = 0;
+			goto out;
+		}
+		log_warn("lvmetad is being updated, retrying...");
+		usleep(500000);
+		retries++;
+		goto retry;
+	}
+
+	/*
+	 * lvmetad is empty, not yet populated.
+	 */
+	if (!strcmp(daemon_token, "none")) {
+		ret = 0;
+		goto out;
+	}
+
+	/*
+	 * lvmetad has an unmatching token; it was last populated using
+	 * a different global filter.
+	 */
+	if (strcmp(daemon_token, _lvmetad_token)) {
+		ret = 0;
+		goto out;
+	}
+out:
+	daemon_reply_destroy(reply);
+	return ret;
+}
+
 static int _lvmetad_pvscan_all_devs(struct cmd_context *cmd, activation_handler handler,
 				    int ignore_obsolete);
 
@@ -218,6 +326,8 @@ static daemon_reply _lvmetad_send(const char *id, ...)
 	unsigned total_usecs_waited = 0;
 	unsigned max_remaining_sleep_times = 1;
 	unsigned wait_usecs;
+
+	log_debug_lvmetad("lvmetad_send %s", id);
 
 retry:
 	req = daemon_request_make(id);
@@ -246,26 +356,44 @@ retry:
 	 * we re-scan immediately, but if we lose the potential race for
 	 * the update, we back off for a short while (0.05-0.5 seconds) and
 	 * try again.
+	 *
+	 * FIXME: remove rescanning and just fail the command.
+	 * Running pvscan here is likely to mess up the state of
+	 * the original command.  This should be very unlikely
+	 * since the token is verified to match at the start
+	 * of the command now.  Also there's no recursion check to
+	 * prevent _lvmetad_pvscan_all_devs->lvmetad_send->_lvmetad_pvscan_all_devs...
 	 */
 	if (!repl.error && !strcmp(daemon_reply_str(repl, "response", ""), "token_mismatch") &&
 	    num_rescans < MAX_RESCANS && total_usecs_waited < (SCAN_TIMEOUT_SECONDS * 1000000) && !test_mode()) {
-		if (!strcmp(daemon_reply_str(repl, "expected", ""), "update in progress") ||
-		    max_remaining_sleep_times) {
+
+		/*
+		 * The other command should finish updating lvmetad soon.
+		 * Sleep to give it a chance to finish, then retry.
+		 */
+		if (!strcmp(daemon_reply_str(repl, "expected", ""), "update in progress") || max_remaining_sleep_times) {
+			log_debug_lvmetad("lvmetad is not ready, retrying...");
 			wait_usecs = 50000 + lvm_even_rand(&_lvmetad_cmd->rand_seed, 450000); /* between 0.05s and 0.5s */
 			(void) usleep(wait_usecs);
 			total_usecs_waited += wait_usecs;
 			if (max_remaining_sleep_times)
 				max_remaining_sleep_times--;	/* Sleep once before rescanning the first time, then 5 times each time after that. */
 		} else {
+			log_error("lvmetad cache is not usable, update lvmetad and retry command.");
+			goto out;
+		}
+#if 0
+	       	else {
 			/* If the re-scan fails here, we try again later. */
 			(void) _lvmetad_pvscan_all_devs(_lvmetad_cmd, NULL, 0);
 			num_rescans++;
 			max_remaining_sleep_times = 5;
 		}
+#endif
 		daemon_reply_destroy(repl);
 		goto retry;
 	}
-
+out:
 	return repl;
 }
 
@@ -1399,6 +1527,8 @@ static int _lvmetad_pvscan_all_devs(struct cmd_context *cmd, activation_handler 
 		return 0;
 	}
 
+	log_debug_lvmetad("Scanning all devices to update lvmetad.");
+
 	if (!(iter = dev_iter_create(cmd->lvmetad_filter, 1))) {
 		log_error("dev_iter creation failed");
 		return 0;
@@ -1700,6 +1830,8 @@ void lvmetad_validate_global_cache(struct cmd_context *cmd, int force)
 	if (force)
 		goto do_scan;
 
+	log_debug_lvmetad("lvmetad validate send get_global_info");
+
 	reply = daemon_send_simple(_lvmetad, "get_global_info",
 				   "token = %s", "skip",
 				   NULL);
@@ -1732,7 +1864,12 @@ void lvmetad_validate_global_cache(struct cmd_context *cmd, int force)
 
 	/*
 	 * Update the local lvmetad cache so it correctly reflects any
-	 * changes made on remote hosts.
+	 * changes made on remote hosts.  (It's possible that this command
+	 * already refreshed the local lvmetad because of a token change,
+	 * but we need to do it again here since we now hold the global
+	 * lock.  Another host may have changed things between the time
+	 * we rescanned for the token, and the time we acquired the global
+	 * lock.)
 	 */
 	if (!lvmetad_pvscan_all_devs(cmd, NULL))
 		stack; /* FIXME: Anything more on this error path ? */
@@ -1743,6 +1880,8 @@ void lvmetad_validate_global_cache(struct cmd_context *cmd, int force)
 	 * from lvmetad will not see global_invalid until
 	 * another host makes another global change.
 	 */
+	log_debug_lvmetad("lvmetad validate send set_global_info");
+
 	reply = daemon_send_simple(_lvmetad, "set_global_info",
 				   "token = %s", "skip",
 				   "global_invalid = " FMTd64, INT64_C(0),

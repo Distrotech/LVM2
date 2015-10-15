@@ -71,6 +71,12 @@ int lvmetad_active(void);
 void lvmetad_connect_or_warn(void);
 
 /*
+ * Check if lvmetad is connected.  This is different from lvmetad_active()
+ * in that it doesn't connect to lvmetad.
+ */
+int lvmetad_is_connected(void);
+
+/*
  * Drop connection to lvmetad. A subsequent lvmetad_connect_or_warn or
  * lvmetad_active will re-establish the connection (possibly at a
  * different socket path).
@@ -168,6 +174,7 @@ int lvmetad_pvscan_foreign_vgs(struct cmd_context *cmd, activation_handler handl
 
 int lvmetad_vg_clear_outdated_pvs(struct volume_group *vg);
 void lvmetad_validate_global_cache(struct cmd_context *cmd, int force);
+int lvmetad_token_matches(struct cmd_context *cmd);
 
 #  else		/* LVMETAD_SUPPORT */
 
@@ -197,6 +204,8 @@ void lvmetad_validate_global_cache(struct cmd_context *cmd, int force);
 #    define lvmetad_pvscan_foreign_vgs(cmd, handler)	(0)
 #    define lvmetad_vg_clear_outdated_pvs(vg)           (1)
 #    define lvmetad_validate_global_cache(cmd, force)	do { } while (0)
+#    define lvmetad_token_matches(cmd) (1)
+#    define lvmetad_is_connected() (0)
 
 #  endif	/* LVMETAD_SUPPORT */
 
