@@ -1640,13 +1640,25 @@ int lvm_run_command(struct cmd_context *cmd, int argc, char **argv)
 	}
 
 	/*
-	 * Other hosts might have changed foreign VGs so enforce a rescan
-	 * before processing any command using them.
+	 * The lvmetad cache may need to be repopulated before we use it because:
+	 * - We are reading foreign VGs which others hosts may have changed
+	 *   which our lvmetad would not have seen.
+	 * - lvmetad may have just been started and no command has been run
+	 *   to populate it yet (e.g. no pvscan --cache was run).
+	 * - Another local command may have run with a different global filter
+	 *   which changed the content of lvmetad from what we want (recognized
+	 *   by differnet token values.)
+	 *
+	 * The pvscan command does rescanning and lvmetad upates itself,
+	 * so it doesn't want this automatic rescanning.
 	 */
-	if (cmd->include_foreign_vgs && lvmetad_used() &&
-	    !lvmetad_pvscan_foreign_vgs(cmd, NULL)) {
-		log_error("Failed to scan devices.");
-		return ECMD_FAILED;
+	if (lvmetad_active() && !(cmd->command->flags & SKIP_AUTO_PVSCAN)) {
+		if (!lvmetad_token_matches(cmd) || cmd->include_foreign_vgs) {
+			if (!lvmetad_pvscan_all_devs(cmd, NULL)) {
+				log_error("Failed to scan devices");
+				return ECMD_FAILED;
+			}
+		}
 	}
 
 	/*
