@@ -181,13 +181,6 @@ unsigned lvmcache_mda_count(struct lvmcache_info *info);
 int lvmcache_vgid_is_cached(const char *vgid);
 uint64_t lvmcache_smallest_mda_size(struct lvmcache_info *info);
 
-void lvmcache_replace_dev(struct cmd_context *cmd, struct physical_volume *pv,
-			struct device *dev);
-
-int lvmcache_found_duplicate_pvs(void);
-
-void lvmcache_set_preferred_duplicates(const char *vgid);
-
 int lvmcache_contains_lock_type_sanlock(struct cmd_context *cmd);
 
 void lvmcache_get_max_name_lengths(struct cmd_context *cmd,
