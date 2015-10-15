@@ -105,6 +105,8 @@ struct arg_value_group_list {
 #define LOCKD_VG_SH		0x00000020
 /* Command does not process any metadata. */
 #define NO_METADATA_PROCESSING	0x00000040
+/* Don't refresh lvmetad cache automatically, let command do it. */
+#define SKIP_AUTO_PVSCAN	0x00000080
  
 /* a register of the lvm commands */
 struct command {
