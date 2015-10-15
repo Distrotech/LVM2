@@ -221,11 +221,6 @@ static int _pvscan_lvmetad(struct cmd_context *cmd, int argc, char **argv)
 		return EINVALID_CMD_LINE;
 	}
 	
-	if (!lock_vol(cmd, VG_GLOBAL, LCK_VG_READ, NULL)) {
-		log_error("Unable to obtain global lock.");
-		return ECMD_FAILED;
-	}
-
 	/* Scan everything? */
 	if (!argc && !devno_args) {
 		if (!lvmetad_pvscan_all_devs(cmd, handler))
@@ -319,9 +314,6 @@ static int _pvscan_lvmetad(struct cmd_context *cmd, int argc, char **argv)
 	}
 
 out:
-	if (!sync_local_dev_names(cmd))
-		stack;
-	unlock_vg(cmd, VG_GLOBAL);
 	return ret;
 }
 
