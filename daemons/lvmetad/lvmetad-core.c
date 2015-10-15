@@ -104,6 +104,68 @@
  * is used.
  */
 
+/*
+ * Device scanning and populating lvmetad.
+ *
+ * lvmetad caches lvm metadata to reduce the amount of device
+ * scanning done by lvm commands.  Device scanning is still
+ * necessary in a number of cases.
+ *
+ * When lvmetad is started, it's "empty", it has no metadata
+ * in its cache.  It relies on lvm commands to scan devices and
+ * populate its cache by sending it information (via pv_found messages).
+ *
+ * 'pvscan --cache' is meant to scan all devices and fully populate the
+ * lvmetad cache.  No devs are specified in this command.
+ *
+ * 'pvscan --cache dev' is meant to scan only the specified device
+ * and add information about it (and from it) to the lvmetad cache.
+ *
+ * When a device appears, a uevent triggers 'pvscan --cache dev',
+ * which scans dev and adds metadata about it and from it to lvmetad.
+ * This is not meant to scan any devices beyond those specified.
+ *
+ * The sum of all individual 'pvscan --cache dev' commands is not
+ * sufficient to fully populate lvmetad because some devices may
+ * exist before lvmetad is started.  So, if 'pvscan --cache dev'
+ * finds that lvmetad is empty, it will perform a full scan
+ * (equivalent to pvscan --cache) to populate lvmetad.  This is
+ * an exception to the rule of only scanning the specified device.
+ *
+ * When any other lvm command connects to lvmetad, it first checks
+ * if lvmetad is empty, and if so, performs a full scan (equivalent
+ * to 'pvscan --cache') to populate lvmetad.  This is beneficial when
+ * lvmetad is restarted and no pvscan --cache command was run afterward.
+ *
+ * When a command connects to lvmetad, it not only checks if lvmetad
+ * is empty, it also checks if lvmetad has been populated using a
+ * different global_filter than its own.  If so, then the lvmetad
+ * cache is invalid, and the command performs a rescan just as if
+ * lvmetad were empty (and using the new global filter).
+ * This can happen if the global_filter is changed in lvm.conf,
+ * or if a global_filter is specified on the command line.
+ *
+ * Concurrent commands using different global filters can cause
+ * problems because will each want a different set of metadata in
+ * lvmetad.  If one command sees that another is updating the
+ * lvmetad cache, it will delay for a while, then retry, and
+ * hopefully the first command will be finished.
+ *
+ * If a report/display command is asked to show information
+ * about foreign VGs, then the command performs a rescan
+ * to repopulate lvmetad, just as if lvmetad were empty.
+ * This is beneficial because the version of the foreign VG
+ * cached in lvmetad could easily be out of date given changes
+ * another host may have made to its VG.
+ *
+ * When using shared VGs with lvmlockd, the cached VG in lvmetad
+ * will become out of date when another host changes the VG.
+ * This difference is detected by lvmlockd, which then invalidates
+ * the cached VG in lvmetad, or all the cached data in lvmetad.
+ * If an lvm command sees that all the lvmetad metadata has been
+ * invalidated by lvmlockd, it will perform a full scan to
+ * update the lvmetad cache.
+ */
 
 /*
  * valid/invalid state of cached metadata
@@ -2588,9 +2650,10 @@ static response set_global_info(lvmetad_state *s, request r)
 
 static response get_global_info(lvmetad_state *s, request r)
 {
-	return daemon_reply_simple("OK", "global_invalid = %d",
-					 (s->flags & GLFL_INVALID) ? 1 : 0,
-					 NULL);
+	return daemon_reply_simple("OK",
+				   "global_invalid = %d", (s->flags & GLFL_INVALID) ? 1 : 0,
+				   "token = %s", s->token[0] ? s->token : "none",
+				   NULL);
 }
 
 static response set_vg_info(lvmetad_state *s, request r)
