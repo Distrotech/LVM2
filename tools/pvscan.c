@@ -264,6 +264,21 @@ static int _pvscan_lvmetad(struct cmd_context *cmd, int argc, char **argv)
 		goto out;
 	}
 
+	/*
+	 * FIXME: when specific devs are named, we generally don't
+	 * want to scan any other devs, but if lvmetad is not yet
+	 * populated, the first 'pvscan --cache dev' does need to
+	 * do a full scan.  We want to remove the need for this
+	 * case so that 'pvscan --cache dev' is guaranteed to never
+	 * scan any devices other than those specified.
+	 */
+	if (lvmetad_active() && !lvmetad_token_matches(cmd)) {
+		if (!lvmetad_pvscan_all_devs(cmd, NULL)) {
+			log_error("Failed to scan devices");
+			return ECMD_FAILED;
+		}
+	}
+
 	log_verbose("Using physical volume(s) on command line");
 
 	/* Process any command line PVs first. */
@@ -386,6 +401,21 @@ int pvscan(struct cmd_context *cmd, int argc, char **argv)
 		log_warn("WARNING: only considering physical volumes %s",
 			  arg_count(cmd, exported_ARG) ?
 			  "of exported volume group(s)" : "in no volume group");
+
+	/*
+	 * All pvscan commands skip the automatic repopulating of
+	 * lvmetad when the token doesn't match, because pvscan_lvmetad
+	 * above (for pvscan --cache) needs to do that repopulating
+	 * itself.  So for other pvscan commands (without --cache), we
+	 * need to check the lvmetad token and repopulate the cache
+	 * if it doesn't match.
+	 */
+	if (lvmetad_active() && !lvmetad_token_matches(cmd)) {
+		if (!lvmetad_pvscan_all_devs(cmd, NULL)) {
+			log_error("Failed to scan devices");
+			return ECMD_FAILED;
+		}
+	}
 
 	if (!lock_vol(cmd, VG_GLOBAL, LCK_VG_WRITE, NULL)) {
 		log_error("Unable to obtain global lock.");
