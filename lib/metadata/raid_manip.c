@@ -1371,7 +1371,7 @@ static int _alloc_image_components(struct logical_volume *lv,
 		return_0;
 PFL();
 
-	reshape_per_dev_len = seg_type(seg, 0) == AREA_LV ? first_seg(seg_lv(seg, 0))->reshape_len : 0;
+	reshape_per_dev_len = seg->reshape_len;
 
 	/*
 	 * The number of extents is based on the RAID type.  For RAID1/10,
@@ -1388,21 +1388,18 @@ PFL();
 			return_0;
 
 		/* Amount of extents for the rimage device(s) */
-		if (seg_is_any_raid10(seg)) {
-			stripes = count;
-			data_copies = 1;
-			extents = count * lv_raid_rimage_extents(lv->le_count, seg->area_count, seg->data_copies);
-
-		} else if (seg_is_striped_raid(seg)) {
+		if (seg_is_striped_raid(seg)) {
 			stripes = count;
 			data_copies = 1;
 			extents = count * seg->area_len;
 
-PFLA("stripes=%u lv->le_count=%u data_rimages_count=%u seg->area_count=%u", stripes, lv->le_count, _data_rimages_count(seg, seg->area_count), seg->area_count);
+for (s = 0; s < seg->area_count; s++)
+PFLA("seg_lv(seg, %u)=%s seg_lv(seg, s)->reshape_len=%u", s, display_lvname(seg_lv(seg, s)), first_seg(seg_lv(seg, s))->reshape_len);
+PFLA("stripes=%u extents=%u lv->le_count=%u seg->area_count=%u data_copies=%u", stripes, extents, lv->le_count, seg->area_count, data_copies);
 		} else {
 			stripes = 1;
 			data_copies = count;
-			extents = lv->le_count;
+			extents = seg->len;
 		}
 
 		if (!(ah = allocate_extents(lv->vg, NULL, segtype,
@@ -1440,12 +1437,14 @@ PFLA("count=%u extents=%u", count, extents);
 				goto_bad;
 
 			dm_list_add(data_lvs, &lvl_array[s].list);
+#if 1
 			if (lvl_array[s].lv->le_count)
 				first_seg(lvl_array[s].lv)->reshape_len = reshape_per_dev_len;
+#endif
 		}
 	}
 
-	r =  1;
+	r = 1;
 bad:
 	if (ah)
 		alloc_destroy(ah);
@@ -1590,11 +1589,8 @@ PFL();
 	lv->size = lv->le_count * lv->vg->extent_size;
 	seg->len += s_extends;
 	seg->area_len += s_extends;
-#if 0
-	seg->reshape_len = seg->reshape_len / _data_rimages_count(seg, old_image_count)
-					    * _data_rimages_count(seg, new_image_count);
-#endif
 	/* Extend */
+
 	if (extend && old_image_count == 2 && !seg->stripe_size)
 		seg->stripe_size = DEFAULT_STRIPESIZE;
 
@@ -1665,7 +1661,6 @@ PFLA("reshape_disks=%u", reshape_disks);
 
 		if (reshape_disks) {
 PFL();
-			/* HM FIXME: enhance for raid10? */
 			_reshape_change_size(lv,
 					     (new_image_count - old_image_count) *
 					      (lv->le_count / _data_rimages_count(seg, old_image_count)),
@@ -1706,7 +1701,6 @@ PFLA("seg_lv(seg, %u)=%s", s, seg_lv(seg, s)->name);
 
 		/* Reshape removing image component pairs -> change sizes accordingly */
 		if (reshape_disks)
-			/* HM FIXME: enhance for raid10? */
 			_reshape_change_size(lv,
 					     (old_image_count - new_image_count) *
 					      (lv->le_count / _data_rimages_count(seg, old_image_count)),
@@ -1745,7 +1739,7 @@ static int _relocate_reshape_space(struct logical_volume *lv, int to_end)
 		return 0;
 	}
 
-	reshape_len_per_dev = first_seg(seg_lv(seg,0))->reshape_len;
+	reshape_len_per_dev = seg->reshape_len;
 
 	/*
 	 * Move the reshape LEs of each stripe (i.e. the data image sub lv)
@@ -1765,7 +1759,6 @@ static int _relocate_reshape_space(struct logical_volume *lv, int to_end)
 			le = dlv->le_count - len_per_dlv;
 			end = dlv->le_count;
 		}
-
 
 		/* Ensure segment boundary at begin/end of reshape space */
 		if (!lv_split_segment(dlv, to_end ? end : le))
@@ -3686,7 +3679,8 @@ static uint64_t _get_conversion_to_segtypes(const struct lv_segment *seg)
 		{ .current_types  = SEG_RAID0|SEG_RAID0_META, /* raid0 striped, i.e. seg->area_count > 1 */
 		  .possible_types = SEG_AREAS_STRIPED|SEG_RAID10|SEG_RAID4|SEG_RAID5_N|SEG_RAID6_N_6 },
 		{ .current_types  = SEG_RAID1, /* only if seg->area_count = 2 */
-		  .possible_types = SEG_RAID10|SEG_RAID4|SEG_RAID5_LS|SEG_RAID5_LA|SEG_RAID5_RS|SEG_RAID5_RA|SEG_RAID5_N },
+		  .possible_types = SEG_RAID10|SEG_RAID10_NEAR|SEG_RAID10_OFFSET|SEG_RAID4| \
+				    SEG_RAID5_LS|SEG_RAID5_LA|SEG_RAID5_RS|SEG_RAID5_RA|SEG_RAID5_N },
 		{ .current_types  = SEG_RAID4,
 		  .possible_types = SEG_AREAS_STRIPED|SEG_RAID0|SEG_RAID0_META|SEG_RAID5_N|SEG_RAID6_N_6 },
 		{ .current_types  = SEG_RAID5_LS,
@@ -5319,13 +5313,10 @@ TAKEOVER_HELPER_FN(_raid145_raid4510)
 	 * any reshape space which may be at the beginning of the component
 	 * data images or the data content will be mapped to an offset
 	 */
-	if (_lv_free_reshape_space(lv)) {
+	if (!_lv_free_reshape_space(lv)) {
 		log_error(INTERNAL_ERROR "Failed to free reshape space of %s", display_lvname(lv));
 		return 0;
 	}
-
-	if (seg_is_raid1(seg))
-		seg->data_copies = 1;
 
 	if (seg_is_raid4(seg) && segtype_is_any_raid5(new_segtype)) {
 		if (!(seg->segtype = get_segtype_from_flag(lv->vg->cmd, SEG_RAID5_N)))
@@ -5823,6 +5814,13 @@ TAKEOVER_FN(_r1_r10)
 			  display_lvname(lv),
 			  SEG_TYPE_NAME_RAID1, new_segtype->name);
 		return 0;
+	}
+
+	if (segtype_is_raid10_far(new_segtype)) {
+		log_error("Conversion of %s to raid10_far prohibited",
+			  display_lvname(lv));
+		log_error("Please use \"lvconvert --duplicate ...\"");
+		return 1;
 	}
 
 	return _raid145_raid4510(lv, new_segtype, yes, force, new_image_count, 0 /* data_copies */, 0, 0, allocate_pvs);
@@ -6394,7 +6392,8 @@ static takeover_fn_t _takeover_fn[][10] = {
  */
 int lv_raid_convert(struct logical_volume *lv,
 		    const struct segment_type *new_segtype,
-		    int yes, int force, int duplicate,
+		    int yes, int force,
+		    int duplicate, int unduplicate,
 		    unsigned new_image_count,
 		    const unsigned data_copies,
 		    const unsigned new_stripes,
@@ -6413,6 +6412,11 @@ int lv_raid_convert(struct logical_volume *lv,
 
 	if (!new_segtype) {
 		log_error(INTERNAL_ERROR "New segtype not specified");
+		return 0;
+	}
+
+	if (duplicate && unduplicate) {
+		log_error(INTERNAL_ERROR "Called with duplicate and unduplicate!");
 		return 0;
 	}
 
@@ -6475,7 +6479,7 @@ PFLA("new_segtype=%s new_image_count=%u new_stripes=%u stripes=%u", new_segtype-
 	}
 
 	/* Remove any active duplicating conversion */
-	if (duplicate) {
+	if (unduplicate) {
 		if (_lv_is_duplicating(lv)) {
 			if (!_raid_conv_unduplicate(lv, new_segtype, new_image_count, new_stripes ? stripes : 0,
 						    stripe_size, data_copies, yes)) {
@@ -6488,13 +6492,16 @@ PFLA("new_segtype=%s new_image_count=%u new_stripes=%u stripes=%u", new_segtype-
 			goto out;
 		}
 
-	} else {
+		log_error("LV %s is not duplicating!", display_lvname(lv));
+		return 0;
+
+	} else if (!duplicate) {
 		/*
 		 * If not duplicating request ->
 		 *
 		 * reshape of capable raid type requested
 		 */
-		switch (_reshape_requested(lv, new_segtype_tmp, new_stripes, new_stripe_size)) {
+		switch (_reshape_requested(lv, new_segtype_tmp, stripes, stripe_size)) {
 		case 0:
 			break;
 		case 1:
@@ -6530,8 +6537,13 @@ PFLA("new_segtype=%s new_image_count=%u new_stripes=%u stripes=%u", new_segtype-
 
 PFLA("yes=%d new_segtype=%s new_image_count=%u data_copies=%u new_stripes=%u stripes=%u", yes, new_segtype->name, new_image_count, data_copies, new_stripes, stripes);
 
-	/* A conversion by duplication has been requested (i.e. create a new lv of the requested segtype etc.) */
-	if (_lv_is_duplicating(lv) || duplicate)
+	/*
+	 * A conversion by duplication has been requested so either:
+	 * - create a new lv of the requested segtype
+	 * -or-
+	 * - add another LV as a sub lv to an existing duplicating one
+	 */
+	if (duplicate)
 		return _raid_conv_duplicate(lv, new_segtype, yes, force, new_image_count, data_copies,
 					    stripes, new_stripe_size, pool_data_name, allocate_pvs);
 		

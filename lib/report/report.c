@@ -2005,7 +2005,10 @@ static int _segreshape_len_disp(struct dm_report *rh, struct dm_pool *mem,
 				const void *data, void *private)
 {
 	const struct lv_segment *seg = (const struct lv_segment *) data;
-	uint32_t reshape_len = seg_is_raid(seg) ? 0 : seg->reshape_len;
+	uint32_t reshape_len = seg->reshape_len;
+
+	if (seg_is_raid(seg))
+		reshape_len *= seg->area_count;
 
 	if (reshape_len)
 		return dm_report_field_uint32(rh, field, &reshape_len);
@@ -2021,9 +2024,12 @@ static int _segdata_copies_disp(struct dm_report *rh, struct dm_pool *mem,
 	uint32_t data_copies = seg->segtype->parity_devs ?
 			       (seg->segtype->parity_devs + 1) : seg->data_copies;
 
-	if ((seg_is_raid1(seg) || seg_is_mirrored(seg)) &&
+PFLA("seg->data_copies=%u data_copies=%u", seg->data_copies, data_copies);
+#if 0
+	if ((seg_is_raid1(seg) || seg_is_mirror(seg)) &&
 	    !seg_is_any_raid10(seg))
 		data_copies = seg->area_count;
+#endif
 
 	if (data_copies > 1)
 		return dm_report_field_uint32(rh, field, &data_copies);
@@ -2038,6 +2044,7 @@ static int _segdata_offset_disp(struct dm_report *rh, struct dm_pool *mem,
 	const struct lv_segment *seg = (const struct lv_segment *) data;
 	const char *what = "";
 
+	/* HM FIXME: display data offset on image LVs, not on the top-level raid LV? */
 	if (seg_is_reshapable_raid(seg)) {
 		uint64_t data_offset;
 
@@ -2056,7 +2063,7 @@ static int _seg_parity_chunks_disp(struct dm_report *rh, struct dm_pool *mem,
 				   const void *data, void *private)
 {
 	const struct lv_segment *seg = (const struct lv_segment *) data;
-	uint32_t parity_chunks = seg->segtype->parity_devs;
+	uint32_t parity_chunks = seg->area_count > 2 ? seg->segtype->parity_devs : 0;
 
 	if (parity_chunks)
 		return dm_report_field_uint32(rh, field, &parity_chunks);

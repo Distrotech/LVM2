@@ -1773,6 +1773,12 @@ PFLA("lp->segtype=%s\n", lp->segtype->name);
 		unsigned stripes = 0;
 		unsigned stripe_size = arg_count(cmd, stripesize_ARG) ? lp->stripe_size  : 0;
 
+		if (arg_is_set(cmd, duplicate_ARG) &&
+		    arg_is_set(cmd, unduplicate_ARG)) {
+			log_error("--duplicate/--unduplicate are mutually exclusive");
+			return 0;
+		}
+
 		/* Check for raid0 support if requested */
 		if ((segtype_is_any_raid0(seg->segtype) || segtype_is_any_raid0(lp->segtype)) &&
 		    !(lp->target_attr & RAID_FEATURE_RAID0)) {
@@ -1825,7 +1831,8 @@ PFLA("lp->segtype=%s\n", lp->segtype->name);
 		    !(lp->segtype = get_segtype_from_string(cmd, "thin")))
 			return 0;
 
-		return lv_raid_convert(lv, lp->segtype, lp->yes, lp->force, arg_is_set(cmd, duplicate_ARG),
+		return lv_raid_convert(lv, lp->segtype, lp->yes, lp->force,
+				       arg_is_set(cmd, duplicate_ARG), arg_is_set(cmd, unduplicate_ARG),
 				       image_count, lp->mirrors + 1, stripes, stripe_size, lp->pool_data_name, lp->pvh);
 	}
 
