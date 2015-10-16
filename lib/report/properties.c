@@ -423,8 +423,18 @@ GET_LVSEG_NUM_PROPERTY_FN(dataoffset, lvseg->data_offset)
 #define _data_offset_set prop_not_implemented_set
 GET_LVSEG_NUM_PROPERTY_FN(data_offset, lvseg->data_offset)
 #define _segtype_set prop_not_implemented_set
+GET_LVSEG_NUM_PROPERTY_FN(parity, lvseg->data_offset)
+#define _parity_set prop_not_implemented_set
+GET_LVSEG_NUM_PROPERTY_FN(parity_chunks, lvseg->data_offset)
+#define _parity_chunks_set prop_not_implemented_set
+GET_LVSEG_NUM_PROPERTY_FN(parity_devs, lvseg->data_offset)
+#define _parity_devs_set prop_not_implemented_set
 GET_LVSEG_NUM_PROPERTY_FN(stripes, lvseg->area_count)
 #define _stripes_set prop_not_implemented_set
+GET_LVSEG_NUM_PROPERTY_FN(datastripes, lvseg->area_count - lvseg->segtype->parity_devs)
+#define _datastripes_set prop_not_implemented_set
+GET_LVSEG_NUM_PROPERTY_FN(data_stripes, lvseg->area_count - lvseg->segtype->parity_devs)
+#define _data_stripes_set prop_not_implemented_set
 GET_LVSEG_NUM_PROPERTY_FN(stripesize, (SECTOR_SIZE * lvseg->stripe_size))
 #define _stripesize_set prop_not_implemented_set
 GET_LVSEG_NUM_PROPERTY_FN(stripe_size, (SECTOR_SIZE * lvseg->stripe_size))

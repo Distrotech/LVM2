@@ -182,7 +182,7 @@ static uint32_t _seg_len(const struct lv_segment *seg)
 {
 PFLA("reshape_len=%u", seg->reshape_len);
 	if (seg_is_raid(seg))
-		return seg->len - first_seg(seg_lv(seg, 0))->reshape_len * seg->area_count;
+		return seg->len - seg->reshape_len * (seg->area_count - seg->segtype->parity_devs);
 
 	return seg->len;
 }

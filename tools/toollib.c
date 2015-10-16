@@ -1366,12 +1366,20 @@ static int _validate_stripe_params(struct cmd_context *cmd, uint32_t *stripes,
 		return 0;
 	}
 
+#if 0
+	if (*stripes > 1 && *stripe_size < STRIPE_SIZE_MIN) {
+		log_error("Invalid stripe size %s.",
+			  display_size(cmd, (uint64_t) *stripe_size));
+		return 0;
+	}
+#else
 	if (*stripes > 1 && (*stripe_size < STRIPE_SIZE_MIN ||
 			     *stripe_size & (*stripe_size - 1))) {
 		log_error("Invalid stripe size %s.",
 			  display_size(cmd, (uint64_t) *stripe_size));
 		return 0;
 	}
+#endif
 
 	return 1;
 }

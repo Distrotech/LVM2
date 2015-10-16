@@ -1962,7 +1962,13 @@ static int _lvsize_disp(struct dm_report *rh, struct dm_pool *mem,
 			const void *data, void *private)
 {
 	const struct logical_volume *lv = (const struct logical_volume *) data;
-	uint64_t size = lv->size - first_seg(lv)->reshape_len * lv->vg->extent_size;
+	const struct lv_segment *seg = first_seg(lv);
+	uint64_t size = lv->size;
+
+	if (seg_type(seg, 0) == AREA_LV &&
+	    seg->area_count > 1)
+		size = lv->size - seg->reshape_len *
+		       (seg->area_count - seg->segtype->parity_devs) * lv->vg->extent_size;
 
 	return _size64_disp(rh, mem, field, &size, private);
 }
@@ -1984,16 +1990,12 @@ static int _segmonitor_disp(struct dm_report *rh, struct dm_pool *mem,
 				GET_FIELD_RESERVED_VALUE(seg_monitor_undef));
 }
 
-static int _segstripes_disp(struct dm_report *rh, struct dm_pool *mem,
-			    struct dm_report_field *field,
-			    const void *data, void *private)
+static int _segdata_stripes_disp(struct dm_report *rh, struct dm_pool *mem,
+				 struct dm_report_field *field,
+				 const void *data, void *private)
 {
 	const struct lv_segment *seg = (const struct lv_segment *) data;
-	uint32_t stripes = seg->area_count;
-
-	if (seg_is_striped_raid(seg) &&
-	    seg->segtype)
-		stripes -= seg->segtype->parity_devs;
+	uint32_t stripes = seg->area_count - seg->segtype->parity_devs;
 
 	return dm_report_field_uint32(rh, field, &stripes);
 }
@@ -2003,12 +2005,7 @@ static int _segreshape_len_disp(struct dm_report *rh, struct dm_pool *mem,
 				const void *data, void *private)
 {
 	const struct lv_segment *seg = (const struct lv_segment *) data;
-	uint32_t reshape_len = 0;
-
-	if (seg_is_raid(seg))
-		reshape_len = first_seg(seg_lv(seg, 0))->reshape_len * seg->area_count;
-	else
-		reshape_len = seg->reshape_len;
+	uint32_t reshape_len = seg_is_raid(seg) ? 0 : seg->reshape_len;
 
 	if (reshape_len)
 		return dm_report_field_uint32(rh, field, &reshape_len);
@@ -2051,6 +2048,20 @@ static int _segdata_offset_disp(struct dm_report *rh, struct dm_pool *mem,
 	}
 
 	return _field_set_value(field, what, &GET_TYPE_RESERVED_VALUE(num_undef_64));
+}
+
+
+static int _seg_parity_chunks_disp(struct dm_report *rh, struct dm_pool *mem,
+		   		   struct dm_report_field *field,
+				   const void *data, void *private)
+{
+	const struct lv_segment *seg = (const struct lv_segment *) data;
+	uint32_t parity_chunks = seg->segtype->parity_devs;
+
+	if (parity_chunks)
+		return dm_report_field_uint32(rh, field, &parity_chunks);
+
+	return _field_set_value(field, "", &GET_TYPE_RESERVED_VALUE(num_undef_32));
 }
 
 static int _segstart_disp(struct dm_report *rh, struct dm_pool *mem,

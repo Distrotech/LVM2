@@ -1821,8 +1821,12 @@ PFLA("lp->segtype=%s\n", lp->segtype->name);
 		if (seg_is_reshapable_raid(seg) || seg_is_raid1(seg))
 			seg->region_size = lp->region_size ?: 1024;
 
+		if (segtype_is_pool(lp->segtype) &&
+		    !(lp->segtype = get_segtype_from_string(cmd, "thin")))
+			return 0;
+
 		return lv_raid_convert(lv, lp->segtype, lp->yes, lp->force, arg_is_set(cmd, duplicate_ARG),
-				       image_count, lp->mirrors + 1, stripes, stripe_size, lp->pvh);
+				       image_count, lp->mirrors + 1, stripes, stripe_size, lp->pool_data_name, lp->pvh);
 	}
 
 	if (arg_count(cmd, replace_ARG))
@@ -3368,14 +3372,16 @@ static int _lvconvert_single(struct cmd_context *cmd, struct logical_volume *lv,
 	} else if (lp->snapshot) {
 		if (!_lvconvert_snapshot(cmd, lv, lp))
 			return_ECMD_FAILED;
-	} else if (segtype_is_pool(lp->segtype) || lp->thin || lp->cache) {
+	} else if (!arg_is_set(cmd, duplicate_ARG) &&
+		   (segtype_is_pool(lp->segtype) || lp->thin || lp->cache)) {
 		if (!_lvconvert_pool(cmd, lv, lp))
 			return_ECMD_FAILED;
 
 		if ((lp->thin && !_lvconvert_thin(cmd, lv, lp)) ||
 		    (lp->cache && !_lvconvert_cache(cmd, lv, lp)))
 			return_ECMD_FAILED;
-	} else if (segtype_is_raid(lp->segtype) ||
+	} else if (arg_is_set(cmd, duplicate_ARG) ||
+		   segtype_is_raid(lp->segtype) ||
 segtype_is_striped(lp->segtype) ||
 (segtype_is_mirror(lp->segtype) && !arg_is_set(cmd, mirrorlog_ARG)) ||
 		   lv_is_raid(lv) || lp->merge_mirror) {

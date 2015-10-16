@@ -1153,6 +1153,7 @@ int lv_raid_convert(struct logical_volume *lv,
 		    const unsigned mirrors,
 		    const unsigned stripes,
 		    const unsigned new_stripe_size,
+		    const char *pool_data_name,
 		    struct dm_list *allocate_pvs);
 int lv_raid_replace(struct logical_volume *lv, struct dm_list *remove_pvs,
 		    struct dm_list *allocate_pvs);
@@ -1163,7 +1164,8 @@ uint32_t lv_raid_rimage_extents(uint32_t extents, uint32_t stripes, uint32_t dat
 int lv_create_raid01(struct logical_volume *lv, const struct segment_type *segtype,
 		     unsigned mirrors, unsigned stripes,
 		     unsigned stripe_size, unsigned region_size,
-		     unsigned extents, struct dm_list *allocate_pvs);
+		     unsigned extents,
+		     struct dm_list *allocate_pvs);
 /* --  metadata/raid_manip.c */
 
 /* ++  metadata/cache_manip.c */
