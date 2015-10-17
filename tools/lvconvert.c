@@ -1708,9 +1708,6 @@ static int _lvconvert_raid(struct logical_volume *lv, struct lvconvert_params *l
 	struct lv_segment *seg = first_seg(lv);
 	dm_percent_t sync_percent;
 
-	if (!arg_count(cmd, type_ARG))
-		lp->segtype = seg->segtype;
-
 	/* -mN can change image count for mirror/raid1 and linear (converting it to mirror/raid1) */
 	/* -m0 can change raid0 with one stripe and raid4/5 with 2 to linear */
 	if (arg_count(cmd, mirrors_ARG) &&
@@ -1764,12 +1761,12 @@ PFLA("image_count=%u\n", image_count);
 	if (arg_count(cmd, splitmirrors_ARG))
 		return lv_raid_split(lv, lp->lv_split_name, image_count, lp->pvh);
 
-PFLA("lp->segtype=%s\n", lp->segtype->name);
-	if ((seg_is_linear(seg) || seg_is_striped(seg) || seg_is_mirrored(seg) || lv_is_raid(lv)) &&
+	if ((seg_is_linear(seg) || seg_is_striped(seg) || seg_is_mirror(seg) || seg_is_raid(seg)) &&
 	    (arg_count(cmd, type_ARG) ||
 	     image_count ||
 	     arg_count(cmd, stripes_long_ARG) ||
-	     arg_count(cmd, stripesize_ARG))) {
+	     arg_count(cmd, stripesize_ARG) ||
+	     arg_is_set(cmd, unduplicate_ARG))) {
 		unsigned stripes = 0;
 		unsigned stripe_size = arg_count(cmd, stripesize_ARG) ? lp->stripe_size  : 0;
 
@@ -1831,7 +1828,7 @@ PFLA("lp->segtype=%s\n", lp->segtype->name);
 		    !(lp->segtype = get_segtype_from_string(cmd, "thin")))
 			return 0;
 
-		return lv_raid_convert(lv, lp->segtype, lp->yes, lp->force,
+		return lv_raid_convert(lv, arg_count(cmd, type_ARG) ? lp->segtype : NULL, lp->yes, lp->force,
 				       arg_is_set(cmd, duplicate_ARG), arg_is_set(cmd, unduplicate_ARG),
 				       image_count, lp->mirrors + 1, stripes, stripe_size, lp->pool_data_name, lp->pvh);
 	}

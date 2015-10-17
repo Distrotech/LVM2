@@ -4369,7 +4369,7 @@ PFL();
 	log_warn("This is a request to remove the %s of a duplicating conversion of LV %s!",
 		 keep_idx ? "source" : "destination", display_lvname(lv));
 	if (!yes &&
-	    yes_no_prompt("Do you want to convert %s with type %s thus unduplicating it? [y/n]: ",
+	    yes_no_prompt("Do you want to convert %s to type %s thus unduplicating it? [y/n]: ",
 			  display_lvname(lv),
 			  _get_segtype_name(seg0->segtype, seg0->area_count)) == 'n')
 		return 0;
@@ -6395,7 +6395,7 @@ int lv_raid_convert(struct logical_volume *lv,
 		    int yes, int force,
 		    int duplicate, int unduplicate,
 		    unsigned new_image_count,
-		    const unsigned data_copies,
+		    unsigned data_copies,
 		    const unsigned new_stripes,
 		    const unsigned new_stripe_size,
 		    const char *pool_data_name,
@@ -6410,37 +6410,39 @@ int lv_raid_convert(struct logical_volume *lv,
 
 	dm_list_init(&removal_lvs);
 
-	if (!new_segtype) {
-		log_error(INTERNAL_ERROR "New segtype not specified");
-		return 0;
-	}
-
 	if (duplicate && unduplicate) {
 		log_error(INTERNAL_ERROR "Called with duplicate and unduplicate!");
 		return 0;
 	}
 
-	if (!(striped_segtype = get_segtype_from_string(lv->vg->cmd, SEG_TYPE_NAME_STRIPED)))
-		return_0;
-
-	/* Given segtype of @lv */
-	if (!seg_is_striped(seg) && /* Catches linear = "overloaded striped with one area" as well */
-	    !seg_is_mirror(seg) &&
-	    !seg_is_raid(seg))
-		goto err;
-
-	/* Requested segtype */
-	if (!segtype_is_linear(new_segtype) &&
-	    !segtype_is_striped(new_segtype) &&
-	    !segtype_is_mirror(new_segtype) &&
-	    !segtype_is_raid(new_segtype) &&
-	    !segtype_is_thin(new_segtype))
-		goto err;
-
 	/* Define new image count if not passed in */
 	new_image_count = new_image_count ?: seg->area_count;
 
-PFLA("new_segtype=%s new_image_count=%u data_copies=%u new_stripes=%u segtype=%s, seg->area_count=%u", new_segtype->name, new_image_count, data_copies, new_stripes, lvseg_name(seg), seg->area_count);
+	if (!unduplicate) {
+		if (!new_segtype) {
+			log_error(INTERNAL_ERROR "New segtype not specified");
+			return 0;
+		}
+
+		if (!(striped_segtype = get_segtype_from_string(lv->vg->cmd, SEG_TYPE_NAME_STRIPED)))
+			return_0;
+
+		/* Given segtype of @lv */
+		if (!seg_is_striped(seg) && /* Catches linear = "overloaded striped with one area" as well */
+		    !seg_is_mirror(seg) &&
+		    !seg_is_raid(seg))
+			goto err;
+
+		/* Requested segtype */
+		if (!segtype_is_linear(new_segtype) &&
+		    !segtype_is_striped(new_segtype) &&
+		    !segtype_is_mirror(new_segtype) &&
+		    !segtype_is_raid(new_segtype) &&
+		    !segtype_is_thin(new_segtype))
+			goto err;
+	}
+
+PFLA("new_segtype=%s new_image_count=%u data_copies=%u new_stripes=%u segtype=%s, seg->area_count=%u", new_segtype ? new_segtype->name : "", new_image_count, data_copies, new_stripes, lvseg_name(seg), seg->area_count);
 
 	if (!_check_max_raid_devices(new_image_count))
 		return 0;
@@ -6456,12 +6458,12 @@ PFLA("new_segtype=%s new_image_count=%u data_copies=%u new_stripes=%u segtype=%s
 	    new_image_count > 1 &&
 	    !(new_segtype = get_segtype_from_flag(lv->vg->cmd, SEG_RAID1)))
 		return_0;
-PFLA("new_segtype=%s new_image_count=%u segtype=%s, seg->area_count=%u", new_segtype->name, new_image_count, lvseg_name(seg), seg->area_count);
+PFLA("new_segtype=%s new_image_count=%u segtype=%s, seg->area_count=%u", new_segtype ? new_segtype->name : "", new_image_count, lvseg_name(seg), seg->area_count);
 
 	/* Define new stripe size if not passed in */
 	stripe_size = new_stripe_size ?: seg->stripe_size;
 	stripes = new_stripes ?: _data_rimages_count(seg, seg->area_count);
-PFLA("new_segtype=%s new_image_count=%u new_stripes=%u stripes=%u", new_segtype->name, new_image_count, new_stripes, stripes);
+PFLA("new_segtype=%s new_image_count=%u new_stripes=%u stripes=%u", new_segtype ? new_segtype->name : "", new_image_count, new_stripes, stripes);
 
 	/* @lv has to be active to perform raid conversion operatons */
 	if (!lv_is_active(lv)) {
@@ -6478,11 +6480,24 @@ PFLA("new_segtype=%s new_image_count=%u new_stripes=%u stripes=%u", new_segtype-
 		return 0;
 	}
 
-	/* Remove any active duplicating conversion */
+	/*
+	 * Remove any active duplicating conversion ->
+	 * this'll remove all but 1 leg and withdraw the
+	 * top-level raid1 mapping
+	 */
 	if (unduplicate) {
 		if (_lv_is_duplicating(lv)) {
-			if (!_raid_conv_unduplicate(lv, new_segtype, new_image_count, new_stripes ? stripes : 0,
-						    stripe_size, data_copies, yes)) {
+			if (!new_segtype) {
+				struct lv_segment *fseg = first_seg(seg_lv(seg, 0));
+
+				new_segtype = fseg->segtype;
+				stripes = new_stripes ?: _data_rimages_count(fseg, fseg->area_count);
+				stripe_size = new_stripe_size ?: fseg->stripe_size;
+				data_copies = data_copies ?: fseg->data_copies;
+			}
+
+			if (!_raid_conv_unduplicate(lv, new_segtype, new_image_count,
+						    stripes, stripe_size, data_copies, yes)) {
 				if (!_lv_is_duplicating(lv))
 					_log_possible_conversion_types(lv);
 
