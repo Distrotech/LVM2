@@ -4390,7 +4390,8 @@ int lv_extend(struct logical_volume *lv,
 				struct lv_segment *seg1 = last_seg(lv1);
 
 PFLA("recursive seg_lv(seg, %u)=%s", s, display_lvname(lv1));
-				if (!lv_extend(lv1, seg1->segtype, seg1->area_count, seg1->stripe_size, seg1->data_copies, seg1->region_size, extents, allocatable_pvs, alloc, approx_alloc))
+				if (extents > lv1->le_count &&
+				    !lv_extend(lv1, seg1->segtype, seg1->area_count, seg1->stripe_size, seg1->data_copies, seg1->region_size, extents, allocatable_pvs, alloc, approx_alloc))
 					return_0;
 
 				extended++;

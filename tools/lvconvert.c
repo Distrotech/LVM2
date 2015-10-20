@@ -1772,7 +1772,7 @@ PFLA("image_count=%u\n", image_count);
 
 		if (arg_is_set(cmd, duplicate_ARG) &&
 		    arg_is_set(cmd, unduplicate_ARG)) {
-			log_error("--duplicate/--unduplicate are mutually exclusive");
+			log_error("--duplicate and --unduplicate are mutually exclusive");
 			return 0;
 		}
 
@@ -1819,14 +1819,6 @@ PFLA("image_count=%u\n", image_count);
 			image_count = stripes = 1;
 			stripe_size = 0;
 		}
-
-		/* HM FIXME: get region size from config */
-		if (seg_is_reshapable_raid(seg) || seg_is_raid1(seg))
-			seg->region_size = lp->region_size ?: 1024;
-
-		if (segtype_is_pool(lp->segtype) &&
-		    !(lp->segtype = get_segtype_from_string(cmd, "thin")))
-			return 0;
 
 		return lv_raid_convert(lv, arg_count(cmd, type_ARG) ? lp->segtype : NULL, lp->yes, lp->force,
 				       arg_is_set(cmd, duplicate_ARG), arg_is_set(cmd, unduplicate_ARG),
