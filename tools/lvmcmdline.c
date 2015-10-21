@@ -773,6 +773,7 @@ void lvm_register_commands(void)
 					    yes_ARG, \
 					    quiet_ARG, config_ARG, \
 					    commandprofile_ARG, \
+					    nodbusnotify_ARG, \
 					    profile_ARG, -1);
 #include "commands.h"
 #undef xx
@@ -1640,7 +1641,8 @@ int lvm_run_command(struct cmd_context *cmd, int argc, char **argv)
 		goto_out;
 	}
 
-	if (!_cmd_no_meta_proc(cmd) && !lvmnotify_init(cmd))
+	if (!_cmd_no_meta_proc(cmd) && !arg_is_set(cmd, nodbusnotify_ARG) &&
+	    !lvmnotify_init(cmd))
 		log_verbose("Unable to initialize notifications.");
 
 	/*
