@@ -25,9 +25,9 @@ int lvmnotify_init(struct cmd_context *cmd)
 	_dbus_con = g_dbus_proxy_new_for_bus_sync(G_BUS_TYPE_SYSTEM,
 						  G_DBUS_PROXY_FLAGS_NONE,
 						  NULL,
-						  "com.redhat.lvmdbus1",
-						  "/com/redhat/lvmdbus1",
-						  "com.redhat.lvmdbus1",
+						  "com.redhat.lvmdbus1.Manager",
+						  "/com/redhat/lvmdbus1/Manager",
+						  "com.redhat.lvmdbus1.Manager",
 						  NULL,
 						  &error);
 	if (!_dbus_con && error) {
