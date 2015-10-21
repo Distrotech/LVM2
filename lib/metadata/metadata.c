@@ -603,7 +603,7 @@ int vg_remove_direct(struct volume_group *vg)
 
 	lockd_vg_update(vg);
 
-	notify_vg_update(vg);
+	notify_vg_remove(vg);
 
 	if (!backup_remove(vg->cmd, vg->name))
 		stack;

@@ -86,6 +86,45 @@ void notify_vg_update(struct volume_group *vg)
 	}
 }
 
+void notify_vg_remove(struct volume_group *vg)
+{
+	char uuid[64] __attribute__((aligned(8)));
+	GError *error = NULL;
+	GVariant *rc;
+	int result = 0;
+
+	if (!_dbus_con)
+		return;
+
+	if (!id_write_format(&vg->id, uuid, sizeof(uuid)))
+		return;
+
+	rc = g_dbus_proxy_call_sync(_dbus_con,
+				    "ExternalEvent",
+				    g_variant_new("(sssu)",
+						  "vg_remove",
+						  vg->name,
+						  uuid,
+						  vg->seqno),
+				    G_DBUS_CALL_FLAGS_NONE,
+				    -1, NULL, &error);
+
+	if (rc) {
+		g_variant_get(rc, "(i)", &result);
+		if (result)
+			log_debug("Error from sending dbus notification %d", result);
+		g_variant_unref(rc);
+
+	} else if (error) {
+		if (error->code != 2)
+			log_debug("Failed to send dbus notification %d %s", error->code, error->message);
+		g_error_free(error);
+
+	} else {
+		log_debug("Undefined dbus result");
+	}
+}
+
 #else
 
 int lvmnotify_init(struct cmd_context *cmd)
@@ -97,6 +136,10 @@ void lvmnotify_exit(void)
 }
 
 void notify_vg_update(struct volume_group *vg)
+{
+}
+
+void notify_vg_remove(struct volume_group *vg)
 {
 }
 
