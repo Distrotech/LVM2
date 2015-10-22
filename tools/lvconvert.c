@@ -530,7 +530,8 @@ static int _read_params(struct cmd_context *cmd, int argc, char **argv,
 	}
 
 	if (arg_count(cmd, merge_ARG)) {
-		if ((argc == 1) && strstr(argv[0], "_rimage_"))
+		if ((argc == 1) &&
+		    (strstr(argv[0], "_rimage_") || strstr(argv[0], "_dup_")))
 			lp->merge_mirror = 1;
 		else
 			lp->merge = 1;
@@ -1756,7 +1757,7 @@ PFLA("image_count=%u\n", image_count);
 		return lv_raid_merge(lv);
 
 	if (arg_count(cmd, trackchanges_ARG))
-		return lv_raid_split_and_track(lv, lp->pvh);
+		return lv_raid_split_and_track(lv, lp->lv_split_name, lp->pvh);
 
 	if (arg_count(cmd, splitmirrors_ARG))
 		return lv_raid_split(lv, lp->lv_split_name, image_count, lp->pvh);
@@ -1826,7 +1827,7 @@ PFLA("image_count=%u\n", image_count);
 	}
 
 	if (arg_count(cmd, replace_ARG))
-		return lv_raid_replace(lv, lp->replace_pvh, lp->pvh);
+		return lv_raid_replace(lv, lp->yes, lp->replace_pvh, lp->pvh);
 
 	if (arg_count(cmd, repair_ARG)) {
 		if (!lv_is_active_exclusive_locally(lv_lock_holder(lv))) {
@@ -1868,7 +1869,7 @@ PFLA("replace=%d", replace);
 
 PFLA("dm_list_size(failed_pvs)=%u", dm_list_size(failed_pvs));
 
-			if (!lv_raid_replace(lv, failed_pvs, lp->pvh)) {
+			if (!lv_raid_replace(lv, lp->yes, failed_pvs, lp->pvh)) {
 				log_error("Failed to replace faulty devices in"
 					  " %s/%s.", lv->vg->name, lv->name);
 				return 0;

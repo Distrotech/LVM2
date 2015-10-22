@@ -1427,7 +1427,7 @@ PFL();
 	return 1;
 }
 
-/* Return 1 in case any last segmenbt of @lv, area @s contains another layered LV  */
+/* Return 1 in case any last segment of @lv, area @s contains another layered LV  */
 /* HM FIXME: correct? */
 static int _is_multilayered_lv(struct logical_volume *lv, uint32_t s)
 {
@@ -1436,7 +1436,8 @@ static int _is_multilayered_lv(struct logical_volume *lv, uint32_t s)
 	return seg &&
 	       seg_is_raid1(seg) && 
 	       seg_type(seg, s) == AREA_LV &&
-	       (seg1 = last_seg(seg_lv(seg, s)));
+	       (seg1 = last_seg(seg_lv(seg, s))) &&
+		!seg_is_striped(seg1);
 #if 0
  && /* <- segment of #s LV underneath top-level */
 	       seg_type(seg1, 0) == AREA_LV &&
@@ -4414,12 +4415,11 @@ PFLA("mirrors=%u stripes=%u", mirrors, stripes);
 	/* HM FIXME: caller should ensure... */
 	if (seg) {
 		mirrors = seg->data_copies;
+		stripes = 1;
 		if (seg_is_raid(seg))
 			stripes = seg->area_count - seg->segtype->parity_devs;
 		else if (seg_is_raid01(seg))
 			stripes = first_seg(seg_lv(seg, 0))->area_count;
-		else
-			stripes = 1;
 PFLA("mirrors=%u stripes=%u", mirrors, stripes);
 	}
 PFLA("mirrors=%u stripes=%u", mirrors, stripes);
@@ -4522,7 +4522,12 @@ PFLA("extents=%u ah->new_extents=%u lv->le_count=%u stripes=%u sub_lv_count=%u",
 		 * and the LV has the LV_NOTSYNCED flag set.
 		 */
 		if (old_extents &&
+#if 1
+		
+		    (segtype_is_mirror(segtype) || segtype_is_raid1(segtype)) &&
+#else
 		    segtype_is_mirrored(segtype) &&
+#endif
 		    (lv->status & LV_NOTSYNCED)) {
 			dm_percent_t sync_percent = DM_PERCENT_INVALID;
 

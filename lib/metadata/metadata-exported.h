@@ -1144,6 +1144,7 @@ uint32_t lv_raid_image_count(const struct logical_volume *lv);
 int lv_raid_split(struct logical_volume *lv, const char *split_name,
 		  uint32_t new_count, struct dm_list *splittable_pvs);
 int lv_raid_split_and_track(struct logical_volume *lv,
+			    const char *sub_lv_name,
 			    struct dm_list *splittable_pvs);
 int lv_raid_merge(struct logical_volume *lv);
 int lv_raid_convert(struct logical_volume *lv,
@@ -1156,7 +1157,8 @@ int lv_raid_convert(struct logical_volume *lv,
 		    const unsigned new_stripe_size,
 		    const char *pool_data_name,
 		    struct dm_list *allocate_pvs);
-int lv_raid_replace(struct logical_volume *lv, struct dm_list *remove_pvs,
+int lv_raid_replace(struct logical_volume *lv, int yes,
+		    struct dm_list *remove_pvs,
 		    struct dm_list *allocate_pvs);
 int lv_raid_remove_missing(struct logical_volume *lv);
 int partial_raid_lv_supports_degraded_activation(const struct logical_volume *lv);
