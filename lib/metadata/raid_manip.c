@@ -264,6 +264,62 @@ PFL();
 	return 1;
 }
 
+/* Report health string in @*raid_health for @lv from kernel reporting # of devs in @*kernel_devs */
+static int _get_dev_health(struct logical_volume *lv, uint32_t *kernel_devs,
+			   uint32_t *devs_health, uint32_t *devs_in_sync,
+			   char **raid_health)
+{
+	unsigned d;
+	char *rh;
+
+	*devs_health = *devs_in_sync = 0;
+
+	if (!lv_raid_dev_count(lv, kernel_devs)) {
+		log_error("Failed to get device count");
+		return_0;
+	}
+
+	if (!lv_raid_dev_health(lv, &rh)) {
+		log_error("Failed to get device health");
+		return_0;
+	}
+
+	d = (unsigned) strlen(rh);
+	while (d--) { 
+		(*devs_health)++;
+		if (rh[d] == 'A')
+			(*devs_in_sync)++;
+	}
+
+	if (raid_health)
+		*raid_health = rh;
+
+	return 1;
+}
+
+/* Return 1 in case raid device with @idx is alive and in sync */
+static int _dev_in_sync(struct logical_volume *lv, const unsigned idx)
+{
+	uint32_t kernel_devs, devs_health, devs_in_sync;
+	char *raid_health;
+
+	if (!_get_dev_health(lv, &kernel_devs, &devs_health, &devs_in_sync, &raid_health) ||
+	    idx >= kernel_devs)
+		return 0;
+
+	return raid_health[idx] == 'A';
+}
+
+static int _devs_in_sync_count(struct logical_volume *lv)
+{
+	uint32_t kernel_devs, devs_health, devs_in_sync;
+
+	if (!_get_dev_health(lv, &kernel_devs, &devs_health, &devs_in_sync, NULL))
+		return 0;
+
+	return (int) devs_in_sync;
+}
+
 /*
  * _raid_in_sync
  * @lv
@@ -777,28 +833,94 @@ err:
  * Shift image @*name (suffix) from @s to (@s - @missing)
  *
  * E.g. s=5, missing=2 -> change "*_r(image,meta)_5" to "*_r(image,meta)_3" 
+ * - or -
+ *      s=5, missing=2 -> change "*_dup_5_*" to "*_dup_3_*" 
  */
-static int _shift_image_name(struct lv_segment *seg, char **name, unsigned s, unsigned missing)
+static int __shift_lv_name(char *shift_name, char **name, unsigned s, unsigned missing)
 {
+	int r = 0;
 	unsigned num;
-	size_t len;
-	char *numptr, *shift_name;
+	ssize_t len, len1;
+	char *numptr;
 
-	if (!(shift_name = dm_pool_strdup(seg_lv(seg, s - missing)->vg->cmd->mem, *name))) {
+log_very_verbose("Before shifting %s", *name);
+	/* Handle duplicating sub LV names */
+	if ((numptr = strstr(shift_name, "_dup_")) &&
+	    (strstr(shift_name, "_rdimage") ||
+	     strstr(shift_name, "_rdmeta"))) {
+		char *suffix;
+log_very_verbose("shifting duplicating sub lv %s", shift_name);
+
+		numptr += strlen("_dup_");
+		if ((suffix = strstr(numptr, "_")) &&
+		    (num = atoi(numptr)) == s) {
+			len = suffix - numptr + 1;
+log_very_verbose("shifting duplicating sub lv %s numptr=%s suffix=%s len=%ld", shift_name, numptr, suffix, len);
+			if ((len1 = dm_snprintf(numptr, len, "%u", num - missing)) < 0)
+				goto out;
+
+			if (len1 < len) {
+				strncpy(*name, shift_name, numptr - shift_name + len1);
+				strcat(*name, suffix);
+
+			} else
+				*name = shift_name;
+
+			r = 1;
+		}
+log_very_verbose("shifting s=%u num=%u", s, num);
+
+	/* Handle (sub) LV names */
+	} else {
+		if ((numptr = strrchr(shift_name, '_')) &&
+		    (num = atoi(numptr + 1)) == s) {
+			*name = shift_name;
+			len = strlen(++numptr) + 1;
+
+			r = dm_snprintf(numptr, len, "%u", num - missing) < 0 ? 0 : 1;
+		}
+	}
+
+	log_very_verbose("After shifting %s", *name);
+	return r;
+out:
+	log_error("Malformatted image name");
+	return 0;
+}
+
+static int _shift_lv_name(struct logical_volume *lv, unsigned s, unsigned missing)
+{
+	char *shift_name;
+
+	if (!(shift_name = dm_pool_strdup(lv->vg->cmd->mem, lv->name))) {
 		log_error("Memory allocation failed.");
 		return 0;
 	}
 
-	if (!(numptr = strrchr(shift_name, '_')) ||
-			(num = atoi(numptr + 1)) != s) {
-		log_error("Malformatted image name");
-		return 0;
+	return __shift_lv_name(shift_name, (char **) &lv->name, s, missing);
+}
+
+/* Change name of  @lv with # @s to # (@s - @missing) */
+static int _shift_image_name(struct logical_volume *lv, unsigned s, unsigned missing)
+{
+	struct lv_segment *seg = first_seg(lv);
+
+	if (strstr(lv->name, "_dup_") &&
+	    (seg_is_raid(seg) || seg_is_mirror(seg))) {
+		uint32_t ss;
+		struct lv_segment *fseg = first_seg(lv);
+
+		for (ss = 0; ss < fseg->area_count; ss++) {
+			if (!_shift_image_name(seg_lv(fseg, ss), s, missing))
+				return 0;
+
+			if (fseg->meta_areas &&
+			    !_shift_image_name(seg_metalv(fseg, ss), s, missing))
+				return 0;
+		}
 	}
-
-	*name = shift_name;
-	len = strlen(++numptr) + 1;
-
-	return dm_snprintf(numptr, len, "%u", num - missing) < 0 ? 0 : 1;
+		
+	return _shift_lv_name(lv, s, missing);
 }
 
 /*
@@ -845,12 +967,14 @@ static int _shift_image_components(struct lv_segment *seg)
 					seg_metalv(seg, s)->name,
 					seg_lv(seg, s)->name, missing);
 			seg->areas[s - missing] = seg->areas[s];
-			if (!_shift_image_name(seg, (char **) &seg_lv(seg, s - missing)->name, s, missing))
+			seg_type(seg, s) = AREA_UNASSIGNED;
+			if (!_shift_image_name(seg_lv(seg, s - missing), s, missing))
 				return 0;
 
 			if (seg->meta_areas) {
 				seg->meta_areas[s - missing] = seg->meta_areas[s];
-				if (!_shift_image_name(seg, (char **) &seg_metalv(seg, s - missing)->name, s, missing))
+				seg_metatype(seg, s) = AREA_UNASSIGNED;
+				if (!_shift_image_name(seg_metalv(seg, s - missing), s, missing))
 					return 0;
 			}
 		}
@@ -922,6 +1046,7 @@ PFL();
 static int _realloc_seg_areas(struct logical_volume *lv,
 			      uint32_t areas, uint64_t type)
 {
+	uint32_t s;
 	struct lv_segment *seg = first_seg(lv);
 	struct lv_segment_area **seg_areas;
 	struct lv_segment_area *new_areas;
@@ -942,6 +1067,9 @@ static int _realloc_seg_areas(struct logical_volume *lv,
 		log_error("Allocation of new areas array failed.");
 		return 0;
 	}
+
+	for (s = 0; s < areas; s++)
+		new_areas[s].type = AREA_UNASSIGNED;
 
 	if (*seg_areas)
 		memcpy(new_areas, *seg_areas, min(areas, seg->area_count) * sizeof(*new_areas));
@@ -3337,28 +3465,10 @@ static int _convert_raid0_to_striped(struct logical_volume *lv,
 static int _reshaped_state(struct logical_volume *lv, const unsigned dev_count,
 			   unsigned *devs_health, unsigned *devs_in_sync)
 {
-	unsigned d;
 	uint32_t kernel_devs;
-	char *raid_health;
 
-	*devs_health = *devs_in_sync = 0;
-
-	if (!lv_raid_dev_count(lv, &kernel_devs)) {
-		log_error("Failed to get device count");
-		return_0;
-	}
-
-	if (!lv_raid_dev_health(lv, &raid_health)) {
-		log_error("Failed to get device health");
-		return_0;
-	}
-
-	d = (unsigned) strlen(raid_health);
-	while (d--) { 
-		(*devs_health)++;
-		if (raid_health[d] == 'A')
-			(*devs_in_sync)++;
-	}
+	if (!_get_dev_health(lv, &kernel_devs, devs_health, devs_in_sync, NULL))
+		return 0;
 
 PFLA("kernel_devs=%u dev_count=%u", kernel_devs, dev_count);
 	if (kernel_devs == dev_count)
@@ -3916,7 +4026,6 @@ static int _lv_update_and_reload_origin_eliminate_lvs(struct logical_volume *lv,
 
 	log_debug_metadata("Updating metadata and reloading mappings for %s,",
 			   display_lvname(lv));
-
 PFL();
 	if (!lv_update_and_reload_origin(lv))
 		return_0;
@@ -4136,11 +4245,11 @@ PFLA("lv_name=%s segtype=%s data_copies=%u stripes=%u region_size=%u stripe_size
 static char *_unique_lv_name(struct logical_volume *lv, const char *suffix)
 {
 	char *name;
-	uint32_t count = 0;
+	uint32_t s = 0;
 
 	/* Loop until we found an available one */
-	while (!(name = _generate_raid_name(lv, suffix + 1, count)))
-		count++;
+	while (!(name = _generate_raid_name(lv, suffix + 1, s)))
+		s++;
 
 	if (!name)
 		log_error("Failed to create unique sub-lv name for %s", display_lvname(lv));
@@ -4177,30 +4286,47 @@ static int _rename_lv(struct logical_volume *lv, const char *from, const char *t
  * Helper to rename rimage/rmeta or mimage/mlog name
  * suffixes to/from duplication conversion namespace
  */
-enum rename_dir { rename_to_dup = 0, rename_from_dup };
+enum rename_dir { rename_to_dup = 0, rename_from_dup, rename_to_split, rename_from_split };
 static int __rename_sub_lvs(struct logical_volume *lv, enum rename_dir dir, uint64_t flags)
 {
-	uint32_t s;
+	uint32_t d, s;
 	struct lv_segment *seg = first_seg(lv);
 	struct from_to {
 		const char *image[2];
 		const char *meta[2];
-	} ft_raid[2] = {
+	} ft_raid[] = {
 		/* raid namespace */
 		{ { "_rimage", "_rdimage" },
 		  { "_rmeta" , "_rdmeta"  } },
 		/* mirror namespace */
 		{ { "_mimage", "_mdimage" },
-		  { "_mlog" ,  "_mdlog"  } }
-	}, *ft = ft_raid + seg_is_mirror(seg);
+		  { "_mlog" ,  "_mdlog"  } },
+		/* From/to undup */
+		{ { "_dup_", "_split_" },
+		  { "_dup_", "_split_" } },
+	}, *ft;
 
+	switch (dir) {
+	case rename_to_dup:
+	case rename_from_dup:
+		ft = ft_raid + seg_is_mirror(seg);
+		break;
+	case rename_to_split:
+	case rename_from_split:
+		ft = ft_raid + 2;
+		break;
+	default:
+		return 0;
+	}
+
+	d = dir % 2;
 	for (s = 0; s < seg->area_count; s++) {
 		if (seg_type(seg, s) == AREA_LV && (flags & RAID_IMAGE))
-			if (!_rename_lv(seg_lv(seg, s), ft->image[!!dir], ft->image[!dir]))
+			if (!_rename_lv(seg_lv(seg, s), ft->image[!!d], ft->image[!d]))
 				return 0;
 
 		if (seg->meta_areas && (flags & RAID_META))
-			if (!_rename_lv(seg_metalv(seg, s), ft->meta[!!dir], ft->meta[!dir]))
+			if (!_rename_lv(seg_metalv(seg, s), ft->meta[!!d], ft->meta[!d]))
 				return 0;
 	}
 
@@ -4232,12 +4358,69 @@ static void _remove_any_infix(const char *lv_name, char *seg_lv_name, const char
 	}
 }
 
+/* Get maximum name index suffix from all sub lvs of @lv and report in @*max_idx */
+static int _get_max_sub_lv_name_index(struct logical_volume *lv, uint32_t *max_idx)
+{
+	uint32_t s, idx;
+	struct lv_segment *seg = first_seg(lv);
+
+	*max_idx = 0;
+
+	for (s = 0; s < seg->area_count; s++) {
+		if (seg_type(seg, s) != AREA_LV)
+			return 0;
+
+		if (!_lv_name_get_string_index(seg_lv(seg, s), &idx))
+			return 0;
+
+		if (*max_idx < idx)
+			*max_idx = idx;
+	}
+
+	return 1;
+}
+
+/* Prepare first segment of @lv to suit _shift_image_components() */
+static int _prepare_seg_for_name_shift(struct logical_volume *lv)
+{
+	int s;
+	uint32_t idx, max_idx;
+	struct lv_segment *seg = first_seg(lv);
+
+	if (!_get_max_sub_lv_name_index(lv, &max_idx))
+		return 0;
+
+	max_idx++;
+
+	if (!_realloc_meta_and_data_seg_areas(lv, max_idx))
+		return 0;
+
+	for (s = seg->area_count; s < max_idx; s++)
+		seg_type(seg, s) = seg_metatype(seg, s) = AREA_UNASSIGNED;
+
+	for (s = seg->area_count - 1; s > -1; s--) {
+		if (seg_type(seg, s) == AREA_UNASSIGNED)
+			continue;
+
+		if (!_lv_name_get_string_index(seg_lv(seg, s), &idx))
+			return 0;
+
+		seg->areas[idx] = seg->areas[s];
+		seg->meta_areas[idx] = seg->meta_areas[s];
+		if (idx != s)
+			seg_type(seg, s) = seg_metatype(seg, s) = AREA_UNASSIGNED;
+	}
+	
+	seg->area_count = max_idx;
+
+	return 1;
+}
+
 /*
  * HM Helper:
  *
  * split off a sub-lv of a duplicatting @lv
  */
-#define CONVERSION_HELPER_FN(function_name) TAKEOVER_FN(function_name)
 static int _raid_split_duplicate(struct logical_volume *lv, const char *split_name, uint32_t new_image_count)
 {
 	uint32_t s;
@@ -4272,7 +4455,7 @@ static int _raid_split_duplicate(struct logical_volume *lv, const char *split_na
 	}
 
 	if (!(lvl = find_lv_in_vg(lv->vg, split_name))) {
-		log_error("Unable to find %s", split_name);
+		log_error("Unable to find LV %s", split_name);
 		return 0;
 	}
 
@@ -4288,19 +4471,46 @@ static int _raid_split_duplicate(struct logical_volume *lv, const char *split_na
 
 	split_lv = seg_lv(seg, s);
 
-	if (!_raid_in_sync(lv)) {
+	if (!_dev_in_sync(lv, s)) {
+		log_warn("Splitting off unsynchronized sub LV %s!", 
+			 display_lvname(split_lv));
+		if (yes_no_prompt("Do you want really want to split off out-of-sync sub-lv %s [y/n]: ",
+				  display_lvname(split_lv)) == 'n')
+			return 0;
+		if (sigint_caught())
+			return_0;
+
+	} else if (!_raid_in_sync(lv) &&
+		   _devs_in_sync_count(lv) < 2) {
 		log_error("Can't split off %s when LV %s is not in sync",
 			  split_name, display_lvname(lv));
 		return 0;
 	}
 
-	log_debug_metadata("Extract metadata image for split LV %s", split_name);
+	log_debug_metadata("Extract metadata image f 0for split LV %s", split_name);
 	if (!_extract_image_component_sublist(seg, RAID_META, s, s + 1, &removal_lvs, 1))
 		return 0;
+
+	seg_metatype(seg, s) = AREA_UNASSIGNED;
 
 	/* remove reference from @seg to @split_lv */
 	if (!remove_seg_from_segs_using_this_lv(split_lv, seg))
 		return 0;
+
+	seg_type(seg, s) = AREA_UNASSIGNED;
+
+	log_debug_metadata("Rename sub LVs of %s", display_lvname(split_lv));
+    	if (!_rename_sub_lvs(split_lv, rename_from_dup)) {
+		log_error(INTERNAL_ERROR "Failed to rename %s sub LVs", display_lvname(split_lv));
+		return 0;
+	}
+
+	log_debug_metadata("Rename sub LVs of %s", display_lvname(split_lv));
+    	if (!_rename_sub_lvs(split_lv, rename_to_split) ||
+    	    !_rename_lv(split_lv, "_dup_", "_split_")) {
+		log_error(INTERNAL_ERROR "Failed to rename %s sub LVs", display_lvname(split_lv));
+		return 0;
+	}
 
 	/* Shift areas down */
 	for ( ; s < seg->area_count - 1; s++) {
@@ -4313,17 +4523,17 @@ static int _raid_split_duplicate(struct logical_volume *lv, const char *split_na
 	seg->data_copies--;
 	lv_set_visible(split_lv);
 	split_lv->status &= ~LV_NOTSYNCED;
-
-	log_debug_metadata("Rename sub LVs of %s", display_lvname(split_lv));
-    	if (!_rename_sub_lvs(split_lv, rename_from_dup)) {
-		log_error(INTERNAL_ERROR "Failed to rename %s sub LVs", display_lvname(split_lv));
-		return 0;
-	}
 PFL();
 	log_debug_metadata("Updating VG metadata and reactivating %s and %s",
 			   display_lvname(lv), display_lvname(split_lv));
 	if (!_lv_update_and_reload_origin_eliminate_lvs(lv, &removal_lvs) ||
 	    !lv_update_and_reload_origin(split_lv))
+		return 0;
+
+	/* Shift area numerical indexes down and reload */
+	if (!_prepare_seg_for_name_shift(lv) ||
+	    !_shift_image_components(seg) ||
+	    !_lv_update_and_reload_origin_eliminate_lvs(lv, NULL))
 		return 0;
 PFL();
 	/* We are down to the last sub lv -> remove the top-level raid1 mapping */
@@ -4375,6 +4585,17 @@ PFL();
 	return 1;
 }
 
+/* HM Helper: return 1 if @seg meets properties @segtype or conditionally @stripes, @stripe_size and @data_copies if != 0 */
+static int _seg_meets_properties(const struct lv_segment *seg,
+				 const struct segment_type *segtype,
+				 const uint32_t stripes, const uint32_t stripe_size,
+				 const uint32_t data_copies)
+{
+	return segtype == seg->segtype &&
+	       (stripes ? (stripes == _data_rimages_count(seg, seg->area_count)) : 1) &&
+	       (stripe_size ? (stripe_size == seg->stripe_size) : 1) &&
+	       (data_copies > 1 ? (data_copies == seg->data_copies) : 1);
+}
 /*
  * HM Helper:
  *
@@ -4382,12 +4603,10 @@ PFL();
  * legs selected by --type/--stripes/--mirrors arguments option
  */
 static int _raid_conv_unduplicate(struct logical_volume *lv,	
-				  const struct segment_type *new_segtype,
-				  unsigned new_image_count,
-				  unsigned new_stripes,
-				  unsigned new_stripe_size,
-				  unsigned new_data_copies,
-				  int yes)
+				  const struct segment_type *segtype,
+				  unsigned image_count,
+				  unsigned stripes, unsigned stripe_size,
+				  unsigned data_copies, int yes)
 {
 	/*
 	 * If we get here and the top-level raid1 is still synchronizing ->
@@ -4395,8 +4614,7 @@ static int _raid_conv_unduplicate(struct logical_volume *lv,
 	 * withdraw the destination LV thus canceling the conversion duplication,
 	 * else withdraw the source LV
 	 */
-	int s, keep_idx;
-	uint32_t segtype_count = 0;
+	uint32_t keep_idx, s, sub_lv_count = 0;
 	struct dm_list removal_lvs;
 	struct logical_volume *lv_tmp;
 	struct lv_segment *seg = first_seg(lv), *seg0;
@@ -4408,39 +4626,70 @@ PFL();
 		return 0;
 	}
 
-PFLA("new_segtype=%s new_image_count=%u new_stripes=%u new_stripe_size=%u new_datacopies=%u", new_segtype->name, new_image_count, new_stripes, new_stripe_size, new_data_copies);
-	/* Find sublv to keep based on passed in properties */
+PFLA("segtype=%s image_count=%u stripes=%u stripe_size=%u datacopies=%u", segtype ? segtype->name : NULL, image_count, stripes, stripe_size, data_copies);
+#if 0
+	/* Find sublv to keep based on segment type */
 	keep_idx = seg->area_count + 1;
 	for (s = 0; s < seg->area_count; s++) {
-		if (first_seg(seg_lv(seg, s))->segtype == new_segtype) {
+		if (first_seg(seg_lv(seg, s))->segtype == segtype) {
 			segtype_count++;
 			keep_idx = s;
 			seg0 = first_seg(seg_lv(seg, s));
+PFLA("keep_idx=%u", keep_idx);
 		}
 	}
 
 	/* If segtype isn't unique -> select again */
-	if (segtype_count != 1)
+	if (segtype_count > 1)
 		keep_idx = seg->area_count + 1;
 
-		for (s = seg->area_count - 1; s > -1; s--) {
+		for (s = 0; s < seg->area_count - 1; s++) {
 			seg0 = first_seg(seg_lv(seg, s));
 PFLA("seg0->segtype=%s seg0->area_count=%u seg0->stripe_size=%u seg0->datacopies=%u", lvseg_name(seg0), seg0->area_count, seg0->stripe_size, seg0->data_copies);
-			if (new_segtype == seg0->segtype &&
-			    (new_stripes ? (new_stripes == _data_rimages_count(seg0, seg0->area_count)) : 1) &&
-			    (new_stripe_size ? (new_stripe_size == seg0->stripe_size) : 1) &&
-			    (new_data_copies > 1 ? (new_data_copies == seg0->data_copies) : 1)) {
+			if (segtype == seg0->segtype &&
+			    (stripes ? (stripes == _data_rimages_count(seg0, seg0->area_count)) : 1) &&
+			    (stripe_size ? (stripe_size == seg0->stripe_size) : 1) &&
+			    (data_copies > 1 ? (data_copies == seg0->data_copies) : 1)) {
+				sub_lv_count++;
 				keep_idx = s;
 PFLA("keep_idx=%u", keep_idx);
-				break;
 			}
 		}
 
-	if (keep_idx > seg->area_count) {
-		log_error("Wrong raid type %s/stripes=%u/mirrors=%u requested to remove duplicating conversion",
-			  new_segtype->name, new_image_count, new_data_copies);
-		return 0;
-	}
+#else
+	if (segtype) {
+		/* Find sublv to keep based on passed in segment properties */
+		for (s = 0; s < seg->area_count - 1; s++) {
+seg0 = first_seg(seg_lv(seg, s));
+PFLA("seg0->segtype=%s seg0->area_count=%u seg0->stripe_size=%u seg0->datacopies=%u", lvseg_name(seg0), seg0->area_count, seg0->stripe_size, seg0->data_copies);
+			if (_seg_meets_properties(first_seg(seg_lv(seg, s)), segtype,
+						  stripes, stripe_size, data_copies)) {
+				sub_lv_count++;
+				keep_idx = s;
+PFLA("keep_idx=%u", keep_idx);
+			}
+		}
+#endif
+
+		if (!sub_lv_count) {
+			log_error("Wrong raid type %s/stripes=%u/mirrors=%u requested to remove duplicating conversion",
+				  segtype->name, image_count, data_copies);
+			return 0;
+		}
+
+		if (sub_lv_count > 1) {
+			log_warn("Provided properties fall short to identify the sub LV of duplicating LV %s clearly:",
+				  display_lvname(lv));
+			for (s = 0; s < seg->area_count - 1; s++) {
+				seg0 = first_seg(seg_lv(seg, s));
+				if (_seg_meets_properties(first_seg(seg_lv(seg, s)), segtype,
+								    stripes, stripe_size, data_copies))
+					log_warn("%s", display_lvname(seg0->lv));
+			}
+		}
+
+	} else
+		keep_idx = 0;
 PFL();
 	/* Removing the source requires the destination to be fully in sync! */
 	if (keep_idx && !_raid_in_sync(lv)) {
@@ -4449,13 +4698,18 @@ PFL();
 		return 0;
 	}
 
-	log_warn("This is a request to remove the %s of a duplicating conversion of LV %s!",
-		 keep_idx ? "source" : "destination", display_lvname(lv));
-	if (!yes &&
-	    yes_no_prompt("Do you want to convert %s to type %s thus unduplicating it? [y/n]: ",
-			  display_lvname(lv),
-			  _get_segtype_name(seg0->segtype, seg0->area_count)) == 'n')
-		return 0;
+	seg0 = first_seg(seg_lv(seg, keep_idx));
+
+	log_warn("This is a request to unduplicate LV %s keeping %s",
+		 display_lvname(lv), display_lvname(seg_lv(seg, keep_idx)));
+	if (!yes) {
+		if (yes_no_prompt("Do you want to convert %s to type %s thus unduplicating it? [y/n]: ",
+				  display_lvname(lv),
+				  _get_segtype_name(seg0->segtype, seg0->area_count)) == 'n')
+			return 0;
+		if (sigint_caught())
+			return_0;
+	}
 
 	if (!keep_idx)
 		log_warn("Keeping source lv %s", display_lvname(seg_lv(seg, 0)));
@@ -4525,7 +4779,6 @@ PFL();
  * creates and allocates a destination lv of ~ (rounding) the
  * same size with the requested @new_segtype and properties (e.g. stripes).
  */
-#define CONVERSION_HELPER_FN(function_name) TAKEOVER_FN(function_name)
 static int _raid_conv_duplicate (struct logical_volume *lv,
 				 const struct segment_type *new_segtype,
 				 int yes, int force,
@@ -4555,13 +4808,19 @@ PFLA("segtype=%s area_count=%u data_copies=%u stripe_size=%u", lvseg_name(seg), 
 		log_warn("Adjusting data copies to %u", data_copies);
 	}
 
-	log_warn("This is a conversion by duplication request for source LV %s!", display_lvname(lv));
-	log_warn("A new %s destination LV will be allocated and %s will be synced to it.",
-		_get_segtype_name(new_segtype, new_image_count), display_lvname(lv));
-	log_warn("You can either remove the source LV via 'lvconvert --type %s %s' after the synchronization finished",
-		_get_segtype_name(seg->segtype, seg->area_count), display_lvname(lv));
-	log_warn("or the destination LV via 'lvconvert --type %s %s' at any point in time (even during synchronization).",
+	if (_lv_is_duplicating(lv))
+		log_warn("This is a request to add another LV to the existing %u sub LVs of duplicating LV %s!",
+			 seg->area_count, display_lvname(lv));
+	else
+		log_warn("This a request to convert LV %s into a duplicating one!", display_lvname(lv));
+
+	log_warn("Another %s LV will be allocated and LV %s will be synced to it.",
 		 _get_segtype_name(new_segtype, new_image_count), display_lvname(lv));
+
+	log_warn("When unduplicating LV %s, you can select any synchronized sub LV providing unique properties via:",
+		 display_lvname(lv));
+	log_warn("'lvconvert --unduplicate --type X [--stripes N [--stripesize S] [--mirrors M] %s'",
+		 display_lvname(lv));
 	if (!_yes_no_conversion(lv, new_segtype, yes, force, new_image_count, data_copies, new_stripes, 0))
 		return 0;
 
@@ -4699,7 +4958,7 @@ PFLA("lv->name=%s meta_areas=%p", lv->name, seg->meta_areas);
 			return 0;
 
 		/* ...and correct its name */
-		if (!(meta_lv->name = _generate_raid_name(lv, "_rdmeta", s)))
+		if (!(meta_lv->name = _unique_lv_name(lv, "_rdmeta")))
 			return_0;
 
 		lv_set_hidden(meta_lv);
@@ -6642,6 +6901,7 @@ PFLA("new_segtype=%s new_image_count=%u new_stripes=%u stripes=%u", new_segtype 
 	 */
 	if (unduplicate) {
 		if (_lv_is_duplicating(lv)) {
+#if 0
 			if (!new_segtype) {
 				struct lv_segment *fseg = first_seg(seg_lv(seg, 0));
 
@@ -6650,7 +6910,7 @@ PFLA("new_segtype=%s new_image_count=%u new_stripes=%u stripes=%u", new_segtype 
 				stripe_size = new_stripe_size ?: fseg->stripe_size;
 				data_copies = data_copies ?: fseg->data_copies;
 			}
-
+#endif
 			if (!_raid_conv_unduplicate(lv, new_segtype, new_image_count,
 						    stripes, stripe_size, data_copies, yes)) {
 				if (!_lv_is_duplicating(lv))

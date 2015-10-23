@@ -2063,7 +2063,7 @@ static int _seg_parity_chunks_disp(struct dm_report *rh, struct dm_pool *mem,
 				   const void *data, void *private)
 {
 	const struct lv_segment *seg = (const struct lv_segment *) data;
-	uint32_t parity_chunks = seg->area_count > 2 ? seg->segtype->parity_devs : 0;
+	uint32_t parity_chunks = seg->segtype->parity_devs ?: seg->data_copies - 1;
 
 	if (parity_chunks)
 		return dm_report_field_uint32(rh, field, &parity_chunks);
