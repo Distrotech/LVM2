@@ -213,6 +213,8 @@ int pvchange(struct cmd_context *cmd, int argc, char **argv)
 		}
 	}
 
+	set_pv_notify(cmd);
+
 	ret = process_each_pv(cmd, argc, argv, NULL, READ_FOR_UPDATE, handle, _pvchange_single);
 
 	if (!argc)

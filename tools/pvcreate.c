@@ -109,6 +109,8 @@ int pvcreate(struct cmd_context *cmd, int argc, char **argv)
 		return EINVALID_CMD_LINE;
 	}
 
+	set_pv_notify(cmd);
+
 	for (i = 0; i < argc; i++) {
 		if (sigint_caught())
 			return_ECMD_FAILED;

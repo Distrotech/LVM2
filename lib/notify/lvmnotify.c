@@ -16,13 +16,20 @@
 #ifdef NOTIFYDBUS_SUPPORT
 #include <gio/gio.h>
 
-static GDBusProxy *_dbus_con = NULL;
-
-int lvmnotify_init(struct cmd_context *cmd)
+void lvmnotify_send(struct cmd_context *cmd)
 {
+	GDBusProxy *con = NULL;
 	GError *error = NULL;
+	const char *vg_msg;
+	const char *pv_msg;
+	const char *cmd_name;
+	GVariant *rc;
+	int result = 0;
 
-	_dbus_con = g_dbus_proxy_new_for_bus_sync(G_BUS_TYPE_SYSTEM,
+	if (!cmd->vg_notify && !cmd->pv_notify)
+		return;
+
+	con = g_dbus_proxy_new_for_bus_sync(G_BUS_TYPE_SYSTEM,
 						  G_DBUS_PROXY_FLAGS_NONE,
 						  NULL,
 						  "com.redhat.lvmdbus1.Manager",
@@ -30,43 +37,20 @@ int lvmnotify_init(struct cmd_context *cmd)
 						  "com.redhat.lvmdbus1.Manager",
 						  NULL,
 						  &error);
-	if (!_dbus_con && error) {
+	if (!con && error) {
 		log_debug("Failed to connect to dbus %d %s",
 			  error->code, error->message);
 		g_error_free(error);
-		return 0;
-	}
-	return 1;
-}
-
-void lvmnotify_exit(void)
-{
-	if (_dbus_con) {
-		g_object_unref(_dbus_con);
-		_dbus_con = NULL;
-	}
-}
-
-void notify_vg_update(struct volume_group *vg)
-{
-	char uuid[64] __attribute__((aligned(8)));
-	GError *error = NULL;
-	GVariant *rc;
-	int result = 0;
-
-	if (!_dbus_con)
 		return;
+	}
 
-	if (!id_write_format(&vg->id, uuid, sizeof(uuid)))
-		return;
+	cmd_name = get_cmd_name();
+	vg_msg = cmd->vg_notify ? "vg_update" : "vg_none";
+	pv_msg = cmd->pv_notify ? "pv_update" : "pv_none";
 
-	rc = g_dbus_proxy_call_sync(_dbus_con,
+	rc = g_dbus_proxy_call_sync(con,
 				    "ExternalEvent",
-				    g_variant_new("(sssu)",
-						  "vg_update",
-						  vg->name,
-						  uuid,
-						  vg->seqno),
+				    g_variant_new("(sss)", cmd_name, vg_msg, pv_msg),
 				    G_DBUS_CALL_FLAGS_NONE,
 				    -1, NULL, &error);
 
@@ -84,62 +68,32 @@ void notify_vg_update(struct volume_group *vg)
 	} else {
 		log_debug("Undefined dbus result");
 	}
+
+
+	g_object_unref(con);
 }
 
-void notify_vg_remove(struct volume_group *vg)
+void set_vg_notify(struct cmd_context *cmd)
 {
-	char uuid[64] __attribute__((aligned(8)));
-	GError *error = NULL;
-	GVariant *rc;
-	int result = 0;
+	cmd->vg_notify = 1;
+}
 
-	if (!_dbus_con)
-		return;
-
-	if (!id_write_format(&vg->id, uuid, sizeof(uuid)))
-		return;
-
-	rc = g_dbus_proxy_call_sync(_dbus_con,
-				    "ExternalEvent",
-				    g_variant_new("(sssu)",
-						  "vg_remove",
-						  vg->name,
-						  uuid,
-						  vg->seqno),
-				    G_DBUS_CALL_FLAGS_NONE,
-				    -1, NULL, &error);
-
-	if (rc) {
-		g_variant_get(rc, "(i)", &result);
-		if (result)
-			log_debug("Error from sending dbus notification %d", result);
-		g_variant_unref(rc);
-
-	} else if (error) {
-		if (error->code != 2)
-			log_debug("Failed to send dbus notification %d %s", error->code, error->message);
-		g_error_free(error);
-
-	} else {
-		log_debug("Undefined dbus result");
-	}
+void set_pv_notify(struct cmd_context *cmd)
+{
+	cmd->pv_notify = 1;
 }
 
 #else
 
-int lvmnotify_init(struct cmd_context *cmd)
+void lvmnotify_send(struct cmd_context *cmd)
 {
 }
 
-void lvmnotify_exit(void)
+void set_vg_notify(struct cmd_context *cmd)
 {
 }
 
-void notify_vg_update(struct volume_group *vg)
-{
-}
-
-void notify_vg_remove(struct volume_group *vg)
+void set_pv_notify(struct cmd_context *cmd)
 {
 }
 

@@ -70,6 +70,8 @@ int pvresize(struct cmd_context *cmd, int argc, char **argv)
 		goto out;
 	}
 
+	set_pv_notify(cmd);
+
 	params.new_size = arg_uint64_value(cmd, physicalvolumesize_ARG,
 					   UINT64_C(0));
 

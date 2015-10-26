@@ -32,6 +32,8 @@ int pvremove(struct cmd_context *cmd, int argc, char **argv)
 
 	dm_list_init(&pv_names);
 
+	set_pv_notify(cmd);
+
 	/* Needed to change the set of orphan PVs. */
 	if (!lockd_gl(cmd, "ex", 0))
 		return_ECMD_FAILED;

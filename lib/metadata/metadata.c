@@ -603,7 +603,7 @@ int vg_remove_direct(struct volume_group *vg)
 
 	lockd_vg_update(vg);
 
-	notify_vg_remove(vg);
+	set_vg_notify(vg->cmd);
 
 	if (!backup_remove(vg->cmd, vg->name))
 		stack;
@@ -3198,7 +3198,7 @@ int vg_commit(struct volume_group *vg)
 
 	lockd_vg_update(vg);
 
-	notify_vg_update(vg);
+	set_vg_notify(vg->cmd);
 
 	if (cache_updated) {
 		/* Instruct remote nodes to upgrade cached metadata. */
