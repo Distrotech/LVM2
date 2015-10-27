@@ -1598,10 +1598,7 @@ static int update_metadata(lvmetad_state *s, const char *arg_name, const char *a
 	 * VG seqno) than the old PV.
 	 *
 	 * Make the new PV outdated so it'll be cleared and keep the existing
-	 * metadata from the old PV.  We allow the request to succeed and the
-	 * command to continue. Things can continue operating with an outdated PV,
-	 * and a subsequent command may clear the outdated PV.
-	 * (An outdated PV could also be a duplicate.)
+	 * metadata from the old PV.
 	 */
 	if (pvid && (old_seq > 0) && (new_seq < old_seq)) {
 		ERROR(s, "update_metadata ignoring outdated metadata on PV %s seqno %d for %s %s seqno %d",
@@ -1609,8 +1606,7 @@ static int update_metadata(lvmetad_state *s, const char *arg_name, const char *a
 		DEBUGLOG_cft(s, "OLD: ", old_meta->root);
 		DEBUGLOG_cft(s, "NEW: ", new_metadata);
 		mark_outdated_pv(s, arg_vgid, pvid);
-		dm_config_destroy(new_meta);
-		retval = 1;
+		retval = 0;
 		goto out;
 	}
 
@@ -1628,7 +1624,6 @@ static int update_metadata(lvmetad_state *s, const char *arg_name, const char *a
 	 * new_seq: the larger seqno on the new PV, for the newer version of the VG
 	 *
 	 * Make the existing PVs outdated, and use the new metadata.
-	 * (An outdated PV could also be a duplicate.)
 	 */
 	if (pvid && (old_seq > 0) && (new_seq > old_seq)) {
 		ERROR(s, "update_metadata found newer metadata on PV %s seqno %d for %s %s seqno %d",
@@ -2069,7 +2064,6 @@ static response pv_found(lvmetad_state *s, request r)
 	const char *prev_pvid_on_dev = NULL;
 	const char *prev_vgid_on_dev = NULL;
 	const char *vg_status = NULL;
-	const char *fail_msg = NULL;
 	uint64_t arg_device = 0;
 	uint64_t arg_device_lookup = 0;
 	uint64_t new_device = 0;
@@ -2379,7 +2373,6 @@ static response pv_found(lvmetad_state *s, request r)
 		if (!update_metadata(s, arg_name, arg_vgid, arg_vgmeta, &old_seqno, arg_pvid)) {
 			ERROR(s, "Cannot use VG metadata for %s %s from PV %s on %" PRIu64,
 			      arg_name, arg_vgid, arg_pvid, arg_device);
-			fail_msg = "Cannot use VG metadata from PV";
 		}
 
 		changed |= (old_seqno != arg_seqno);
@@ -2457,10 +2450,7 @@ static response pv_found(lvmetad_state *s, request r)
 	if (prev_pvid_on_dev)
 		dm_free((void *)prev_pvid_on_dev);
 
-	if (fail_msg)
-		return reply_fail(fail_msg);
-	else
-		return daemon_reply_simple("OK",
+	return daemon_reply_simple("OK",
 				   "status = %s", vg_status,
 				   "changed = %d", changed,
 				   "vgid = %s", arg_vgid ? arg_vgid : "#orphan",
@@ -2520,22 +2510,38 @@ static response vg_update(lvmetad_state *s, request r)
 	DEBUGLOG(s, "vg_update vgid %s name %s", vgid ?: "none", vgname ?: "none");
 
 	if (metadata) {
-		if (!vgid)
-			return reply_fail("need VG UUID");
-		if (!vgname)
-			return reply_fail("need VG name");
-		if (daemon_request_int(r, "metadata/seqno", -1) < 0)
-			return reply_fail("need VG seqno");
+		if (!vgid) {
+			ERROR(s, "vg_update failed: need VG UUID");
+			reply_fail("vg_update: need VG UUID");
+			goto fail;
+		}
+		if (!vgname) {
+			ERROR(s, "vg_update failed: need VG name");
+			reply_fail("vg_update: need VG name");
+			goto fail;
+		}
+		if (daemon_request_int(r, "metadata/seqno", -1) < 0) {
+			ERROR(s, "vg_update failed: need VG seqno");
+			reply_fail("vg_update: need VG seqno");
+			goto fail;
+		}
 
 		/* TODO defer metadata update here; add a separate vg_commit
 		 * call; if client does not commit, die */
 
-		if (!update_metadata(s, vgname, vgid, metadata, NULL, NULL))
-			return reply_fail("metadata update failed");
+		if (!update_metadata(s, vgname, vgid, metadata, NULL, NULL)) {
+			ERROR(s, "vg_update failed: metadata update failed");
+			reply_fail("vg_update: failed metadata update");
+			goto fail;
+		}
 
 		vg_info_update(s, vgid, metadata);
 	}
 	return daemon_reply_simple("OK", NULL);
+
+fail:
+	ERROR(s, "lvmetad could not be updated is aborting.");
+	exit(EXIT_FAILURE);
 }
 
 static response vg_remove(lvmetad_state *s, request r)
