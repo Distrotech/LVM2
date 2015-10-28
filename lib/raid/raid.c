@@ -158,6 +158,8 @@ static int _raid_text_import(struct lv_segment *seg,
 	}
 
 	seg->status |= RAID;
+	seg->area_len = lv_raid_rimage_extents(seg->segtype, seg->len, seg->area_count - seg->segtype->parity_devs,
+					       seg->segtype->parity_devs ? 1 : seg->data_copies);
 
 	return 1;
 }

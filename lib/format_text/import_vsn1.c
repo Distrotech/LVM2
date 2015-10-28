@@ -354,7 +354,7 @@ static int _read_segment(struct logical_volume *lv, const struct dm_config_node 
 	struct lv_segment *seg;
 	const struct dm_config_node *sn_child = sn->child;
 	const struct dm_config_value *cv;
-	uint32_t start_extent, extent_count, reshape_count, data_copies;
+	uint32_t area_extents, start_extent, extent_count, reshape_count, data_copies;
 	struct segment_type *segtype;
 	const char *segtype_str;
 
@@ -388,6 +388,7 @@ static int _read_segment(struct logical_volume *lv, const struct dm_config_node 
 		return 0;
 	}
 
+PFLA("lv=%s segtype_str=%s", lv->name, segtype_str);
 	if (!(segtype = get_segtype_from_string(lv->vg->cmd, segtype_str)))
 		return_0;
 
@@ -398,17 +399,29 @@ static int _read_segment(struct logical_volume *lv, const struct dm_config_node 
 	if (segtype_is_mirror(segtype) || segtype_is_raid1(segtype))
 		data_copies = area_count;
 
+#if 0
 	if (!(seg = alloc_lv_segment(segtype, lv, start_extent,
 				     extent_count, reshape_count, 0, 0, NULL, area_count,
 				     extent_count, data_copies, 0, 0, 0, NULL))) {
+#else
+PFLA("lv=%s data_copies=%u", lv->name, data_copies);
+	area_extents = segtype->parity_devs ?
+		       lv_raid_rimage_extents(segtype, extent_count, area_count - segtype->parity_devs, data_copies) : extent_count;
+PFLA("lv=%s area_extents=%u", lv->name, area_extents);
+	if (!(seg = alloc_lv_segment(segtype, lv, start_extent,
+				     extent_count, reshape_count, 0, 0, NULL, area_count,
+				     area_extents, data_copies, 0, 0, 0, NULL))) {
+#endif
 		log_error("Segment allocation failed");
 		return 0;
 	}
+PFLA("lv=%s seg->len=%u seg->area_len=%u", lv->name, seg->len, seg->area_len);
 
 	if (seg->segtype->ops->text_import &&
 	    !seg->segtype->ops->text_import(seg, sn_child, pv_hash))
 		return_0;
 
+PFLA("lv=%s seg->len=%u seg->area_len=%u", lv->name, seg->len, seg->area_len);
 	/* Optional tags */
 	if (dm_config_get_list(sn_child, "tags", &cv) &&
 	    !(_read_str_list(mem, &seg->tags, cv))) {
@@ -421,6 +434,7 @@ static int _read_segment(struct logical_volume *lv, const struct dm_config_node 
 	 * Insert into correct part of segment list.
 	 */
 	_insert_segment(lv, seg);
+PFLA("lv=%s seg->len=%u seg->area_len=%u", lv->name, seg->len, seg->area_len);
 
 	if (seg_is_mirror(seg))
 		lv->status |= MIRROR;

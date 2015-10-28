@@ -1823,7 +1823,8 @@ PFLA("image_count=%u\n", image_count);
 
 		return lv_raid_convert(lv, arg_count(cmd, type_ARG) ? lp->segtype : NULL, lp->yes, lp->force,
 				       arg_is_set(cmd, duplicate_ARG), arg_is_set(cmd, unduplicate_ARG),
-				       image_count, lp->mirrors + 1, stripes, stripe_size, lp->pool_data_name, lp->pvh);
+				       image_count, lp->mirrors, lp->region_size,
+				       stripes, stripe_size, lp->pool_data_name, lp->pvh);
 	}
 
 	if (arg_count(cmd, replace_ARG))

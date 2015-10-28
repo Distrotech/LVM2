@@ -1152,9 +1152,10 @@ int lv_raid_convert(struct logical_volume *lv,
 		    int yes, int force,
 		    int duplicate, int unduplicate,
 		    const unsigned image_count,
-		    const unsigned mirrors,
+		    const unsigned data_copies,
+		    const unsigned region_size,
 		    const unsigned stripes,
-		    const unsigned new_stripe_size,
+		    const unsigned stripe_size,
 		    const char *pool_data_name,
 		    struct dm_list *allocate_pvs);
 int lv_raid_replace(struct logical_volume *lv, int yes,
@@ -1163,7 +1164,7 @@ int lv_raid_replace(struct logical_volume *lv, int yes,
 int lv_raid_remove_missing(struct logical_volume *lv);
 int partial_raid_lv_supports_degraded_activation(const struct logical_volume *lv);
 int lv_raid10_far_reorder_segments(struct logical_volume *lv, uint32_t extents, int extend);
-uint32_t lv_raid_rimage_extents(uint32_t extents, uint32_t stripes, uint32_t data_copies);
+uint32_t lv_raid_rimage_extents(const struct segment_type *segtype, uint32_t extents, uint32_t stripes, uint32_t data_copies);
 int lv_create_raid01(struct logical_volume *lv, const struct segment_type *segtype,
 		     unsigned mirrors, unsigned stripes,
 		     unsigned stripe_size, unsigned region_size,

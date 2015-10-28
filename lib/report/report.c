@@ -2111,9 +2111,8 @@ static int _segsizepe_disp(struct dm_report *rh,
 {
 	const struct lv_segment *seg = (const struct lv_segment *) data;
 
-PFL();
 	if (seg) {
-		uint32_t len = seg->len; //  - seg->reshape_len;
+		uint32_t len = seg->len - seg->reshape_len * (seg->area_count - seg->segtype->parity_devs);
 
 		return dm_report_field_uint32(rh, field, &len);
 	}
