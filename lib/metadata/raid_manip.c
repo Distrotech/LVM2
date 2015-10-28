@@ -183,6 +183,9 @@ uint32_t lv_raid_rimage_extents(const struct segment_type *segtype,
 {
 	uint64_t r = extents;
 
+	if (segtype_is_raid1(segtype))
+		return extents;
+
 	if (segtype_is_any_raid10(segtype))
 		r *= data_copies;
 
@@ -3514,49 +3517,20 @@ static int _raid_reshape(struct logical_volume *lv,
 	struct dm_list removal_lvs;
 	struct lvinfo info = { 0 };
 
+PFLA("old_dev_count=%u new_dev_count=%u", old_dev_count, new_dev_count);
 	dm_list_init(&removal_lvs);
 
-PFLA("old_dev_count=%u new_dev_count=%u", old_dev_count, new_dev_count);
+	if (!is_same_level(seg->segtype, new_segtype)) {
+		log_error(INTERNAL_ERROR "Bogus reshape request!");
+		return 0;
+	}
 	if (seg->segtype == new_segtype &&
 	    old_dev_count == new_dev_count &&
 	    seg->stripe_size == new_stripe_size) {
 		log_error(INTERNAL_ERROR "Nothing to do");
 		return 0;
 	}
-#if 0
-	if (!seg_is_raid4(seg) && !seg_is_any_raid5(seg) && !seg_is_any_raid6(seg) &&
-	    !seg_is_raid10_near(seg) && !seg_is_raid10_offset(seg) &&
-	    (old_dev_count != new_dev_count || seg->stripe_size != new_stripe_size)) {
-		log_error("Can't reshape %s LV %s", lvseg_name(seg), display_lvname(lv));
-		log_error("You may want to convert to raid4/5/6/10_far/10_offset first");
-		return 0;
-	}
 
-	if (seg_is_any_raid10(seg) ||
-	    segtype_is_any_raid10(new_segtype)) {
-		if (seg_is_raid10_far(seg) ||
-	    	    segtype_is_raid10_far(new_segtype)) {
-			log_error("Can't reshape any raid10_far LV %s", display_lvname(lv));
-			log_error("You may want to use the \"--duplicate\" option");
-			return 0;
-		}
-
-		if (((seg_is_raid10_near(seg) && segtype_is_raid10_offset(new_segtype)) ||
-		     (seg_is_raid10_offset(seg) && segtype_is_raid10_near(new_segtype))) &&
-		    new_dev_count != old_dev_count) {
-			log_error("Can't reshape raid10 LV %s to different layout and "
-				  "change number of disks at the same time", display_lvname(lv));
-			log_error("You may want to use the \"--duplicate\" option");
-			return 0;
-		}
-
-		if (new_dev_count < old_dev_count) {
-			log_error("Can't remove disks from raid10 LV %s", display_lvname(lv));
-			log_error("You may want to use the \"--duplicate\" option");
-			return 0;
-		}
-	}
-#endif
 	/* raid4/5 with N image component pairs (i.e. N-1 stripes): allow for raid4/5 reshape to 2 devices, i.e. raid1 layout */
 	if (seg_is_raid4(seg) || seg_is_any_raid5(seg)) {
 		if (new_stripes < 1)
@@ -3881,180 +3855,187 @@ err_do_dup:
 #define	ALLOW_STRIPE_SIZE	0x4
 #define	ALLOW_REGION_SIZE	0x8
 
-struct possible_type {
-	const uint64_t current_types;
+struct possible_takeover_reshape_type {
 	const uint64_t possible_types;
+	const uint32_t options;
+	const uint64_t current_types;
 	const uint32_t current_areas;
-	const uint16_t takeover_options;
-	const uint16_t duplicate_options;
 };
 
-static struct possible_type _possible_types[] = {
+struct possible_duplicate_type {
+	const uint64_t possible_types;
+	const uint32_t options;
+	const uint32_t new_areas;
+};
+
+struct possible_type {
+	const uint64_t possible_types;
+	const uint32_t options;
+};
+
+static struct possible_takeover_reshape_type _possible_takeover_reshape_types[] = {
 	/* striped -> */
 	{ .current_types  = SEG_AREAS_STRIPED, /* linear, i.e. seg->area_count = 1 */
 	  .possible_types = SEG_RAID1|SEG_RAID10_NEAR|SEG_RAID10_FAR,
 	  .current_areas = 1,
-	  .takeover_options = ALLOW_DATA_COPIES|ALLOW_REGION_SIZE,
-	  .duplicate_options = ALLOW_DATA_COPIES|ALLOW_REGION_SIZE },
+	  .options = ALLOW_DATA_COPIES|ALLOW_REGION_SIZE },
 	{ .current_types  = SEG_AREAS_STRIPED, /* linear, i.e. seg->area_count = 1 */
 	  .possible_types = SEG_RAID4|SEG_RAID5_LS|SEG_RAID5_LA|SEG_RAID5_RS|SEG_RAID5_RA|SEG_RAID5_N,
 	  .current_areas = 1,
-	  .takeover_options = ALLOW_REGION_SIZE,
-	  .duplicate_options = ALLOW_STRIPES|ALLOW_STRIPE_SIZE|ALLOW_REGION_SIZE },
+	  .options = ALLOW_REGION_SIZE },
 	{ .current_types  = SEG_AREAS_STRIPED, /* striped, i.e. seg->area_count > 1 */
 	  .possible_types = SEG_RAID01,
 	  .current_areas = ~0U,
-	  .takeover_options = ALLOW_REGION_SIZE,
-	  .duplicate_options = ALLOW_DATA_COPIES|ALLOW_STRIPES|ALLOW_STRIPE_SIZE|ALLOW_REGION_SIZE },
+	  .options = ALLOW_REGION_SIZE },
 	{ .current_types  = SEG_AREAS_STRIPED, /* striped, i.e. seg->area_count > 1 */
 	  .possible_types = SEG_RAID0|SEG_RAID0_META,
 	  .current_areas = ~0U,
-	  .takeover_options = ALLOW_NONE,
-	  .duplicate_options = ALLOW_STRIPES|ALLOW_STRIPE_SIZE },
+	  .options = ALLOW_NONE },
 	{ .current_types  = SEG_AREAS_STRIPED, /* striped, i.e. seg->area_count > 1 */
 	  .possible_types = SEG_RAID4|SEG_RAID5_N|SEG_RAID6_N_6,
 	  .current_areas = ~0U,
-	  .takeover_options = ALLOW_REGION_SIZE,
-	  .duplicate_options = ALLOW_STRIPES|ALLOW_STRIPE_SIZE|ALLOW_REGION_SIZE },
+	  .options = ALLOW_REGION_SIZE },
 	{ .current_types  = SEG_AREAS_STRIPED, /* striped, i.e. seg->area_count > 1 */
 	  .possible_types = SEG_RAID10_NEAR|SEG_RAID10_FAR,
 	  .current_areas = ~0U,
-	  .takeover_options = ALLOW_REGION_SIZE,
-	  .duplicate_options = ALLOW_DATA_COPIES|ALLOW_STRIPES|ALLOW_STRIPE_SIZE|ALLOW_REGION_SIZE },
+	  .options = ALLOW_REGION_SIZE },
 
 	/* raid0* -> */
 	{ .current_types  = SEG_RAID0|SEG_RAID0_META, /* seg->area_count > 0 */
 	  .possible_types = SEG_RAID1,
 	  .current_areas = ~0U,
-	  .takeover_options = ALLOW_DATA_COPIES|ALLOW_REGION_SIZE,
-	  .duplicate_options = ALLOW_DATA_COPIES|ALLOW_REGION_SIZE },
+	  .options = ALLOW_DATA_COPIES|ALLOW_REGION_SIZE },
 	{ .current_types  = SEG_RAID0|SEG_RAID0_META, /* seg->area_count > 0 */
 	  .possible_types = SEG_RAID10_NEAR|SEG_RAID10_FAR,
 	  .current_areas = ~0U,
-	  .takeover_options = ALLOW_DATA_COPIES|ALLOW_REGION_SIZE,
-	  .duplicate_options = ALLOW_DATA_COPIES|ALLOW_STRIPES|ALLOW_STRIPE_SIZE|ALLOW_REGION_SIZE },
+	  .options = ALLOW_DATA_COPIES|ALLOW_REGION_SIZE },
 	{ .current_types  = SEG_RAID0|SEG_RAID0_META, /* seg->area_count > 0 */
 	  .possible_types = SEG_RAID4|SEG_RAID5_LS|SEG_RAID5_LA|SEG_RAID5_RS|SEG_RAID5_RA|SEG_RAID5_N|SEG_RAID6_N_6,
 	  .current_areas = ~0U,
-	  .takeover_options = ALLOW_REGION_SIZE,
-	  .duplicate_options = ALLOW_STRIPES|ALLOW_STRIPE_SIZE|ALLOW_REGION_SIZE },
+	  .options = ALLOW_REGION_SIZE },
 	{ .current_types  = SEG_RAID0|SEG_RAID0_META, /* raid0 striped, i.e. seg->area_count > 0 */
 	  .possible_types = SEG_AREAS_STRIPED,
 	  .current_areas = ~0U,
-	  .takeover_options = ALLOW_NONE,
-	  .duplicate_options = ALLOW_STRIPES|ALLOW_STRIPE_SIZE },
+	  .options = ALLOW_NONE },
 
 	/* raid1 -> */
 	{ .current_types  = SEG_RAID1, /* Only if seg->area_count = 2 */
 	  .possible_types = SEG_AREAS_STRIPED|SEG_RAID10_NEAR|SEG_RAID4| \
 			    SEG_RAID5_LS|SEG_RAID5_LA|SEG_RAID5_RS|SEG_RAID5_RA|SEG_RAID5_N,
 	  .current_areas = 2,
-	  .takeover_options = ALLOW_NONE,
-	  .duplicate_options = ALLOW_DATA_COPIES|ALLOW_STRIPES|ALLOW_STRIPE_SIZE|ALLOW_REGION_SIZE },
+	  .options = ALLOW_NONE },
 	{ .current_types  = SEG_RAID1, /* seg->area_count != 2 */
 	  .possible_types = SEG_AREAS_STRIPED|SEG_RAID10_NEAR,
 	  .current_areas = ~0U,
-	  .takeover_options = ALLOW_NONE,
-	  .duplicate_options = ALLOW_DATA_COPIES|ALLOW_STRIPES|ALLOW_STRIPE_SIZE|ALLOW_REGION_SIZE },
+	  .options = ALLOW_NONE },
 
 	/* raid4 */
 	{ .current_types  = SEG_RAID4,
 	  .possible_types = SEG_AREAS_STRIPED|SEG_RAID0|SEG_RAID0_META|SEG_RAID5_N|SEG_RAID6_N_6,
 	  .current_areas = ~0U,
-	  .takeover_options = ALLOW_NONE,
-	  .duplicate_options = ALLOW_STRIPES|ALLOW_STRIPE_SIZE|ALLOW_REGION_SIZE },
+	  .options = ALLOW_NONE },
 
 	/* raid5 -> */
 	{ .current_types  = SEG_RAID5_LS,
 	  .possible_types = SEG_RAID5_N|SEG_RAID5_LA|SEG_RAID5_RS|SEG_RAID5_RA|SEG_RAID6_LS_6,
 	  .current_areas = ~0U,
-	  .takeover_options = ALLOW_NONE,
-	  .duplicate_options = ALLOW_STRIPES|ALLOW_STRIPE_SIZE|ALLOW_REGION_SIZE },
+	  .options = ALLOW_NONE },
 	{ .current_types  = SEG_RAID5_RS,
 	  .possible_types = SEG_RAID5_N|SEG_RAID5_LS|SEG_RAID5_LA|SEG_RAID5_RA|SEG_RAID6_RS_6,
 	  .current_areas = ~0U,
-	  .takeover_options = ALLOW_NONE,
-	  .duplicate_options = ALLOW_STRIPES|ALLOW_STRIPE_SIZE|ALLOW_REGION_SIZE },
+	  .options = ALLOW_NONE },
 	{ .current_types  = SEG_RAID5_LA,
 	  .possible_types = SEG_RAID5_N|SEG_RAID5_LS|SEG_RAID5_RS|SEG_RAID5_RA|SEG_RAID6_LA_6,
 	  .current_areas = ~0U,
-	  .takeover_options = ALLOW_NONE,
-	  .duplicate_options = ALLOW_STRIPES|ALLOW_STRIPE_SIZE|ALLOW_REGION_SIZE },
+	  .options = ALLOW_NONE },
 	{ .current_types  = SEG_RAID5_RA,
 	  .possible_types = SEG_RAID5_N|SEG_RAID5_LS|SEG_RAID5_LA|SEG_RAID5_RS|SEG_RAID6_RA_6,
 	  .current_areas = ~0U,
-	  .takeover_options = ALLOW_NONE,
-	  .duplicate_options = ALLOW_STRIPES|ALLOW_STRIPE_SIZE|ALLOW_REGION_SIZE },
+	  .options = ALLOW_NONE },
 	{ .current_types  = SEG_RAID5_N,
 	  .possible_types = SEG_AREAS_STRIPED|SEG_RAID0|SEG_RAID0_META|SEG_RAID4,
 	  .current_areas = ~0U,
-	  .takeover_options = ALLOW_NONE,
-	  .duplicate_options = ALLOW_STRIPES|ALLOW_STRIPE_SIZE|ALLOW_REGION_SIZE },
+	  .options = ALLOW_NONE },
 	{ .current_types  = SEG_RAID5_N,
 	  .possible_types = SEG_AREAS_STRIPED|SEG_RAID0|SEG_RAID0_META|SEG_RAID4| \
 			    SEG_RAID5_LA|SEG_RAID5_LS|SEG_RAID5_RS|SEG_RAID5_RA|SEG_RAID6_N_6,
 	  .current_areas = ~0U,
-	  .takeover_options = ALLOW_NONE,
-	  .duplicate_options = ALLOW_STRIPES|ALLOW_STRIPE_SIZE|ALLOW_REGION_SIZE },
+	  .options = ALLOW_NONE },
 
 	/* raid6 -> */
 	{ .current_types  = SEG_RAID6_ZR,
 	  .possible_types = SEG_RAID6_NC|SEG_RAID6_NR|SEG_RAID6_N_6,
 	  .current_areas = ~0U,
-	  .takeover_options = ALLOW_STRIPE_SIZE,
-	  .duplicate_options = ALLOW_STRIPES|ALLOW_STRIPE_SIZE|ALLOW_REGION_SIZE },
+	  .options = ALLOW_STRIPE_SIZE },
 	{ .current_types  = SEG_RAID6_NC,
 	  .possible_types = SEG_RAID6_NR|SEG_RAID6_ZR|SEG_RAID6_N_6,
 	  .current_areas = ~0U,
-	  .takeover_options = ALLOW_STRIPE_SIZE,
-	  .duplicate_options = ALLOW_STRIPES|ALLOW_STRIPE_SIZE|ALLOW_REGION_SIZE },
+	  .options = ALLOW_STRIPE_SIZE },
 	{ .current_types  = SEG_RAID6_NR,
 	  .possible_types = SEG_RAID6_NC|SEG_RAID6_ZR|SEG_RAID6_N_6,
 	  .current_areas = ~0U,
-	  .takeover_options = ALLOW_STRIPE_SIZE,
-	  .duplicate_options = ALLOW_STRIPES|ALLOW_STRIPE_SIZE|ALLOW_REGION_SIZE },
+	  .options = ALLOW_STRIPE_SIZE },
 	{ .current_types  = SEG_RAID6_LS_6,
 	  .possible_types = SEG_RAID6_LA_6|SEG_RAID6_RS_6|SEG_RAID6_RA_6| \
 			    SEG_RAID6_NC|SEG_RAID6_NR|SEG_RAID6_ZR|SEG_RAID6_N_6|SEG_RAID5_LS,
 	  .current_areas = ~0U,
-	  .takeover_options = ALLOW_STRIPE_SIZE,
-	  .duplicate_options = ALLOW_STRIPES|ALLOW_STRIPE_SIZE|ALLOW_REGION_SIZE },
+	  .options = ALLOW_STRIPE_SIZE },
 	{ .current_types  = SEG_RAID6_RS_6,
 	  .possible_types = SEG_RAID6_LS_6|SEG_RAID6_LA_6|SEG_RAID6_RA_6| \
 			    SEG_RAID6_NC|SEG_RAID6_NR|SEG_RAID6_ZR|SEG_RAID6_N_6|SEG_RAID5_RS,
 	  .current_areas = ~0U,
-	  .takeover_options = ALLOW_STRIPE_SIZE,
-	  .duplicate_options = ALLOW_STRIPES|ALLOW_STRIPE_SIZE|ALLOW_REGION_SIZE },
+	  .options = ALLOW_STRIPE_SIZE },
 	{ .current_types  = SEG_RAID6_LA_6,
 	  .possible_types = SEG_RAID6_LS_6|SEG_RAID6_RS_6|SEG_RAID6_RA_6| \
 			    SEG_RAID6_NC|SEG_RAID6_NR|SEG_RAID6_ZR|SEG_RAID6_N_6|SEG_RAID5_LA,
 	  .current_areas = ~0U,
-	  .takeover_options = ALLOW_STRIPE_SIZE,
-	  .duplicate_options = ALLOW_STRIPES|ALLOW_STRIPE_SIZE|ALLOW_REGION_SIZE },
+	  .options = ALLOW_STRIPE_SIZE },
 	{ .current_types  = SEG_RAID6_RA_6,
 	  .possible_types = SEG_RAID6_LS_6|SEG_RAID6_LA_6|SEG_RAID6_RS_6| \
 			    SEG_RAID6_NC|SEG_RAID6_NR|SEG_RAID6_ZR|SEG_RAID6_N_6|SEG_RAID5_RA,
 	  .current_areas = ~0U,
-	  .takeover_options = ALLOW_STRIPE_SIZE,
-	  .duplicate_options = ALLOW_STRIPES|ALLOW_STRIPE_SIZE|ALLOW_REGION_SIZE },
+	  .options = ALLOW_STRIPE_SIZE },
 	{ .current_types  = SEG_RAID6_N_6,
 	  .possible_types = SEG_RAID6_LS_6|SEG_RAID6_LA_6|SEG_RAID6_RS_6|SEG_RAID6_RA_6| \
 			    SEG_RAID6_NR|SEG_RAID6_NC|SEG_RAID6_ZR,
 	  .current_areas = ~0U,
-	  .takeover_options = ALLOW_STRIPE_SIZE,
-	  .duplicate_options = ALLOW_STRIPES|ALLOW_STRIPE_SIZE|ALLOW_REGION_SIZE },
+	  .options = ALLOW_STRIPE_SIZE },
 	{ .current_types  = SEG_RAID6_N_6,
 	  .possible_types = SEG_AREAS_STRIPED|SEG_RAID0|SEG_RAID0_META|SEG_RAID4,
 	  .current_areas = ~0U,
-	  .takeover_options = ALLOW_NONE,
-	  .duplicate_options = ALLOW_STRIPES|ALLOW_STRIPE_SIZE|ALLOW_REGION_SIZE },
+	  .options = ALLOW_NONE },
 
 	/* raid10 -> */
 	{ .current_types  = SEG_RAID10_NEAR|SEG_RAID10_FAR,
 	  .possible_types = SEG_AREAS_STRIPED|SEG_RAID0|SEG_RAID0_META,
 	  .current_areas = ~0U,
-	  .takeover_options = ALLOW_NONE,
-	  .duplicate_options = ALLOW_STRIPES|ALLOW_STRIPE_SIZE|ALLOW_REGION_SIZE },
+	  .options = ALLOW_NONE },
+
+	/* END */
+	{ .current_types  = 0 }
+};
+
+static struct possible_duplicate_type _possible_duplicate_types[] = {
+	{ .possible_types = SEG_RAID1,
+	  .options = ALLOW_DATA_COPIES|ALLOW_REGION_SIZE,
+	  .new_areas = ~0U },
+	{ .possible_types = SEG_AREAS_STRIPED|SEG_RAID0|SEG_RAID0_META,
+	  .options = ALLOW_NONE,
+	  .new_areas = 1 },
+	{ .possible_types = SEG_AREAS_STRIPED|SEG_RAID0|SEG_RAID0_META,
+	  .options = ALLOW_STRIPES|ALLOW_STRIPE_SIZE,
+	  .new_areas = ~0U },
+	{ .possible_types = SEG_RAID10_NEAR|SEG_RAID10_FAR|SEG_RAID10_OFFSET,
+	  .options = ALLOW_DATA_COPIES|ALLOW_STRIPES|ALLOW_STRIPE_SIZE|ALLOW_REGION_SIZE,
+	  .new_areas = ~0U },
+	{ .possible_types = SEG_RAID4|SEG_RAID5_LS|SEG_RAID5_LA|SEG_RAID5_RS|SEG_RAID5_RA|SEG_RAID5_N| \
+	  		    SEG_RAID6_ZR|SEG_RAID6_NC|SEG_RAID6_NR| \
+	  		    SEG_RAID6_LS_6|SEG_RAID6_LA_6|SEG_RAID6_RS_6|SEG_RAID6_RA_6|SEG_RAID6_N_6,
+	  .options = ALLOW_STRIPES|ALLOW_STRIPE_SIZE|ALLOW_REGION_SIZE,
+	  .new_areas = ~0U },
+
+	/* END */
+	{ .possible_types  = 0 }
 };
 
 /*
@@ -4062,19 +4043,18 @@ static struct possible_type _possible_types[] = {
  *
  * HM FIXME: complete?
  */
-static struct possible_type *_get_possible_type(const struct lv_segment *seg_from,
-						const struct segment_type *segtype_to)
+static struct possible_takeover_reshape_type *__get_possible_takeover_reshape_type(const struct lv_segment *seg_from,
+										   const struct segment_type *segtype_to)
 {
 	int found = 0;
-	unsigned cn;
-	struct possible_type *pt = _possible_types;
+	struct possible_takeover_reshape_type *pt = _possible_takeover_reshape_types;
 
-	for (cn = 0; cn < ARRAY_SIZE(_possible_types); cn++) {
-		if ((seg_from->segtype->flags & pt[cn].current_types) &&
-		    (segtype_to ? (segtype_to->flags & pt[cn].possible_types) : 1)) {
+	for ( ; pt->current_types; pt++) {
+		if ((seg_from->segtype->flags & pt->current_types) &&
+		    (segtype_to ? (segtype_to->flags & pt->possible_types) : 1)) {
 			found = 1;
-			if (seg_from->area_count <= pt[cn].current_areas)
-				return pt + cn;
+			if (seg_from->area_count <= pt->current_areas)
+				return pt;
 
 		} else if (found)
 			break;
@@ -4083,17 +4063,50 @@ static struct possible_type *_get_possible_type(const struct lv_segment *seg_fro
 	return NULL;
 }
 
+static struct possible_duplicate_type *__get_possible_duplicate_type(const struct segment_type *segtype_to,
+								     uint32_t new_image_count)
+{
+	int found = 0;
+	struct possible_duplicate_type *pt = _possible_duplicate_types;
+
+	if (!segtype_to) {
+		log_error(INTERNAL_ERROR "No segtype_to!");
+		return NULL;
+	}
+
+	for ( ; pt->possible_types; pt++) {
+		if (segtype_to->flags & pt->possible_types) {
+			found = 1;
+			if (new_image_count <= pt->new_areas)
+				return pt;
+
+		} else if (found)
+			break;
+	}
+
+	return NULL;
+}
+
+static struct possible_type *_get_possible_type(const struct lv_segment *seg_from,
+						const struct segment_type *segtype_to,
+						uint32_t new_image_count)
+{
+	return new_image_count ?
+	       (struct possible_type *) __get_possible_duplicate_type(segtype_to, new_image_count) :
+	       (struct possible_type *) __get_possible_takeover_reshape_type(seg_from, segtype_to);
+}
+
 /*
  * Return allowed options (--stripes, ...) for conversion from @seg_from -> @seg_to
  */
 static int _get_allowed_conversion_options(const struct lv_segment *seg_from,
 					   const struct segment_type *segtype_to,
-					   int duplicate, uint32_t *options)
+					   uint32_t new_image_count, uint32_t *options)
 {
-	struct possible_type *pt = _get_possible_type(seg_from, segtype_to);
+	struct possible_type *pt = _get_possible_type(seg_from, segtype_to, new_image_count);
 
 	if (pt) {
-		*options = duplicate ? pt->duplicate_options : pt->takeover_options;
+		*options = pt->options;
 		return 1;
 	}
 
@@ -4111,16 +4124,16 @@ static void _log_possible_conversion_types(struct logical_volume *lv, const stru
 	const char *alias = "";
 	const struct lv_segment *seg = first_seg(lv);
 	const struct segment_type *segtype;
-	const struct possible_type *pt = _get_possible_type(seg, NULL);
+	const struct possible_type *pt = _get_possible_type(seg, NULL, 0);
 
 	/* Get any possible_type entry for @seg to check for any segtype flags it is possible to convert to */
 	if (!pt) {
-		log_warn("Conversion on %s LV %s is not possible",
+		log_warn("Conversion of %s LV %s is not possible",
 			 lvseg_name(seg), display_lvname(lv));
 		return;
 	}
 
-	log_warn("Direct conversion of LV %s from %s to %s is not possible",
+	log_warn("Conversion of LV %s from %s to %s is not possible",
 		 display_lvname(lv), lvseg_name(seg), new_segtype->name);
 
 	if (seg_is_raid5_ls(seg))
@@ -4130,7 +4143,7 @@ static void _log_possible_conversion_types(struct logical_volume *lv, const stru
 	else if (seg_is_any_raid10(seg) && !seg_is_raid10_near(seg))
 		alias = SEG_TYPE_NAME_RAID10;
 
-	log_warn("Converting %s directly from %s%s%s%c is possible to the following layouts:",
+	log_warn("Converting %s  from %s%s%s%c is possible to the following layouts:",
 		 display_lvname(lv), _get_segtype_name(seg->segtype, seg->area_count),
 		 *alias ? " (same as " : "", alias, *alias ? ')' : 0);
 
@@ -6936,7 +6949,7 @@ static takeover_fn_t _takeover_fn[][10] = {
  */
 static int _conversion_options_allowed(const struct lv_segment *seg_from,
 				       const struct segment_type *segtype_to,
-				       int duplicate,
+				       uint32_t new_image_count,
 				       int data_copies, int region_size,
 				       int stripes, int stripe_size)
 {
@@ -6945,9 +6958,9 @@ static int _conversion_options_allowed(const struct lv_segment *seg_from,
 	const struct segment_type *new_segtype = segtype_to;
 	struct cmd_context *cmd = seg_from->lv->vg->cmd;
 
-	/* HM FIXME: share these seg checks with TAKEOVER_FNs */
 	if (seg_is_striped(seg_from) ||
-	    seg_is_any_raid0(seg_from)) {
+	    seg_is_any_raid0(seg_from) ||
+	    seg_is_raid4(seg_from)) {
 		/* If this is any raid5 conversion request -> enforce raid5_n, because we convert from striped */
 		if (segtype_is_any_raid5(new_segtype) &&
 		    !segtype_is_raid5_n(new_segtype) &&
@@ -6979,7 +6992,7 @@ static int _conversion_options_allowed(const struct lv_segment *seg_from,
 		return_0;
 	}
 
-	if (!_get_allowed_conversion_options(seg_from, new_segtype, duplicate, &opts))
+	if (!_get_allowed_conversion_options(seg_from, new_segtype, new_image_count, &opts))
 		return 0;
 
 	if (data_copies && !(opts & ALLOW_DATA_COPIES)) {
@@ -7078,7 +7091,7 @@ int lv_raid_convert(struct logical_volume *lv,
 	dm_list_init(&removal_lvs);
 
 	if (duplicate && unduplicate) {
-		log_error(INTERNAL_ERROR "Called with duplicate and unduplicate!");
+		log_error("--duplicate and --unduplicate are mutually exclusive!");
 		return 0;
 	}
 
@@ -7105,7 +7118,7 @@ int lv_raid_convert(struct logical_volume *lv,
 			goto err;
 	}
 
-PFLA("new_segtype=%s new_image_count=%u new_data_copies=%u new_stripes=%u segtype=%s, seg->area_count=%u", new_segtype ? new_segtype->name : "", new_image_count, new_data_copies, new_stripes, lvseg_name(seg), seg->area_count);
+PFLA("new_segtype=%s new_image_count=%u new_data_copies=%u new_stripes=%u segtype=%s, seg->area_count=%u duplicate=%d unduplicate=%d ", new_segtype ? new_segtype->name : "", new_image_count, new_data_copies, new_stripes, lvseg_name(seg), seg->area_count, duplicate, unduplicate);
 
 	if (!_check_max_raid_devices(image_count))
 		return 0;
@@ -7217,7 +7230,7 @@ PFLA("yes=%d new_segtype=%s new_image_count=%u data_copies=%u stripes=%u stripe_
 	 */
 	if (duplicate) {
 		/* Check valid options mirrors, stripes and/or stripe_size have been provided suitable to the conversion */
-		if (!_conversion_options_allowed(seg, new_segtype, 1 /* Duplicate */,
+		if (!_conversion_options_allowed(seg, new_segtype, image_count /* duplicate check for image_count > 0 */,
 						 new_data_copies, new_region_size,
 						 new_stripes, new_stripe_size)) {
 			_log_possible_conversion_types(lv, new_segtype);

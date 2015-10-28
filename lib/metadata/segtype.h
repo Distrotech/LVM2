@@ -251,8 +251,7 @@ int init_raid_segtypes(struct cmd_context *cmd, struct segtype_library *seglib);
 					 (SEG_RAID6_ZR|SEG_RAID6_NC|SEG_RAID6_NR| \
 					  SEG_RAID6_LS_6|SEG_RAID6_LA_6|SEG_RAID6_RS_6|SEG_RAID6_RA_6|SEG_RAID6_N_6)) ? 1 : 0)
 #define segtype_is_striped_raid(segtype)	(segtype_is_raid(segtype) && \
-						 !segtype_is_raid1(segtype) && \
-						 !segtype_is_raid01(segtype))
+						 !(segtype_is_raid1(segtype) || segtype_is_raid01(segtype)))
 #define segtype_is_reshapable_raid(segtype)	((segtype_is_striped_raid(segtype) && !segtype_is_raid0(segtype)) || segtype_is_raid10_near(segtype) || segtype_is_raid10_offset(segtype))
 
 #define seg_is_raid0(seg)		segtype_is_raid0((seg)->segtype)

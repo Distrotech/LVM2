@@ -142,9 +142,9 @@ int check_lv_segments(struct logical_volume *lv, int complete_vg)
 
 		area_multiplier = (seg_is_striped_raid(seg) || seg_is_striped(seg)) ? seg->area_count - seg->segtype->parity_devs : 1;
 
-PFLA("lv=%s segtype=%s seg->area_len=%u seg->area_count=%u parity_devs=%u area_multiplier=%u seg->len=%u seg->data_copies=%u rimageextents=%u seg->reshape_len=%u", lv->name, seg->segtype->name, seg->area_len, seg->area_count, seg->segtype->parity_devs, area_multiplier, seg->len, seg->data_copies, lv_raid_rimage_extents(seg->segtype, seg->len, seg->area_count - seg->segtype->parity_devs, seg->data_copies), seg->reshape_len);
-#if 1
 		data_rimage_count = seg->area_count - seg->segtype->parity_devs;
+PFLA("lv=%s segtype=%s seg->area_len=%u seg->area_count=%u parity_devs=%u area_multiplier=%u seg->len=%u seg->data_copies=%u rimageextents=%u seg->reshape_len=%u", lv->name, seg->segtype->name, seg->area_len, seg->area_count, seg->segtype->parity_devs, area_multiplier, seg->len, seg->data_copies, lv_raid_rimage_extents(seg->segtype, seg->len - seg->reshape_len * data_rimage_count, data_rimage_count, seg->data_copies), seg->reshape_len);
+#if 1
 		if (lv_raid_rimage_extents(seg->segtype,
 					   seg->len - seg->reshape_len * data_rimage_count,
 					   data_rimage_count, seg->data_copies) != seg->area_len - seg->reshape_len) {

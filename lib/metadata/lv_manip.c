@@ -1020,10 +1020,11 @@ PFL();
 
 /* Round up @extents to next stripe boundary for number of @stripes */
 static uint32_t _round_to_stripe_boundary(struct logical_volume *lv, uint32_t extents,
-					  uint32_t stripes, uint32_t data_copies, int extend)
+					  uint32_t stripes, int extend)
 {
 	uint32_t r = extents;
 
+PFLA("extents=%u stripes=%u", extents, stripes);
 	/* Caller should ensure... */
 	if (!stripes)
 		stripes = 1;
@@ -1031,8 +1032,13 @@ static uint32_t _round_to_stripe_boundary(struct logical_volume *lv, uint32_t ex
 	if (stripes > 1) {
 		uint32_t mod;
 
-		if ((mod = r % stripes))
-			r += extend ? (stripes - mod) : -mod;
+		if ((mod = r % stripes)) {
+			if (extend ||
+			    r < stripes)
+				r += stripes - mod;
+			else
+				r -= mod;
+		}
 	}
 
 	if (r != extents)
@@ -1281,7 +1287,6 @@ static int _lv_segment_add_areas(struct logical_volume *lv,
 	return 1;
 }
 
-#if 1
 /* Return area_len for @extents based on @seg's properties (e.g. striped, ...) */
 static uint32_t _area_len(struct lv_segment *seg, uint32_t extents)
 {
@@ -1301,49 +1306,6 @@ PFLA("area_len=%u", r);
 
 	return r;
 }	
-
-#if 0
-/* Return length in extents of all areas @extents based on @seg's properties (e.g. striped, ...) */
-static uint32_t _total_areas_len(uint32_t extents, )
-{
-	uint32_t r;
-
-	if (seg_is_striped(seg) || seg_is_striped_raid(seg))
-		r = lv_raid_rimage_extents(seg->segtype, extents, stripes, seg->data_copies ?: 1);
-}
-#endif
-
-#else
-/* Return @area_len for @extents based on @seg's properties (e.g. striped, ...) */
-static uint32_t _area_len(struct lv_segment *seg, uint32_t extents, uint32_t *area_len)
-{
-	/* Caller must ensure exact divisibility */
-	if (seg_is_striped(seg) || seg_is_striped_raid(seg)) {
-		uint32_t data_devs = seg->area_count - seg->segtype->parity_devs;
-
-		if (!seg->data_copies)
-			seg->data_copies = 2;
-
-		if (seg_is_any_raid10(seg))
-			*area_len = lv_raid_rimage_extents(seg->segtype, seg->len, data_devs, seg->data_copies) * (seg_is_raid10_near(seg) ? 1 : seg->data_copies);
-
-		else {
-			if (extents % data_devs) {
-				/* HM FIXME: message not right for raid10 */
-				log_error("Extents %" PRIu32 " not divisible by #stripes %" PRIu32, extents, data_devs);
-				return 0;
-			}
-
-			*area_len = extents / data_devs;
-		}
-	} else
-		*area_len = extents;
-
-PFLA("*area_len=%u", *area_len);
-
-	return 1;
-}
-#endif
 
 /*
  * Reduce the size of an lv_segment.  New size can be zero.
@@ -1370,7 +1332,7 @@ PFLA("seg_lv(seg, %u)=%s area_reduction=%u seg->area_len=%u", s, seg_type(seg, s
 
 	seg->len -= reduction;
 	seg->lv->size -= reduction * seg->lv->vg->extent_size;
-	seg->area_len -= seg_is_striped(seg) ? area_reduction : reduction;
+	seg->area_len -= area_reduction;
 PFLA("seg->len=%u seg->lv->size=%llu, seg->area_len=%u", seg->len, (unsigned long long) seg->lv->size, seg->area_len);
 
 	return 1;
@@ -1502,7 +1464,7 @@ PFLA("reduce recursive lv=%s le_count=%u extents=%u", display_lvname(lv), lv->le
 
 	extents_sav = extents;
 	if (seg_is_striped(seg) || seg_is_striped_raid(seg))
-		extents = _round_to_stripe_boundary(lv, extents, stripes, seg->data_copies, 0);
+		extents = _round_to_stripe_boundary(lv, extents, stripes, 0 /* reduce */);
 
 	if (extents > extents_sav) {
 		log_warn("LV %s would be %u extents smaller than requested due to stripe boundary rounding!",
@@ -1916,10 +1878,9 @@ PFLA("alloc_count=%u parity_count=%u metadata_area_count=%u", alloc_count, parit
 
 	total_extents = new_extents;
 PFLA("ah->area_multiple=%u area_count=%u new_extents=%u total_extents=%u", ah->area_multiple, area_count, new_extents, total_extents);
-
 	if (segtype_is_raid(segtype)) {
 		if (segtype_is_any_raid10(segtype))
-			total_extents = lv_raid_rimage_extents(segtype, total_extents, stripes, mirrors);
+			total_extents = lv_raid_rimage_extents(segtype, total_extents, stripes, mirrors) * stripes;
 		else if (segtype_is_raid01(segtype))
 			total_extents /= stripes;
 
@@ -2953,11 +2914,12 @@ found:
  */
 static uint32_t _calc_required_extents(struct alloc_handle *ah, struct pv_area *pva, unsigned ix_pva, uint32_t max_to_allocate, alloc_policy_t alloc)
 {
-#if 0
+#if 1
 	uint32_t required = lv_raid_rimage_extents(ah->segtype, max_to_allocate, ah->area_count, ah->data_copies);
 #else
 	uint32_t required = max_to_allocate / ah->area_multiple;
 #endif
+PFLA("segtype=%s max_to_allocate=%u area_count=%u data_copies=%u reuired=%u required=%u", ah->segtype->name, max_to_allocate, ah->area_count, ah->data_copies, required, max_to_allocate / ah->area_multiple);
 
 	/*
 	 * Update amount unreserved - effectively splitting an area 
@@ -3465,6 +3427,7 @@ static int _allocate(struct alloc_handle *ah,
 		return 1;
 	}
 
+#if 1
         if (ah->area_multiple > 1 &&
             (ah->new_extents - alloc_state.allocated) % ah->area_multiple) {
 		log_error("Number of extents requested (%u) needs to be divisible by %d.",
@@ -3472,6 +3435,9 @@ static int _allocate(struct alloc_handle *ah,
 			  ah->area_multiple);
 		return 0;
 	}
+#endif
+
+PFLA("ah->new_extents=%u", ah->new_extents);
 
 	alloc_state.log_area_count_still_needed = ah->log_area_count;
 
@@ -3545,6 +3511,7 @@ PFLA("ah->new_extents=%u", ah->new_extents);
 			break;
 	}
 
+PFLA("alloc_stats.allocated=%u ah->new_extents=%u", alloc_state.allocated, ah->new_extents);
 	if (alloc_state.allocated != ah->new_extents) {
 		if (!ah->approx_alloc) {
 			log_error("Insufficient suitable %sallocatable extents "
@@ -4330,7 +4297,7 @@ PFLA("extending %s in %s, stripes=%u", display_lvname(sub_lv), lv->name, stripes
 
 	seg = first_seg(lv);
 	seg->len += extents;
-	seg->area_len = lv_raid_rimage_extents(seg->segtype, seg->len, seg->area_count - seg->segtype->parity_devs, 1);
+	seg->area_len = lv_raid_rimage_extents(seg->segtype, seg->len, seg->area_count - seg->segtype->parity_devs, mirrors);
 PFLA("lv->le_count=%u", lv->le_count);
 	lv->le_count += extents;
 	lv->size += (uint64_t) extents * lv->vg->extent_size;
@@ -4423,6 +4390,7 @@ PFLA("mirrors=%u stripes=%u", mirrors, stripes);
 	}
 PFLA("mirrors=%u stripes=%u", mirrors, stripes);
 #endif
+
 	if (segtype_is_virtual(segtype))
 		return lv_add_virtual_segment(lv, 0u, extents, segtype);
 
@@ -4434,8 +4402,9 @@ PFLA("extents=%u stripe_size=%u", extents, stripe_size);
 		 */
 		/* FIXME Support striped metadata pool */
 		log_count = 1;
+
 	} else if (segtype_is_striped(segtype) || segtype_is_striped_raid(segtype))
-		extents = _round_to_stripe_boundary(lv, extents, stripes, mirrors, 1);
+		extents = _round_to_stripe_boundary(lv, extents, stripes, 1 /* extend */);
 PFLA("extents=%u segtype=%s mirrors=%u stripes=%u log_count=%u", extents, segtype->name, mirrors, stripes, log_count);
 
 	/* Special creation case for raid01 (mirror(s) on top of raid0 stripes */
