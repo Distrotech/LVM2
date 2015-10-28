@@ -1391,7 +1391,7 @@ PFL();
 
 /* Return 1 in case any last segment of @lv, area @s contains another layered LV  */
 /* HM FIXME: correct? */
-static int _is_multilayered_lv(struct logical_volume *lv, uint32_t s)
+static int _is_layered_lv(struct logical_volume *lv, uint32_t s)
 {
 	struct lv_segment *seg = last_seg(lv), *seg1;
 
@@ -1400,12 +1400,6 @@ static int _is_multilayered_lv(struct logical_volume *lv, uint32_t s)
 	       seg_type(seg, s) == AREA_LV &&
 	       (seg1 = last_seg(seg_lv(seg, s))) &&
 		!seg_is_striped(seg1);
-#if 0
- && /* <- segment of #s LV underneath top-level */
-	       seg_type(seg1, 0) == AREA_LV &&
-	       (strstr(seg_lv(seg1, 0)->name, "_rimage") ||
-	        strstr(seg_lv(seg1, 0)->name, "_rdimage"));
-#endif
 }
 
 /*
@@ -1428,7 +1422,7 @@ PFLA("lv=%s lv->le_count=%u seg=%p extents=%u stripes=%u data_copies=%u delete=%
 	/* Check for multi-level stack (e.g. reduction of a duplicated LV stack) */
 	if (!dont_recurse) {
 		for (s = 0; s < seg->area_count; s++) {
-			if (_is_multilayered_lv(lv, s)) {
+			if (_is_layered_lv(lv, s)) {
 				uint32_t seg_lv_extents = seg_lv(seg, s)->le_count;
 
 				if (!delete)
@@ -4346,18 +4340,19 @@ int lv_extend(struct logical_volume *lv,
 	struct lv_segment *seg = last_seg(lv);
 
 	log_very_verbose("Adding segment of type %s to LV %s.", segtype->name, display_lvname(lv));
+PFLA("extents=%u", extents);
 #if 1
 	/* Check for multi-level stack (e.g. extension of a duplicated LV stack) */
 	if (seg) {
 		int extended = 0;
 
 		for (s = 0; s < seg->area_count; s++) {
-			if (_is_multilayered_lv(lv, s)) {
+			if (_is_layered_lv(lv, s)) {
 				struct logical_volume *lv1 = seg_lv(seg, s);
 				struct lv_segment *seg1 = last_seg(lv1);
 
-PFLA("recursive seg_lv(seg, %u)=%s", s, display_lvname(lv1));
-				if (extents > lv1->le_count &&
+PFLA("recursive seg_lv(seg, %u)=%s extents=%u", s, display_lvname(lv1), extents);
+				if (extents + lv->le_count > lv1->le_count &&
 				    !lv_extend(lv1, seg1->segtype, seg1->area_count, seg1->stripe_size, seg1->data_copies, seg1->region_size, extents, allocatable_pvs, alloc, approx_alloc))
 					return_0;
 

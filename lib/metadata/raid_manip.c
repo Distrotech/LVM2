@@ -177,17 +177,18 @@ uint32_t lv_raid_image_count(const struct logical_volume *lv)
 	return seg_is_raid(seg) ? seg->area_count : 1;
 }
 
-/* Calculate raid rimage length based on total @extents for segment and @stripes and @data_copies */
+/* Calculate raid rimage length based on total @extents for @segtype, @stripes and @data_copies */
 uint32_t lv_raid_rimage_extents(const struct segment_type *segtype,
 				uint32_t extents, uint32_t stripes, uint32_t data_copies)
 {
 	uint64_t r = extents;
 
-	if (segtype_is_raid1(segtype))
+	if (!segtype_is_raid(segtype) ||
+	    segtype_is_raid1(segtype))
 		return extents;
 
 	if (segtype_is_any_raid10(segtype))
-		r *= data_copies;
+		r *= data_copies ?: 1;
 
 	r = dm_div_up(r, stripes ?: 1);
 
@@ -4815,39 +4816,9 @@ PFL();
 	}
 
 PFLA("segtype=%s image_count=%u stripes=%u stripe_size=%u datacopies=%u", segtype ? segtype->name : NULL, image_count, stripes, stripe_size, data_copies);
-#if 0
-	/* Find sublv to keep based on segment type */
-	keep_idx = seg->area_count + 1;
-	for (s = 0; s < seg->area_count; s++) {
-		if (first_seg(seg_lv(seg, s))->segtype == segtype) {
-			segtype_count++;
-			keep_idx = s;
-			seg0 = first_seg(seg_lv(seg, s));
-PFLA("keep_idx=%u", keep_idx);
-		}
-	}
-
-	/* If segtype isn't unique -> select again */
-	if (segtype_count > 1)
-		keep_idx = seg->area_count + 1;
-
-		for (s = 0; s < seg->area_count - 1; s++) {
-			seg0 = first_seg(seg_lv(seg, s));
-PFLA("seg0->segtype=%s seg0->area_count=%u seg0->stripe_size=%u seg0->datacopies=%u", lvseg_name(seg0), seg0->area_count, seg0->stripe_size, seg0->data_copies);
-			if (segtype == seg0->segtype &&
-			    (stripes ? (stripes == _data_rimages_count(seg0, seg0->area_count)) : 1) &&
-			    (stripe_size ? (stripe_size == seg0->stripe_size) : 1) &&
-			    (data_copies > 1 ? (data_copies == seg0->data_copies) : 1)) {
-				sub_lv_count++;
-				keep_idx = s;
-PFLA("keep_idx=%u", keep_idx);
-			}
-		}
-
-#else
 	if (segtype) {
 		/* Find sublv to keep based on passed in segment properties */
-		for (s = 0; s < seg->area_count - 1; s++) {
+		for (s = 0; s < seg->area_count; s++) {
 seg0 = first_seg(seg_lv(seg, s));
 PFLA("seg0->segtype=%s seg0->area_count=%u seg0->stripe_size=%u seg0->datacopies=%u", lvseg_name(seg0), seg0->area_count, seg0->stripe_size, seg0->data_copies);
 			if (_seg_meets_properties(first_seg(seg_lv(seg, s)), segtype,
@@ -4857,7 +4828,6 @@ PFLA("seg0->segtype=%s seg0->area_count=%u seg0->stripe_size=%u seg0->datacopies
 PFLA("keep_idx=%u", keep_idx);
 			}
 		}
-#endif
 
 		if (!sub_lv_count) {
 			log_error("Wrong raid type %s/stripes=%u/mirrors=%u requested to remove duplicating conversion",
@@ -7166,8 +7136,8 @@ PFLA("new_segtype=%s new_image_count=%u new_stripes=%u stripes=%u", new_segtype 
 	 */
 	if (unduplicate) {
 		if (_lv_is_duplicating(lv)) {
-			if (!_raid_conv_unduplicate(lv, new_segtype, image_count,
-						    stripes, stripe_size, data_copies, yes)) {
+			if (!_raid_conv_unduplicate(lv, new_segtype, new_image_count,
+						    new_stripes, new_stripe_size, new_data_copies, yes)) {
 				if (!_lv_is_duplicating(lv))
 					_log_possible_conversion_types(lv, new_segtype);
 
