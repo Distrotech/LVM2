@@ -3378,6 +3378,22 @@ static int _lvconvert_single(struct cmd_context *cmd, struct logical_volume *lv,
 		if ((lp->thin && !_lvconvert_thin(cmd, lv, lp)) ||
 		    (lp->cache && !_lvconvert_cache(cmd, lv, lp)))
 			return_ECMD_FAILED;
+	} else if (!segtype_is_raid(lp->segtype) && !seg_is_raid(first_seg(lv)) &&
+		   (arg_count(cmd, mirrors_ARG) ||
+		    arg_count(cmd, splitmirrors_ARG) ||
+		    lv_is_mirrored(lv))) {
+		if (!archive(lv->vg))
+			return_ECMD_FAILED;
+
+		if (!_lvconvert_mirrors(cmd, lv, lp))
+			return_ECMD_FAILED;
+
+		if (!(failed_pvs = _failed_pv_list(lv->vg)))
+			return_ECMD_FAILED;
+
+		/* If repairing and using policies, remove missing PVs from VG */
+		if (arg_count(cmd, repair_ARG) && arg_count(cmd, use_policies_ARG))
+			_remove_missing_empty_pv(lv->vg, failed_pvs);
 	} else if (arg_is_set(cmd, duplicate_ARG) ||
 		   segtype_is_raid(lp->segtype) ||
 segtype_is_striped(lp->segtype) ||
@@ -3390,21 +3406,6 @@ segtype_is_striped(lp->segtype) ||
 			log_error("Failed to convert LV %s", lv->name);
 			return_ECMD_FAILED;
 		}
-
-		if (!(failed_pvs = _failed_pv_list(lv->vg)))
-			return_ECMD_FAILED;
-
-		/* If repairing and using policies, remove missing PVs from VG */
-		if (arg_count(cmd, repair_ARG) && arg_count(cmd, use_policies_ARG))
-			_remove_missing_empty_pv(lv->vg, failed_pvs);
-	} else if (arg_count(cmd, mirrors_ARG) ||
-		   arg_count(cmd, splitmirrors_ARG) ||
-		   lv_is_mirrored(lv)) {
-		if (!archive(lv->vg))
-			return_ECMD_FAILED;
-
-		if (!_lvconvert_mirrors(cmd, lv, lp))
-			return_ECMD_FAILED;
 
 		if (!(failed_pvs = _failed_pv_list(lv->vg)))
 			return_ECMD_FAILED;
