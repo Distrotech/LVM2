@@ -47,7 +47,7 @@
 	RETURN_IF_ZERO((segtype), "lv new segment type argument");
 
 /* Ensure minimum region size on @lv */
-static void _ensure_min_region_size(struct logical_volume *lv)
+static int _ensure_min_region_size(struct logical_volume *lv)
 {
 	RETURN_IF_ZERO(lv, "lv argument");
 
@@ -61,6 +61,8 @@ static void _ensure_min_region_size(struct logical_volume *lv)
 
 	if (seg->region_size != region_size)
 		log_very_verbose("Setting region_size to %u", seg->region_size);
+
+	return 1;
 }
 
 /* HM Return "linear" for striped @segtype with 1 area instead of "striped" */
@@ -77,7 +79,7 @@ static const char *_get_segtype_name(const struct segment_type *segtype, unsigne
  *
  * Default region_size on @lv unless already set i
  */
-static void _check_and_init_region_size(struct logical_volume *lv)
+static int _check_and_init_region_size(struct logical_volume *lv)
 {
 	struct lv_segment *seg;
 
@@ -86,7 +88,8 @@ static void _check_and_init_region_size(struct logical_volume *lv)
 	RETURN_IF_ZERO(seg, "lv raid segment");
 
 	seg->region_size = seg->region_size ?: get_default_region_size(lv->vg->cmd);
-	_ensure_min_region_size(lv);
+
+	return _ensure_min_region_size(lv);
 }
 
 /* Return data images count for @total_rimages depending on @seg's type */
@@ -277,14 +280,16 @@ static int _activate_sublv_preserving_excl(struct logical_volume *top_lv,
 }
 
 /* Correct segments start logical extents in all sub LVs of @lv */
-static void _lv_set_image_lvs_start_les(struct logical_volume *lv)
+static int _lv_set_image_lvs_start_les(struct logical_volume *lv)
 {
 	uint32_t le, s;
 	struct lv_segment *raid_seg, *seg;
 
 	RETURN_IF_ZERO(lv, "lv argument");
-
 	raid_seg = first_seg(lv);
+	RETURN_IF_ZERO(raid_seg, "raid segment");
+	RETURN_IF_ZERO(raid_seg->area_count, "raid segment areas");
+
 	for (s = 0; s < raid_seg->area_count; s++) {
 		le = 0;
 		dm_list_iterate_items(seg, &seg_lv(raid_seg, s)->segments) {
@@ -292,6 +297,8 @@ static void _lv_set_image_lvs_start_les(struct logical_volume *lv)
 			le += seg->len;
 		}
 	}
+
+	return 1;
 }
 
 /*
@@ -479,8 +486,8 @@ static int _lv_cond_repair(struct logical_volume *lv)
 /*
  * Report current number of redundant disks for @total_images and @segtype 
  */
-static void _seg_get_redundancy(const struct segment_type *segtype, unsigned total_images,
-				unsigned data_copies, unsigned *nr)
+static int _seg_get_redundancy(const struct segment_type *segtype, unsigned total_images,
+			       unsigned data_copies, unsigned *nr)
 {
 	RETURN_IF_ZERO(total_images, "total images");
 	RETURN_IF_ZERO(data_copies, "data copies");
@@ -508,6 +515,8 @@ static void _seg_get_redundancy(const struct segment_type *segtype, unsigned tot
 
 	else
 		*nr = 0;
+
+	return 1;
 }
 
 /*
@@ -555,8 +564,9 @@ static int _yes_no_conversion(const struct logical_volume *lv,
 	new_image_count = new_image_count ?: lv_raid_image_count(lv);
 
 	/* Get number of redundant disk for current and new segtype */
-	_seg_get_redundancy(segtype, seg->area_count, seg->data_copies, &cur_redundancy);
-	_seg_get_redundancy(new_segtype, new_image_count, new_data_copies, &new_redundancy);
+	if (!_seg_get_redundancy(segtype, seg->area_count, seg->data_copies, &cur_redundancy) ||
+	    !_seg_get_redundancy(new_segtype, new_image_count, new_data_copies, &new_redundancy))
+		return 0;
 
 PFLA("yes=%d cur_redundancy=%u new_redundancy=%u", yes, cur_redundancy, new_redundancy);
 	if (new_redundancy == cur_redundancy) {
@@ -647,7 +657,7 @@ PFLA("yes=%d cur_redundancy=%u new_redundancy=%u", yes, cur_redundancy, new_redu
 }
 
 /* HM */
-static void _avoid_pv_of_lv(struct logical_volume *lv, struct physical_volume *pv)
+static int _avoid_pv_of_lv(struct logical_volume *lv, struct physical_volume *pv)
 {
 	RETURN_IF_ZERO(lv, "lv argument");
 	RETURN_IF_ZERO(pv, "PV");
@@ -655,6 +665,8 @@ static void _avoid_pv_of_lv(struct logical_volume *lv, struct physical_volume *p
 	if (!(lv->status & PARTIAL_LV) &&
 	    lv_is_on_pv(lv, pv))
 		pv->status |= PV_ALLOCATION_PROHIBITED;
+
+	return 1;
 }
 
 static int _avoid_pvs_of_lv(struct logical_volume *lv, void *data)
@@ -666,7 +678,8 @@ static int _avoid_pvs_of_lv(struct logical_volume *lv, void *data)
 	RETURN_IF_ZERO(allocate_pvs, "allocate pv list argument");
 
 	dm_list_iterate_items(pvl, allocate_pvs)
-		_avoid_pv_of_lv(lv, pvl->pv);
+		if (!_avoid_pv_of_lv(lv, pvl->pv))
+			return 0;
 
 	return 1;
 }
@@ -1576,7 +1589,8 @@ static int __alloc_rmeta_for_lv(struct logical_volume *data_lv,
 		}
 	}
 
-	_check_and_init_region_size(data_lv);
+	if (!_check_and_init_region_size(data_lv))
+		return 0;
 
 	if ((p = strstr(data_lv->name, "_mimage_")) ||
 	    (p = strstr(data_lv->name, "_rimage_")) ||
@@ -1721,7 +1735,8 @@ static int _alloc_image_components(struct logical_volume *lv,
 	if (!(lvl_array = dm_pool_alloc(lv->vg->vgmem, 2 * count * sizeof(*lvl_array))))
 		return_0;
 
-	_check_and_init_region_size(lv);
+	if (!_check_and_init_region_size(lv))
+		return 0;
 
 	/* If this is an image addition to an existing raid set, use its type... */
 	if (seg_is_raid(seg))
@@ -2115,7 +2130,7 @@ static int _relocate_reshape_space(struct logical_volume *lv, int to_end)
  * in the only segment of the top-level RAID LV @lv and
  * in the first segment of each sub lv.
  */
-static void _lv_set_reshape_len(struct logical_volume *lv, uint32_t reshape_len)
+static int _lv_set_reshape_len(struct logical_volume *lv, uint32_t reshape_len)
 {
 	uint32_t s;
 	struct lv_segment *seg;
@@ -2123,11 +2138,14 @@ static void _lv_set_reshape_len(struct logical_volume *lv, uint32_t reshape_len)
 	RETURN_IF_ZERO(lv, "LV argument");
 	seg = first_seg(lv);
 	RETURN_IF_ZERO(seg, "lv raid segment");
+	RETURN_IF_ZERO(seg->area_count, "lv raid segment areas");
 
 	seg->reshape_len = reshape_len;
 
 	for (s = 0; s < seg->area_count; s++)
 		first_seg(seg_lv(seg, s))->reshape_len = reshape_len;
+
+	return 1;
 }
 
 /*
@@ -2211,8 +2229,9 @@ PFLA("data_offset=%llu dev_sectors=%llu seg->reshape_len=%u out_of_place_les_per
 		RETURN_IF_ZERO(allocate_pvs , "allocate pvs list argument");
 		RETURN_IF_NONZERO(dm_list_empty(allocate_pvs), "allocate pvs listed");
 
-		/* Set reshape lenght upfront lv_extend() to allow it to set area_len ... properly */
-		_lv_set_reshape_len(lv, out_of_place_les_per_disk);
+		/* Set reshape length upfront lv_extend() to allow it to set area_len ... properly */
+		if (!_lv_set_reshape_len(lv, out_of_place_les_per_disk))
+			return 0;
 
 PFLA("lv->le_count=%u seg->len=%u seg->area_len=%u", lv->le_count, seg->len, seg->area_len);
 PFLA("images=%u area_count=%u reshape_len=%u", data_rimages, seg->area_count, reshape_len);
@@ -2299,7 +2318,8 @@ PFL();
 			return_0;
 
 		/* Reset reshape lenght upfront lv_reduce() to allow it to set area_len ... properly */
-		_lv_set_reshape_len(lv, 0);
+		if (!_lv_set_reshape_len(lv, 0))
+			return 0;
 
 		if (!lv_reduce(lv, _reshape_len_per_dev(seg) * _data_rimages_count(seg, seg->area_count)))
 			return_0;
@@ -2339,7 +2359,9 @@ static struct lv_segment *_convert_lv_to_raid1(struct logical_volume *lv, const 
 		return NULL;
 
 	lv->status |= RAID;
-	_check_and_init_region_size(lv);
+
+	if (!_check_and_init_region_size(lv))
+		return 0;
 
 	return seg;
 }
@@ -2381,10 +2403,12 @@ static int _reset_flags_passed_to_kernel(struct logical_volume *lv, int *flag_cl
 }
 
 /* Area reorder helper: swap 2 LV segment areas @a1 and @a2 */
-static void _swap_areas(struct lv_segment_area *a1, struct lv_segment_area *a2)
+static int _swap_areas(struct lv_segment_area *a1, struct lv_segment_area *a2)
 {
 	struct lv_segment_area tmp;
+#if 0
 	char *tmp_name;
+#endif
 
 	RETURN_IF_ZERO(a1, "first segment area argument");
 	RETURN_IF_ZERO(a2, "first segment area argument");
@@ -2398,6 +2422,7 @@ static void _swap_areas(struct lv_segment_area *a1, struct lv_segment_area *a2)
 	a1->u.lv.lv->name = a2->u.lv.lv->name;
 	a2->u.lv.lv->name = tmp_name;
 #endif
+	return 1;
 }
 
 /*
@@ -2555,8 +2580,10 @@ PFLA("idx[%u]=%d", s, idx[s]);
 				xchg--;
 
 			else {
-				_swap_areas(seg->areas + s, seg->areas + idx[s]);
-				_swap_areas(seg->meta_areas + s, seg->meta_areas + idx[s]);
+				if (!_swap_areas(seg->areas + s, seg->areas + idx[s]) ||
+				    !_swap_areas(seg->meta_areas + s, seg->meta_areas + idx[s]))
+					return 0;
+
 				ss = idx[idx[s]];
 				idx[idx[s]] = idx[s];
 				idx[s] = ss;
@@ -4496,7 +4523,7 @@ static int _get_allowed_conversion_options(const struct lv_segment *seg_from,
  * Log any possible conversions for @lv
  */
 /* HM FIXEM: use log_info? */
-static void _log_possible_conversion_types(struct logical_volume *lv, const struct segment_type *new_segtype)
+static int _log_possible_conversion_types(struct logical_volume *lv, const struct segment_type *new_segtype)
 {
 	unsigned i;
 	uint64_t t;
@@ -4513,7 +4540,7 @@ static void _log_possible_conversion_types(struct logical_volume *lv, const stru
 	if (!(pt = _get_possible_type(seg, NULL, 0))) {
 		log_warn("Conversion of %s LV %s is not possible",
 			 lvseg_name(seg), display_lvname(lv));
-		return;
+		return 1;
 	}
 
 	log_warn("Conversion of LV %s from %s to %s is not possible",
@@ -4539,6 +4566,8 @@ static void _log_possible_conversion_types(struct logical_volume *lv, const stru
 	}
 
 	log_warn("To convert to other arbitrary layouts by duplication, use \"lvconvert --duplicate ...\"");
+
+	return 1;
 }
 
 /*
@@ -4966,7 +4995,7 @@ static int _rename_metasub_lvs(struct logical_volume *lv, enum rename_dir dir)
 }
 
 /* Remove any infox in @seg_lv_name between @suffix and @lv_name */
-static void _remove_any_infix(const char *lv_name, char *seg_lv_name, const char *suffix)
+static int _remove_any_infix(const char *lv_name, char *seg_lv_name, const char *suffix)
 {
 	char *s;
 
@@ -4978,6 +5007,8 @@ static void _remove_any_infix(const char *lv_name, char *seg_lv_name, const char
 		strcpy(seg_lv_name, lv_name);
 		strcat(seg_lv_name, s);
 	}
+
+	return 1;
 }
 
 /* Get maximum name index suffix from all sub lvs of @lv and report in @*max_idx */
@@ -5210,9 +5241,12 @@ PFL();
 		/* Remove "_dup_N" infixes if sub LVs present */
 		for (s = 0; s < seg->area_count; s++)
 			if (seg_type(seg, s) == AREA_LV) {
-				_remove_any_infix(lv->name, (char*) seg_lv(seg,s)->name, "_rimage");
-				if (seg->meta_areas)
-					_remove_any_infix(lv->name, (char*) seg_metalv(seg,s)->name, "_rmeta");
+				if (!_remove_any_infix(lv->name, (char*) seg_lv(seg,s)->name, "_rimage"))
+					return 0;
+
+				if (seg->meta_areas &&
+				    !_remove_any_infix(lv->name, (char*) seg_metalv(seg,s)->name, "_rmeta"))
+					return 0;
 			}
 
 		log_debug_metadata("Updating VG metadata and reactivating %s",
@@ -5397,19 +5431,19 @@ PFL();
  * creates and allocates a destination lv of ~ (rounding) the
  * same size with the requested @new_segtype and properties (e.g. stripes).
  */
-static int _raid_conv_duplicate (struct logical_volume *lv,
-				 const struct segment_type *new_segtype,
-				 int yes, int force,
-				 unsigned new_image_count,
-				 const unsigned new_data_copies,
-				 const unsigned new_region_size,
-				 const unsigned new_stripes,
-				 unsigned new_stripe_size,
-				 const char *pool_data_name,
-				 struct dm_list *allocate_pvs)
+static int _raid_conv_duplicate(struct logical_volume *lv,
+				const struct segment_type *new_segtype,
+				int yes, int force,
+				unsigned new_image_count,
+				const unsigned new_data_copies,
+				const unsigned new_region_size,
+				const unsigned new_stripes,
+				unsigned new_stripe_size,
+				const char *pool_data_name,
+				struct dm_list *allocate_pvs)
 {
 	int duplicating = _lv_is_duplicating(lv);
-	uint32_t data_copies, extents, region_size = 1024, s;
+	uint32_t data_copies = new_data_copies, extents, region_size = 1024, s;
 	char *lv_name, *p, *suffix;
 	struct logical_volume *dst_lv;
 	struct lv_segment *seg;
@@ -5429,7 +5463,6 @@ static int _raid_conv_duplicate (struct logical_volume *lv,
 PFLA("new_segtype=%s new_data_copies=%u new_stripes=%u new_image_count=%u new_stripe_size=%u", new_segtype->name, new_data_copies, new_stripes, new_image_count, new_stripe_size);
 PFLA("segtype=%s area_count=%u data_copies=%u stripe_size=%u", lvseg_name(seg), seg->area_count, seg->data_copies, seg->stripe_size);
 	new_stripe_size = new_stripe_size ?: seg->stripe_size;
-	data_copies = new_data_copies;
 	if (data_copies < 2 &&
 	    (segtype_is_mirror(new_segtype) ||
 	     segtype_is_raid1(new_segtype) ||
@@ -5901,7 +5934,9 @@ PFL();
 PFL();
 
 	seg->segtype = new_segtype;
-	_check_and_init_region_size(lv);
+
+	if (!_check_and_init_region_size(lv))
+		return 0;
 
 	log_debug_metadata("Updating VG metadata and reloading %s LV %s",
 			   lvseg_name(seg), display_lvname(lv));
@@ -7583,9 +7618,9 @@ static takeover_fn_t _takeover_fn[][10] = {
  * Return 1 if provided @data_copies, @stripes, @stripe_size are
  * possible for conversion from @seg_from to @segtype_to, else 0.
  */
-static void _log_prohibited_option(const struct lv_segment *seg_from,
-				   const struct segment_type *new_segtype,
-				   const char *opt_str)
+static int _log_prohibited_option(const struct lv_segment *seg_from,
+				  const struct segment_type *new_segtype,
+				  const char *opt_str)
 {
 	RETURN_IF_ZERO(seg_from, "segment from argument");
 	RETURN_IF_ZERO(new_segtype, "segment type argument");
@@ -7596,6 +7631,8 @@ static void _log_prohibited_option(const struct lv_segment *seg_from,
 	else
 		log_error("Prohibited option %s provided to convert %s LV %s",
 			  opt_str, lvseg_name(seg_from), display_lvname(seg_from->lv));
+
+	return 1;
 }
 
 static int _conversion_options_allowed(const struct lv_segment *seg_from,
@@ -7652,17 +7689,21 @@ static int _conversion_options_allowed(const struct lv_segment *seg_from,
 		return 0;
 
 	if (data_copies && !(opts & ALLOW_DATA_COPIES)) {
-		_log_prohibited_option(seg_from, new_segtype, "-m/--mirrors");
+		if (!_log_prohibited_option(seg_from, new_segtype, "-m/--mirrors"))
+			return 0;
+
 		r = 0;
 	}
 
 	if (stripes && !(opts & ALLOW_STRIPES)) {
-		_log_prohibited_option(seg_from, new_segtype, "--stripes");
+		if (!_log_prohibited_option(seg_from, new_segtype, "--stripes"))
+			return 0;
 		r = 0;
 	}
 
 	if (stripe_size && !(opts & ALLOW_STRIPE_SIZE)) {
-		_log_prohibited_option(seg_from, new_segtype, "-I/--stripesize");
+		if (!_log_prohibited_option(seg_from, new_segtype, "-I/--stripesize"))
+			return 0;
 		r = 0;
 	}
 
@@ -7894,10 +7935,8 @@ PFLA("yes=%d new_segtype=%s data_copies=%u stripes=%u stripe_size=%u", yes, new_
 		/* Check valid options mirrors, stripes and/or stripe_size have been provided suitable to the conversion */
 		if (!_conversion_options_allowed(seg, new_segtype, image_count /* duplicate check for image_count > 0 */,
 						 new_data_copies, new_region_size,
-						 new_stripes, new_stripe_size)) {
-			_log_possible_conversion_types(lv, new_segtype);
-			return 0;
-		}
+						 new_stripes, new_stripe_size))
+			return _log_possible_conversion_types(lv, new_segtype);
 
 		return _raid_conv_duplicate(lv, new_segtype, yes, force, image_count, data_copies, region_size,
 					    stripes, stripe_size, pool_data_name, allocate_pvs);
@@ -7920,20 +7959,16 @@ PFLA("yes=%d new_segtype=%s data_copies=%u stripes=%u stripe_size=%u", yes, new_
 	 */
 	if (!_conversion_options_allowed(seg, new_segtype, 0 /* Takeover */,
 					 data_copies, new_region_size,
-					 new_stripes, new_stripe_size)) {
-		_log_possible_conversion_types(lv, new_segtype);
-		return 0;
-	}
+					 new_stripes, new_stripe_size))
+		return _log_possible_conversion_types(lv, new_segtype);
 
 PFLA("new_segtype=%s image_count=%u stripes=%u stripe_size=%u", new_segtype->name, image_count, stripes, stripe_size);
 	/*
 	 * Table driven takeover, i.e. conversions from one segment type to another
 	 */
 	tfn = _takeover_fn[_takeover_fn_idx(seg->segtype, seg->area_count)][_takeover_fn_idx(new_segtype, image_count)];
-	if (!tfn(lv, new_segtype, yes, force, image_count, data_copies, stripes, stripe_size, allocate_pvs)) {
-		_log_possible_conversion_types(lv, new_segtype);
-		return 0;
-	}
+	if (!tfn(lv, new_segtype, yes, force, image_count, data_copies, stripes, stripe_size, allocate_pvs))
+		return _log_possible_conversion_types(lv, new_segtype);
 out:
 	log_print_unless_silent("Logical volume %s successfully converted.", display_lvname(lv));
 
@@ -8148,7 +8183,9 @@ int lv_raid_replace(struct logical_volume *lv,
 {
 	int duplicating = 0, partial_segment_removed = 0;
 	uint32_t match_count = 0, partial_lvs = 0, s, sd;
+#if 0
 	const char *rimage_suffix, *rmeta_suffix;
+#endif
 	char **tmp_names;
 	struct dm_list old_lvs;
 	struct dm_list new_meta_lvs, new_data_lvs;
@@ -9101,9 +9138,7 @@ PFL();
 	}
 
 	/* Correct segments start logical extents and length */
-	_lv_set_image_lvs_start_les(lv);
-
-	return 1;
+	return _lv_set_image_lvs_start_les(lv);
 }
 
 /*
@@ -9153,7 +9188,10 @@ PFL();
 PFLA("raid1_seg->len=%u raid1_seg->area_len=%u", raid1_seg->len, raid1_seg->area_len);
 	dm_list_init(&lv->segments);
 	dm_list_add(&lv->segments, &raid1_seg->list);
-	_check_and_init_region_size(lv);
+
+	if (!_check_and_init_region_size(lv))
+		return 0;
+
 	lv->le_count = raid1_seg->len;
 	lv->size = raid1_seg->len * lv->vg->extent_size;
 PFL();
