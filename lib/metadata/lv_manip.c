@@ -1295,7 +1295,7 @@ static uint32_t _seg_area_len(struct lv_segment *seg, uint32_t extents)
 
 PFLA("lv=%s extents=%u", display_lvname(seg->lv), extents);
 PFLA("segtype=%s stripes=%u data_copies=%u", lvseg_name(seg), stripes, seg->data_copies);
-	r = lv_raid_rimage_extents(seg->segtype, extents - seg->reshape_len * seg->area_count,
+	r = raid_rimage_extents(seg->segtype, extents - seg->reshape_len * seg->area_count,
 				   stripes, seg->data_copies ?: 1);
 PFLA("area_len=%u", r);
 
@@ -1868,19 +1868,24 @@ PFLA("alloc_count=%u parity_count=%u metadata_area_count=%u", alloc_count, parit
 	total_extents = new_extents;
 PFLA("ah->area_multiple=%u area_count=%u new_extents=%u total_extents=%u", ah->area_multiple, area_count, new_extents, total_extents);
 	if (segtype_is_raid(segtype)) {
+#if 1
+		total_extents = raid_total_extents(segtype, total_extents, stripes, mirrors);
+#else
 		if (segtype_is_raid01(segtype))
 			total_extents /= stripes;
 		else if (segtype_is_any_raid10(segtype))
-			total_extents = stripes * lv_raid_rimage_extents(segtype, total_extents, stripes, mirrors);
+			total_extents = stripes * raid_rimage_extents(segtype, total_extents, stripes, mirrors);
+#endif
 
 PFLA("total_extents=%u stripes=%u mirrors=%u", total_extents, stripes, mirrors);
 
 		if (metadata_area_count) {
-PFLA("area_count=%u metadata_area_count=%u total_extents=%u", area_count, metadata_area_count, total_extents);
+			uint32_t cur_rimage_extents, new_rimage_extents;
 
-			ah->log_len = raid_rmeta_extents_delta(cmd,
-							       lv_raid_rimage_extents(segtype, existing_extents, stripes, mirrors),
-							       lv_raid_rimage_extents(segtype, existing_extents + new_extents, stripes, mirrors),
+PFLA("area_count=%u metadata_area_count=%u total_extents=%u", area_count, metadata_area_count, total_extents);
+			cur_rimage_extents = raid_rimage_extents(segtype, existing_extents, stripes, mirrors);
+			new_rimage_extents = raid_rimage_extents(segtype, existing_extents + new_extents, stripes, mirrors),
+			ah->log_len = raid_rmeta_extents_delta(cmd, cur_rimage_extents, new_rimage_extents, 
 							       region_size, extent_size);
 			ah->metadata_area_count = metadata_area_count;
 			ah->alloc_and_split_meta = !!ah->log_len;
@@ -1967,9 +1972,9 @@ static int _sufficient_pes_free(struct alloc_handle *ah, struct dm_list *pvms,
 {
 #if 1
 	uint32_t area_extents_needed =
-		lv_raid_rimage_extents(ah->segtype, extents_still_needed - allocated, ah->area_count, ah->data_copies);
+		raid_rimage_extents(ah->segtype, extents_still_needed - allocated, ah->area_count, ah->data_copies);
 	uint32_t parity_extents_needed =
-		lv_raid_rimage_extents(ah->segtype, extents_still_needed - allocated, ah->parity_count, ah->data_copies);
+		raid_rimage_extents(ah->segtype, extents_still_needed - allocated, ah->parity_count, ah->data_copies);
 #else
 	uint32_t area_extents_needed = (extents_still_needed - allocated) * ah->area_count / ah->area_multiple;
 	uint32_t parity_extents_needed = (extents_still_needed - allocated) * ah->parity_count / ah->area_multiple;
@@ -2121,10 +2126,10 @@ static int _setup_alloced_segment(struct logical_volume *lv, uint64_t status,
 
 PFLA("area_count=%u data_copies=%u segtype=%s", area_count, data_copies, segtype->name);
 	if (segtype_is_raid(segtype))
-		extents = lv_raid_rimage_extents(segtype, aa[0].len * stripes, stripes, data_copies);
+		extents = raid_rimage_extents(segtype, aa[0].len * stripes, stripes, data_copies);
 	else {
 #if 1
-		extents = lv_raid_rimage_extents(segtype, aa[0].len, stripes, data_copies) * stripes;
+		extents = raid_rimage_extents(segtype, aa[0].len, stripes, data_copies) * stripes;
 #else
 		area_multiple = _calc_area_multiple(segtype, area_count, stripes, data_copies);
 PFLA("aa[0]=%p area_multiple=%u", (void *) aa, area_multiple);
@@ -2199,11 +2204,11 @@ static int _alloc_parallel_area(struct alloc_handle *ah, uint32_t max_to_allocat
 	}
 
 #if 1
-	area_len = lv_raid_rimage_extents(ah->segtype, max_to_allocate, ah->area_count, 1 /* data_copies */);
+	area_len = raid_rimage_extents(ah->segtype, max_to_allocate, ah->area_count, 1 /* data_copies */);
 #else
 	area_len = max_to_allocate / ah->area_multiple;
 #endif
-PFLA("area_len=%u lv_raid_rimage_extents=%u", area_len, lv_raid_rimage_extents(ah->segtype, max_to_allocate, ah->area_count, ah->data_copies));
+PFLA("area_len=%u raid_rimage_extents=%u", area_len, raid_rimage_extents(ah->segtype, max_to_allocate, ah->area_count, ah->data_copies));
 
 	/* Reduce area_len to the smallest of the areas */
 	for (s = 0; s < ah->area_count + ah->parity_count; s++)
@@ -2354,7 +2359,7 @@ PFLA("area_multiple=%u remaining_seg_len=%u", area_multiple, remaining_seg_len);
 	     s < seg->area_count && (!max_areas || s <= max_areas);
 	     s++) {
 		if (seg_type(seg, s) == AREA_LV) {
-			uint32_t image_le = lv_raid_rimage_extents(seg->segtype, le - seg->le,
+			uint32_t image_le = raid_rimage_extents(seg->segtype, le - seg->le,
 								   seg->area_count - seg->segtype->parity_devs,
 								   1 /* seg->data_copies */);
 
@@ -2901,7 +2906,7 @@ found:
 static uint32_t _calc_required_extents(struct alloc_handle *ah, struct pv_area *pva, unsigned ix_pva, uint32_t max_to_allocate, alloc_policy_t alloc)
 {
 #if 1
-	uint32_t required = lv_raid_rimage_extents(ah->segtype, max_to_allocate, ah->area_count, ah->data_copies);
+	uint32_t required = raid_rimage_extents(ah->segtype, max_to_allocate, ah->area_count, ah->data_copies);
 #else
 	uint32_t required = max_to_allocate / ah->area_multiple;
 #endif
@@ -2961,7 +2966,8 @@ static void _report_needed_allocation_space(struct alloc_handle *ah,
 	uint32_t metadata_count, metadata_size;
 
 #if 1
-	parallel_area_size = lv_raid_rimage_extents(ah->segtype, ah->new_extents - alloc_state->allocated, ah->area_count, ah->data_copies);
+	parallel_area_size = raid_rimage_extents(ah->segtype, ah->new_extents - alloc_state->allocated,
+						 ah->area_count, ah->data_copies);
 #else
 	parallel_area_size = ah->new_extents - alloc_state->allocated;
 	parallel_area_size /= ah->area_multiple;
@@ -3326,7 +3332,7 @@ PFLA("max_to_allocate=%u alloc_parms->extents_still_needed=%u alloc_state->alloc
 		if (ah->parallel_areas) {
 #if 0
 			next_le = (alloc_parms->prev_lvseg ? alloc_parms->prev_lvseg->le + alloc_parms->prev_lvseg->len : 0) +
-				  lv_raid_rimage_extents(ah->segtype, alloc_state->allocated, ah->area_count, ah->data_copies);
+				  raid_rimage_extents(ah->segtype, alloc_state->allocated, ah->area_count, ah->data_copies);
 #else
 			next_le = (alloc_parms->prev_lvseg ? alloc_parms->prev_lvseg->le + alloc_parms->prev_lvseg->len : 0) + alloc_state->allocated / ah->area_multiple;
 #endif
@@ -3415,7 +3421,7 @@ static int _allocate(struct alloc_handle *ah,
 
 #if 1
         extents_still_needed = ah->new_extents - alloc_state.allocated;
-	rimage_extents = lv_raid_rimage_extents(ah->segtype, ah->new_extents, ah->area_count, 1);
+	rimage_extents = raid_rimage_extents(ah->segtype, ah->new_extents, ah->area_count, 1);
 	goto skip;
 PFLA("extents_still_needed=%u rimage_extents=%u", ah->new_extents - alloc_state.allocated, rimage_extents);
         if (extents_still_needed > rimage_extents &&
@@ -4307,7 +4313,7 @@ PFLA("first_seg(seg_lv(seg, s))->len=%u", first_seg(seg_lv(seg, s))->len);
 
 #if 1
 	seg->len += extents;
-	seg->area_len = _seg_area_len(seg, seg->len);
+	seg->area_len = _seg_area_len(seg, seg->len) + seg->reshape_len;
 #endif
 PFLA("segtye=%s lv->le_count=%u", lvseg_name(seg), lv->le_count);
 	lv->le_count += extents;

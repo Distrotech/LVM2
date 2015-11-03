@@ -406,7 +406,7 @@ PFLA("lv=%s segtype_str=%s", lv->name, segtype_str);
 #else
 PFLA("lv=%s data_copies=%u", lv->name, data_copies);
 	area_extents = segtype->parity_devs ?
-		       lv_raid_rimage_extents(segtype, extent_count, area_count - segtype->parity_devs, data_copies) : extent_count;
+		       raid_rimage_extents(segtype, extent_count, area_count - segtype->parity_devs, data_copies) : extent_count;
 PFLA("lv=%s area_extents=%u", lv->name, area_extents);
 	if (!(seg = alloc_lv_segment(segtype, lv, start_extent,
 				     extent_count, reshape_count, 0, 0, NULL, area_count,

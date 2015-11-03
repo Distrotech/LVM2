@@ -1704,6 +1704,7 @@ static void _lvconvert_raid_repair_ask(struct cmd_context *cmd,
 static int _lvconvert_raid(struct logical_volume *lv, struct lvconvert_params *lp)
 {
 	int replace = 0, image_count = 0;
+	uint32_t data_copies;
 	struct dm_list *failed_pvs;
 	struct cmd_context *cmd = lv->vg->cmd;
 	struct lv_segment *seg = first_seg(lv);
@@ -1713,16 +1714,9 @@ static int _lvconvert_raid(struct logical_volume *lv, struct lvconvert_params *l
 	/* -m0 can change raid0 with one stripe and raid4/5 with 2 to linear */
 	if (arg_count(cmd, mirrors_ARG) &&
 	    !seg_is_linear(seg) &&
-#if 1
 	    !seg_is_raid(seg) &&
 	    !seg_is_mirrored(seg) &&
 	    !seg_is_striped(seg)) {
-#else
-	    !seg_is_mirrored(seg) &&
-	    !(seg_is_any_raid0(seg) && seg->area_count == 1) &&
-	    !(seg_is_raid4(seg) && seg->area_count == 2) &&
-	    !(seg_is_any_raid5(seg) && seg->area_count == 2)) {
-#endif
 		log_error("'--mirrors/-m' is not compatible with %s",
 			  lvseg_name(seg));
 		return 0;
@@ -1764,9 +1758,9 @@ PFLA("image_count=%u\n", image_count);
 
 	if ((seg_is_linear(seg) || seg_is_striped(seg) || seg_is_mirror(seg) || seg_is_raid(seg)) &&
 	    (arg_count(cmd, type_ARG) ||
-	     image_count ||
-	     arg_count(cmd, stripes_long_ARG) ||
-	     arg_count(cmd, stripesize_ARG) ||
+	     arg_is_set(cmd, mirrors_ARG) ||
+	     arg_is_set(cmd, stripes_long_ARG) ||
+	     arg_is_set(cmd, stripesize_ARG) ||
 	     arg_is_set(cmd, unduplicate_ARG))) {
 		unsigned stripes = 0;
 		unsigned stripe_size = arg_count(cmd, stripesize_ARG) ? lp->stripe_size  : 0;
@@ -1817,13 +1811,13 @@ PFLA("image_count=%u\n", image_count);
 				log_error("--mirrors/--stripes invalid with linear");
 				return 0;
 			}
-			image_count = stripes = 1;
+			data_copies = stripes = 1;
 			stripe_size = 0;
 		}
 
 		return lv_raid_convert(lv, arg_count(cmd, type_ARG) ? lp->segtype : NULL, lp->yes, lp->force,
 				       arg_is_set(cmd, duplicate_ARG), arg_is_set(cmd, unduplicate_ARG),
-				       image_count, lp->mirrors, lp->region_size,
+				       arg_is_set(cmd, mirrors_ARG) ? lp->mirrors : -1, lp->region_size,
 				       stripes, stripe_size, lp->pool_data_name, lp->pvh);
 	}
 
