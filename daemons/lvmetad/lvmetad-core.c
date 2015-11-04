@@ -258,7 +258,9 @@ struct vg_info {
 	uint32_t flags; /* VGFL_ */
 };
 
-#define GLFL_INVALID 0x00000001
+#define GLFL_INVALID    0x00000001
+#define GLFL_DUPLICATES 0x00000002
+
 #define VGFL_INVALID 0x00000001
 
 typedef struct {
@@ -2281,6 +2283,7 @@ static response pv_found(lvmetad_state *s, request r)
 				         arg_device, arg_pvid);
 				unlock_pvid_to_pvmeta(s);
 				dm_config_destroy(new_pvmeta);
+				s->flags |= GLFL_DUPLICATES;
 				return reply_fail("Ignore duplicate PV");
 			}
 		}
@@ -2304,6 +2307,7 @@ static response pv_found(lvmetad_state *s, request r)
 			 new_device, old_device, arg_pvid);
 		unlock_pvid_to_pvmeta(s);
 		dm_config_destroy(new_pvmeta);
+		s->flags |= GLFL_DUPLICATES;
 		return reply_fail("Ignore duplicate PV");
 	}
 
@@ -2513,12 +2517,19 @@ static response vg_remove(lvmetad_state *s, request r)
 static response set_global_info(lvmetad_state *s, request r)
 {
 	const int global_invalid = daemon_request_int(r, "global_invalid", -1);
+	const int duplicates = daemon_request_int(r, "duplicates", -1);
 
 	if (global_invalid == 1)
 		s->flags |= GLFL_INVALID;
 
 	else if (global_invalid == 0)
 		s->flags &= ~GLFL_INVALID;
+
+	if (duplicates == 1)
+		s->flags |= GLFL_DUPLICATES;
+
+	else if (duplicates == 0)
+		s->flags &= ~GLFL_DUPLICATES;
 
 	return daemon_reply_simple("OK", NULL);
 }
@@ -2527,6 +2538,7 @@ static response get_global_info(lvmetad_state *s, request r)
 {
 	return daemon_reply_simple("OK",
 				   "global_invalid = %d", (s->flags & GLFL_INVALID) ? 1 : 0,
+				   "duplicates = %d", (s->flags & GLFL_DUPLICATES) ? 1 : 0,
 				   "token = %s", s->token[0] ? s->token : "none",
 				   NULL);
 }

@@ -1658,6 +1658,22 @@ int lvm_run_command(struct cmd_context *cmd, int argc, char **argv)
 				log_error("Failed to scan devices");
 				return ECMD_FAILED;
 			}
+		} else if (lvmetad_check_duplicates(cmd)) {
+			/*
+			 * Warn if duplicate PVs exist.  Because we're using lvmetad,
+			 * we won't be scanning devices, so we rely on lvmetad to tell
+			 * us if duplicate devices were seen by the last device scan.
+			 *
+			 * FIXME: maybe enhance this by listing the actual duplicate devices?
+			 * The device scan that set the duplicates flag in lvmetad could
+			 * also send lvmetad the names of the duplicate devices it ignored.
+			 * That list could then be returned here and included in this
+			 * warning.  However, that list would not always be accurate,
+			 * because a "full picture" scan is needed to construct a truely
+			 * accurate picture of duplicate PVs.
+			 */
+			log_warn("WARNING: duplicate PVs have been found.");
+			log_warn("WARNING: duplicate PVs can be resolved with filters or vgimportclone.");
 		}
 	}
 

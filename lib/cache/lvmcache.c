@@ -79,6 +79,7 @@ static int _scanning_in_progress = 0;
 static int _has_scanned = 0;
 static int _vgs_locked = 0;
 static int _vg_global_lock_held = 0;	/* Global lock held when cache wiped? */
+static int _found_duplicates = 0;
 
 int lvmcache_init(void)
 {
@@ -1544,6 +1545,23 @@ int lvmcache_update_vg(struct volume_group *vg, unsigned precommitted)
 	return 1;
 }
 
+/*
+ * When scanning all devices, lvmcache detects duplicate PVs exist if it sees
+ * two different devices with the same pvid.  When it sees this, it ignores the
+ * duplicate device, and sets _found_duplicates.  After the scan is done, we
+ * set or clear a flag in lvmetad indicating duplicate PVs, so that subsequent
+ * commands can print warnings about thatm.
+ */
+int lvmcache_found_duplicates(void)
+{
+	return _found_duplicates;
+}
+
+void lvmcache_clear_found_duplicates(void)
+{
+	_found_duplicates = 0;
+}
+
 struct lvmcache_info *lvmcache_add(struct labeller *labeller, const char *pvid,
 				   struct device *dev,
 				   const char *vgname, const char *vgid,
@@ -1592,6 +1610,7 @@ struct lvmcache_info *lvmcache_add(struct labeller *labeller, const char *pvid,
 			log_warn("Ignore duplicate PV on device %s. Already using PV from device %s. (%s)",
 				 dev_name(dev), dev_name(existing->dev), pvid_s);
 			log_warn("Use the global_filter to select a different device.");
+			_found_duplicates = 1;
 			return NULL;
 		} else {
 			/*
