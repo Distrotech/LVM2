@@ -186,5 +186,7 @@ int lvmcache_contains_lock_type_sanlock(struct cmd_context *cmd);
 void lvmcache_get_max_name_lengths(struct cmd_context *cmd,
 			unsigned *pv_max_name_len, unsigned *vg_max_name_len);
 
+int lvmcache_found_duplicates(void);
+void lvmcache_clear_found_duplicates(void);
 
 #endif

@@ -314,6 +314,80 @@ out:
 	return ret;
 }
 
+static void _send_duplicates(struct cmd_context *cmd, int set)
+{
+	daemon_reply reply;
+
+	log_debug_lvmetad("lvmetad send duplicates %d", set);
+
+	reply = daemon_send_simple(_lvmetad, "set_global_info",
+				   "token = %s", "skip",
+				   "duplicates = %d", set,
+				   NULL);
+	if (reply.error)
+		log_error("_send_duplicates error %d", reply.error);
+
+	if (strcmp(daemon_reply_str(reply, "response", ""), "OK"))
+		log_error("_send_duplicates not ok");
+
+	daemon_reply_destroy(reply);
+}
+
+/*
+ * The current command scanned devices and found a duplicate
+ * PV, so it sets the duplicates flag in lvmetad,
+ * which causes subsequent commands that use lvmetad to
+ * print a warning about duplicate PVs.
+ */
+void lvmetad_set_duplicates(struct cmd_context *cmd)
+{
+	_send_duplicates(cmd, 1);
+}
+
+/*
+ * The current command scanned devices and did not find any
+ * duplicate PVs, so it can clear the duplicates
+ * flag in lvmetad, and subsequent commands will not
+ * warn about duplicate PVs.
+ */
+void lvmetad_clear_duplicates(struct cmd_context *cmd)
+{
+	_send_duplicates(cmd, 0);
+}
+
+/*
+ * The duplicates flag can be set in lvmetad because
+ * the previous command that scanned devices found a duplicate
+ * and set the flag using lvmetad_set_duplicates(),
+ * or because a new PV was added to lvmetad by
+ * 'pvscan --cache dev', and lvmetad found that dev was a
+ * duplicate and set its duplicates flag.
+ */
+int lvmetad_check_duplicates(struct cmd_context *cmd)
+{
+	daemon_reply reply;
+	int duplicates;
+
+	reply = daemon_send_simple(_lvmetad, "get_global_info",
+				   "token = %s", "skip",
+				    NULL);
+
+	if (reply.error) {
+		log_error("lvmetad_check_duplicates get_global_info error %d", reply.error);
+		return 0;
+	}
+
+	if (strcmp(daemon_reply_str(reply, "response", ""), "OK")) {
+		log_error("lvmetad_check_duplicates get_global_info not ok");
+		return 0;
+	}
+
+	duplicates = daemon_reply_int(reply, "duplicates", 0);
+	daemon_reply_destroy(reply);
+
+	return duplicates;
+}
+
 static int _lvmetad_pvscan_all_devs(struct cmd_context *cmd, activation_handler handler,
 				    int ignore_obsolete);
 
@@ -1485,6 +1559,8 @@ static int _lvmetad_pvscan_all_devs(struct cmd_context *cmd, activation_handler 
 		return 0;
 	}
 
+	lvmcache_clear_found_duplicates();
+
 	log_debug_lvmetad("Scanning all devices to update lvmetad.");
 
 	if (!(iter = dev_iter_create(cmd->lvmetad_filter, 1))) {
@@ -1526,6 +1602,21 @@ static int _lvmetad_pvscan_all_devs(struct cmd_context *cmd, activation_handler 
 	_lvmetad_token = future_token;
 	if (!_token_update())
 		return 0;
+
+	/*
+	 * We are done scanning all devices, and lvmcache set a flag if
+	 * duplicate PVs were seen.  If using lvmetad, and duplicates were seen
+	 * during the scan, then set an "duplicates" flag in lvmetad to
+	 * indicate duplicate PVs exist.  Subsequent commands will check for
+	 * this duplicates flag, and if it's set they will warn about duplicate
+	 * PVs.  When the next rescan happens, this flag will be set or cleared
+	 * again dependin on whether the duplicates still exist or have been
+	 * resolved.
+	 */
+	if (lvmcache_found_duplicates())
+		lvmetad_set_duplicates(cmd);
+	else
+		lvmetad_clear_duplicates(cmd);
 
 	return r;
 }

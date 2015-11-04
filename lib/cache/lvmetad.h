@@ -175,6 +175,9 @@ int lvmetad_pvscan_foreign_vgs(struct cmd_context *cmd, activation_handler handl
 int lvmetad_vg_clear_outdated_pvs(struct volume_group *vg);
 void lvmetad_validate_global_cache(struct cmd_context *cmd, int force);
 int lvmetad_token_matches(struct cmd_context *cmd);
+void lvmetad_set_duplicates(struct cmd_context *cmd);
+void lvmetad_clear_duplicates(struct cmd_context *cmd);
+int lvmetad_check_duplicates(struct cmd_context *cmd);
 
 #  else		/* LVMETAD_SUPPORT */
 
@@ -206,6 +209,9 @@ int lvmetad_token_matches(struct cmd_context *cmd);
 #    define lvmetad_validate_global_cache(cmd, force)	do { } while (0)
 #    define lvmetad_token_matches(cmd) (1)
 #    define lvmetad_is_connected() (0)
+#    define lvmetad_set_duplicates() do { } while (0)
+#    define lvmetad_clear_duplicates() do { } while (0)
+#    define lvmetad_check_duplicates() (0)
 
 #  endif	/* LVMETAD_SUPPORT */
 
