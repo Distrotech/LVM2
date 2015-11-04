@@ -28,6 +28,93 @@
 
 #include "lvmetad.h"
 
+/*
+ * Duplicate PV handling
+ *
+ * Duplicate PVs exist when lvm sees the same pvid on two different devices.
+ *
+ * Kinds of duplicates
+ * -------------------
+ *
+ * The two different devices could refer to the same underlying storage, e.g.
+ * multipath or a dm identity device wrapper, or they could refer to different
+ * underlying storage, e.g. dd one device to another.
+ *
+ * When multipath is running correct, lvm should not see both underlying paths
+ * so duplicates are not seen.
+ *
+ * When duplicate PVs exist on different underlying storage, the prescribed way
+ * of resolving this is to run vgimportclone on one of the devices (generally
+ * the new one or the one that's not used).
+ *
+ * When duplicate PVs exist for the same underlying storage, this should
+ * generally not be a persistent condition.  If it is a persistent condition
+ * for some reason, then all but one of the duplicate paths should be rejected
+ * using the global_filter, keeping the preferred path as the one not removed
+ * by the filter.
+ *
+ * Duplicate PVs are detected by lvm in two places
+ * -----------------------------------------------
+ *
+ * 1. An lvm command performs a full device scan.  Device A with pvid X is
+ * added to lvmcache, then device B with the same pvid X is added to lvmcache.
+ * When adding B, lvmcache sees that A already exists with the same pvid.
+ * lvmcache ignores device B.
+ *
+ * 2. 'pvscan --cache $dev' is run when the new device appears and generates a
+ * uevent.  This command *only* reads the one dev, and sends the information
+ * from the dev (PV and VG info) to lvmetad.  lvmetad sees that the pvid
+ * already exists but on a different device and ignores the new device.
+ *
+ * When not using lvmetad, only 1 is possible, but when using lvmetad, both 1
+ * and 2 occur.
+ *
+ * How lvm handles duplicate PVs
+ * -----------------------------
+ *
+ * - When a full scan sees a duplicate device in lvmcache_add(), it prints a
+ *   warning, and does not add that device/PV to lvmcache.  It leaves the
+ *   previously seen device/PV in lvmcache.  Any PV/VG info from the newly seen
+ *   duplicate is ignored.
+ *
+ * - If the full scan is being done to populate the lvmetad cache, an ignored
+ *   device is not sent to lvmetad.
+ *
+ * - A scan of a single dev (pvscan --cache dev) does not read all devices so
+ *   it does not detect duplicates.  But, sending the info from that dev can
+ *   cause lvmetad to detect it's a duplicate based on existing devices lvmetad
+ *   already knows about.  lvmetad ignores the new device if it has the same
+ *   pvid as another existing device.
+ *
+ * - When a command gets PVs from lvmetad, it does not see any duplicates
+ *   because the duplicates were ignored by lvmetad.  This means when a command
+ *   adds devices to lvmcache from lvmetad, it will never encounter duplicates.
+ *
+ * So, both lvmcache and lvmetad ignore a device if its pvid is already known
+ * from another device.  The ignored device will look like a non-PV when
+ * displayed by pvs -a or when 'pvs $dev' is run on it.  In lvm commands, the
+ * PV will appear to exist only on whichever device was seen first.
+ *
+ * When not using lvmetad, all commands scan all devices and will always see
+ * and ignore duplicate devices in lvmcache, using only the first that they
+ * happen to find.
+ *
+ * When using lvmetad, duplicates are seen only by 1. the command scanning all
+ * devs to populate lvmetad, and 2. by lvmetad when a new duplicate dev is sent
+ * by pvscan --cache dev.  lvmetad does not remember any duplicate devices, and
+ * subseqent commands using lvmetad are unaware of the duplicate device that
+ * was ignored.
+ *
+ * When not using lvmetad and a command is scanning all devices, warnings are
+ * printed about the duplicates when they are seen and ignored by lvmcache.
+ *
+ * When lvmetad is used and scanning all devices sees a duplicate, it sets a
+ * flag in lvmetad indicating that duplicates have been seen.  Also if lvmetad
+ * is sent a duplicate PV from pvscan, it sets this flag also.  When subsequent
+ * commands use lvmetad, they check for this flag and print a warning about
+ * duplicates if it's set.
+ */
+
 #define CACHE_INVALID	0x00000001
 #define CACHE_LOCKED	0x00000002
 
@@ -79,6 +166,7 @@ static int _scanning_in_progress = 0;
 static int _has_scanned = 0;
 static int _vgs_locked = 0;
 static int _vg_global_lock_held = 0;	/* Global lock held when cache wiped? */
+static int _found_duplicates = 0;
 
 int lvmcache_init(void)
 {
@@ -1544,6 +1632,23 @@ int lvmcache_update_vg(struct volume_group *vg, unsigned precommitted)
 	return 1;
 }
 
+/*
+ * When scanning all devices, lvmcache detects duplicate PVs exist if it sees
+ * two different devices with the same pvid.  When it sees this, it ignores the
+ * duplicate device, and sets _found_duplicates.  After the scan is done, we
+ * set or clear a flag in lvmetad indicating duplicate PVs, so that subsequent
+ * commands can print warnings about thatm.
+ */
+int lvmcache_found_duplicates(void)
+{
+	return _found_duplicates;
+}
+
+void lvmcache_clear_found_duplicates(void)
+{
+	_found_duplicates = 0;
+}
+
 struct lvmcache_info *lvmcache_add(struct labeller *labeller, const char *pvid,
 				   struct device *dev,
 				   const char *vgname, const char *vgid,
@@ -1592,6 +1697,7 @@ struct lvmcache_info *lvmcache_add(struct labeller *labeller, const char *pvid,
 			log_warn("Ignore duplicate PV on device %s. Already using PV from device %s. (%s)",
 				 dev_name(dev), dev_name(existing->dev), pvid_s);
 			log_warn("Use the global_filter to select a different device.");
+			_found_duplicates = 1;
 			return NULL;
 		} else {
 			/*
