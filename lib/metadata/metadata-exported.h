@@ -135,9 +135,10 @@
 								   FIXME: Remove this flag once we have indexed
 									  vg->removed_lvs for quick lookup.
 								*/
-#define LV_ERROR_WHEN_FULL		UINT64_C(0x0080000000000000)    /* LV - error when full */
+#define LV_ERROR_WHEN_FULL	UINT64_C(0x0080000000000000)    /* LV - error when full */
 #define LOCKD_SANLOCK_LV	UINT64_C(0x0100000000000000)	/* LV - Internal use only */
-/* Next unused flag:		UINT64_C(0x0200000000000000)    */
+#define LV_RESHAPE_REMOVED	UINT64_C(0x0200000000000000)	/* LV got removed from raid set by shrinking reshape */
+/* Next unused flag:		UINT64_C(0x0400000000000000)    */
 
 /* Format features flags */
 #define FMT_SEGMENTS		0x00000001U	/* Arbitrary segment params? */

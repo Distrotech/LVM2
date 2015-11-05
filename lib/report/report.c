@@ -1990,12 +1990,34 @@ static int _segmonitor_disp(struct dm_report *rh, struct dm_pool *mem,
 				GET_FIELD_RESERVED_VALUE(seg_monitor_undef));
 }
 
+static int _get_seg_used_stripes(const struct lv_segment *seg)
+{
+	uint32_t s;
+	uint32_t stripes = seg->area_count;
+
+	for (s = seg->area_count - 1; s; s--)
+		if (seg_type(seg, s) == AREA_LV &&
+		    (seg_lv(seg, s)->status & LV_RESHAPE_REMOVED))
+			stripes--;
+
+	return stripes;
+}
+
+static int _seg_stripes_disp(struct dm_report *rh, struct dm_pool *mem,
+			     struct dm_report_field *field,
+			     const void *data, void *private)
+{
+	uint32_t stripes = _get_seg_used_stripes((const struct lv_segment *) data);
+
+	return dm_report_field_uint32(rh, field, &stripes);
+}
+
 static int _segdata_stripes_disp(struct dm_report *rh, struct dm_pool *mem,
 				 struct dm_report_field *field,
 				 const void *data, void *private)
 {
 	const struct lv_segment *seg = (const struct lv_segment *) data;
-	uint32_t stripes = seg->area_count - seg->segtype->parity_devs;
+	uint32_t stripes = _get_seg_used_stripes(seg) - seg->segtype->parity_devs;
 
 	return dm_report_field_uint32(rh, field, &stripes);
 }
@@ -2112,7 +2134,10 @@ static int _segsizepe_disp(struct dm_report *rh,
 	const struct lv_segment *seg = (const struct lv_segment *) data;
 
 	if (seg) {
-		uint32_t len = seg->len - seg->reshape_len * (seg->area_count - seg->segtype->parity_devs);
+		uint32_t len = seg->len;
+
+		if (seg->area_count > 1)
+			len -= seg->reshape_len * (seg->area_count - seg->segtype->parity_devs);
 
 		return dm_report_field_uint32(rh, field, &len);
 	}
@@ -3111,6 +3136,8 @@ static int _lvhealthstatus_disp(struct dm_report *rh, struct dm_pool *mem,
 				health = "mismatches exist";
 		} else if (lv->status & LV_WRITEMOSTLY)
 			health = "writemostly";
+		else if (lv->status & LV_RESHAPE_REMOVED)
+			health = "reshape removed";
 	} else if (lv_is_thin_pool(lv) && (lvdm->seg_status.type != SEG_STATUS_NONE)) {
 		if (lvdm->seg_status.type != SEG_STATUS_THIN_POOL)
 			return _field_set_value(field, GET_FIRST_RESERVED_NAME(health_undef),

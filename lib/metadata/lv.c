@@ -798,6 +798,8 @@ char *lv_attr_dup_with_info_and_seg_status(struct dm_pool *mem, const struct lv_
 				repstr[8] = 'm';  /* RAID has 'm'ismatches */
 		} else if (lv->status & LV_WRITEMOSTLY)
 			repstr[8] = 'w';  /* sub-LV has 'w'ritemostly */
+		else if (lv->status & LV_RESHAPE_REMOVED)
+			repstr[8] = 'R';  /* sub-LV got 'R'emoved from raid set by reshaping */
 	} else if (lv_is_thin_pool(lv) &&
 		   (lvdm->seg_status.type != SEG_STATUS_NONE)) {
 		if (lvdm->seg_status.type == SEG_STATUS_UNKNOWN)

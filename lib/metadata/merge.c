@@ -70,6 +70,20 @@ int lv_merge_segments(struct logical_volume *lv)
 	if (error_count++ > ERROR_MAX)	\
 		goto out
 
+/* Return number of data rimages for @seg paying attention to delta disks (reshaping) */
+static uint32_t _data_rimage_count(struct lv_segment *seg)
+{
+	uint32_t r = seg->area_count - seg->segtype->parity_devs, s;
+
+#if 0
+	for (s = 0; s < seg->area_count; s++)
+		if (seg_type(seg, s) == AREA_LV &&
+		    (seg_lv(seg, s)->status & LV_RESHAPE_DELTA_DISKS_MINUS))
+			r--;
+#endif
+
+	return r;
+}
 /*
  * Verify that an LV's segments are consecutive, complete and don't overlap.
  */
@@ -141,8 +155,8 @@ int check_lv_segments(struct logical_volume *lv, int complete_vg)
 		}
 
 		area_multiplier = (seg_is_striped_raid(seg) || seg_is_striped(seg)) ? seg->area_count - seg->segtype->parity_devs : 1;
+		data_rimage_count = _data_rimage_count(seg);
 
-		data_rimage_count = seg->area_count - seg->segtype->parity_devs;
 PFLA("lv=%s segtype=%s seg->len=%u seg->area_len=%u seg->area_count=%u data_rimage_count=%u parity_devs=%u area_multiplier=%u seg->data_copies=%u rimageextents=%u seg->reshape_len=%u", lv->name, seg->segtype->name, seg->len, seg->area_len, seg->area_count, data_rimage_count, seg->segtype->parity_devs, area_multiplier, seg->data_copies, raid_rimage_extents(seg->segtype, seg->len - data_rimage_count * seg->reshape_len, data_rimage_count, seg->data_copies), seg->reshape_len);
 #if 1
 		if (raid_rimage_extents(seg->segtype, seg->len - data_rimage_count * seg->reshape_len, data_rimage_count,
