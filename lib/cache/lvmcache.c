@@ -29,6 +29,136 @@
 #include "lvmetad.h"
 
 /*
+
+Plan for duplicate PVs
+
+Step 1
+------
+
+Step 1 in improving duplicate handling is to remove
+the existing duplicate/altdev handling from both lvm
+commands and lvmetad.  The effect of this is that
+commands and lvmetad use the first device they see
+for a PV, and ignore any subsequent devices holding
+that same PV.  This is a clean starting point for
+rethinking how to handle duplicates.
+
+With step 1 in place, given a duplicate PV pair dev1
+and dev2, lvm sees dev1 first and uses it, and sees
+dev2 second and ignores it.  dev1 appears to be the
+PV and dev2 appears to be a non-PV.  In this condition,
+dev2 can still be imported using vgimportclone.
+
+Comparing the lvm behavior before and after step 1,
+there are some differences:
+
+1. When warnings about duplicates are printed.
+   Before, lvm would print warnings about duplicates
+   from any command that looked at them, for as long
+   as the duplicates persisted.
+   After, commands using lvmetad would not print warnings
+   about duplicates.
+
+2. How dev2 looks in 'pvs -a'.
+   Before, dev1 and dev2 were both listed with the same
+   PV and VG information.  After, the chosen device (dev1)
+   is listed as the PV, and the ignored device (dev2) is
+   listed like a non-PV.
+
+3. How does 'pvs dev2' look?
+   Before, 'pvs dev2' would display dev1, and
+   'pvs dev1 dev2' would display both dev1 and dev2
+   as the same PV/VG.
+   After, 'pvs dev2' prints a "PV not found" error,
+   since lvm handled dev2 as a non-PV.  'pvs dev1'
+   displays the PV/VG information.
+
+4. Using the ignored duplicate device.
+   Before, running pvchange -u or pvcreate on the
+   unused duplicate dev resulted in various failures.
+   After, running pvcreate on the ignored duplicate
+   dev creates a new PV on the device, consistent
+   with the fact that lvm considers the ignored
+   device a non-PV.
+
+Changes to consider for step 2:
+
+1. Persistent duplicate warnings when using lvmetad.
+   This is already partly restored in a more general
+   form, and can be expanded to give more specifics.
+
+2. When the ignored duplicate dev2 is listed by pvs -a,
+   it should not look the same as dev1, but should have
+   some distinct output indicating it's an ignored
+   duplicate device.  An attr flag?  I don't think it
+   should display the VG name since it's not being used
+   in the VG.  Only the device chosen as the PV should
+   display the VG name.
+
+3. Similarly, if we want 'pvs dev2' to display something
+   other than "not a PV", we should follow the same
+   distinct output as above.  We want the output to
+   give a clear picture about which device/PV lvm is
+   using, and which device lvm is not using.
+
+4. Should we prevent pvcreate on an ignored duplicate
+   device?
+
+Step 2
+------
+
+Step 2 is a new design that reintroduces a more limited form of handling
+duplicate devices.  Before step 1, duplicate handling appeared throughout
+lvm in a variety of ways and workarounds.  After step 1, lvm ignored
+duplicate devices, treating them as non-PVs.  This functions better, but
+makes it hard to know about ignored devices.  In step 2, lvm is aware of
+duplicate devices, providing some information about them, but treating
+them largely as unusable.
+
+In the new design, duplicate devices are conceptually treated as a special
+class of devices.  They are isolated from the core set of metadata used by
+lvm, and are not exposed to the core functions of lvm during normal
+command processing.  Instances where lvm wants to do something with these
+devices are considered special cases.
+
+The first device seen in a duplicate pair is chosen to be the PV.  That
+device is used in the core set of metadata, and is used by commands.  If
+subsequent devices are found with the same pvid, those devices are added
+to the special class of duplicates that is isolated from the core metadata
+and not seen during normal processing.
+
+For special cases, when lvm wants to do something with an isolated
+duplicate, that device is treated individually, and not mixed in the
+metadata or structures where the chosen device for the PV exists.  There
+is never a chance that a duplicate pair will conflict during processing.
+Once the first device is seen and chosen, that device is the PV and there
+is no ambiguity about which device is the PV.
+
+What can be done with duplicates:
+
+1. They can be imported with vgimportclone.
+2. They can be displayed with process_each_pv.
+
+1 already works, so changes are focused on supporting 2.
+
+To display duplicate devices with process_each_pv, we'll keep a special
+list of duplicate devices in lvmcache or dev-cache.  These are the devices
+being ignored by the core lvm metadata and functions.  At the end of
+process_each_pv, a new loop will iterate through the list of duplicates
+(when the command needs it), to process each entry in isolation.
+
+The list of duplicates in lvmcache is copied from the lvmetad list when
+lvmetad is used, or it is populated by lvmcache_add() during scanning when
+lvmetad is not used.
+
+If we want to prevent pvcreate from being run on one of the ignored
+duplicate devices, then pvcreate would also check if the specified device
+is in the list of duplicates.
+
+*/
+
+
+/*
  * Duplicate PV handling
  *
  * Duplicate PVs exist when lvm sees the same pvid on two different devices.
