@@ -1811,11 +1811,12 @@ PFLA("image_count=%u\n", image_count);
 				log_error("--mirrors/--stripes invalid with linear");
 				return 0;
 			}
+
 			data_copies = stripes = 1;
 			stripe_size = 0;
 
 		} else
-		       data_copies = arg_is_set(cmd, mirrors_ARG) ? lp->mirrors : -1;
+			data_copies = arg_is_set(cmd, mirrors_ARG) ? lp->mirrors + 1 : -1;
 
 		return lv_raid_convert(lv, arg_count(cmd, type_ARG) ? (struct segment_type *) lp->segtype : NULL,
 				       lp->yes, lp->force,

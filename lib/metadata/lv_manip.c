@@ -1397,6 +1397,24 @@ static int _is_layered_lv(struct logical_volume *lv, uint32_t s)
 		!seg_is_striped(seg1);
 }
 
+/* Find smallest one of any sub lvs of @seg */
+static uint32_t _seg_smallest_sub_lv(struct lv_segment *seg)
+{
+	uint32_t r = ~0U, s, lvs = 0;
+
+	/* Find smallest LV and use that for length of top-level LV */
+	for (s = 0; s < seg->area_count; s++) {
+		if (seg_type(seg, s) == AREA_LV) {
+			lvs++;
+		
+			if (seg_lv(seg, s)->le_count < r)
+				r = seg_lv(seg, s)->le_count;
+		}
+	}
+
+	return lvs ? r : 0;
+}
+
 /*
  * Entry point for all LV reductions in size.
  */
@@ -1432,11 +1450,11 @@ PFLA("end recursive seg_lv(seg, %u)=%s", s, display_lvname(seg_lv(seg, s)));
 		}
 
 		if (reduced) {
-PFLA("reduce recursive lv=%s le_count=%u extents=%u", display_lvname(lv), lv->le_count, extents);
-			seg->len -= extents;
+			seg->len = _seg_smallest_sub_lv(seg);
 			seg->area_len = _seg_area_len(seg, seg->len);
 			lv->le_count = seg->len;
 			lv->size = (uint64_t) lv->le_count * lv->vg->extent_size;
+
 			if (delete &&
 			    !lv->le_count &&
 			    seg->meta_areas) {
@@ -1765,9 +1783,9 @@ static struct alloc_handle *_alloc_init(struct cmd_context *cmd,
 					struct dm_pool *mem,
 					const struct segment_type *segtype,
 					alloc_policy_t alloc, int approx_alloc,
-					int extend,
 					uint32_t existing_extents,
 					uint32_t new_extents,
+					uint32_t areas,
 					uint32_t mirrors /* #data_copies */,
 					uint32_t stripes,
 					uint32_t metadata_area_count,
@@ -1792,7 +1810,7 @@ static struct alloc_handle *_alloc_init(struct cmd_context *cmd,
 	else
 		area_count = stripes < 2 ? mirrors : stripes;
 
-PFLA("extend=%u existing_extents=%u, new_extents=%u, area_count=%u mirrors=%u stripes=%u metadata_area_count=%u", extend, existing_extents, new_extents, area_count, mirrors, stripes, metadata_area_count);
+PFLA("existing_extents=%u, new_extents=%u, area_count=%u mirrors=%u stripes=%u metadata_area_count=%u", existing_extents, new_extents, area_count, mirrors, stripes, metadata_area_count);
 
 	/*
 	 * It is a requirement that RAID 4/5/6 have to have at least 2 stripes.
@@ -1809,7 +1827,9 @@ PFLA("extend=%u existing_extents=%u, new_extents=%u, area_count=%u mirrors=%u st
 	 * exists and they only want replacement drives.
 	 */
 	/* HM FIXME: avoid this overload to define the parity_count to allocate! */
-	parity_count = (area_count <= segtype->parity_devs) ? 0 : segtype->parity_devs;
+	// parity_count = (area_count <= segtype->parity_devs) ? 0 : segtype->parity_devs;
+
+	parity_count = (areas && area_count < 2) ? 0 : segtype->parity_devs;
 
 	alloc_count = area_count + parity_count;
 
@@ -3595,9 +3615,15 @@ struct alloc_handle *allocate_extents(struct volume_group *vg,
 				      alloc_policy_t alloc, int approx_alloc,
 				      struct dm_list *parallel_areas)
 {
-	int extend = (lv && lv->le_count) ? 1 : 0;
 	struct lv_segment *seg = lv ? first_seg(lv) : NULL;
 	struct alloc_handle *ah;
+	uint32_t areas;
+
+	if (lv &&
+	    first_seg(lv))
+		areas = first_seg(lv)->area_count;
+	else
+		areas = 0;
 
 PFLA("segtype=%s stripes=%u mirrors=%u, log_count=%u, region_size=%u extents=%u",
      segtype->name, stripes, mirrors, log_count, region_size, extents);
@@ -3625,8 +3651,9 @@ PFLA("segtype=%s stripes=%u mirrors=%u, log_count=%u, region_size=%u extents=%u"
 	if (alloc >= ALLOC_INHERIT)
 		alloc = vg->alloc;
 
-	if (!(ah = _alloc_init(vg->cmd, vg->vgmem, segtype, alloc, approx_alloc, extend,
-			       lv ? lv->le_count : 0, extents, mirrors, stripes, log_count,
+	if (!(ah = _alloc_init(vg->cmd, vg->vgmem, segtype, alloc, approx_alloc,
+			       lv ? lv->le_count : 0, extents, areas,
+			       mirrors, stripes, log_count,
 			       vg->extent_size, region_size,
 			       parallel_areas)))
 		return_NULL;
@@ -4376,9 +4403,9 @@ PFLA("recursive seg_lv(seg, %u)=%s extents=%u", s, display_lvname(lv1), extents)
 		}
 
 		if (extended) {
-			seg->len += extents;
+			seg->len =  _seg_smallest_sub_lv(seg);
 			seg->area_len = _seg_area_len(seg, seg->len);
-			lv->le_count += extents;
+			lv->le_count = seg->len;
 			lv->size = (uint64_t) lv->le_count * lv->vg->extent_size;
 			return 1;
 		}
@@ -4507,7 +4534,7 @@ PFLA("extents=%u ah->new_extents=%u lv->le_count=%u stripes=%u sub_lv_count=%u",
 			goto_out;
 
 		/*
-		 * If we are expanding an existing mirror, we can skip the
+		 * If we are expanding an existing mirror/raid1, we can skip the
 		 * resync of the extension if the LV is currently in-sync
 		 * and the LV has the LV_NOTSYNCED flag set.
 		 */
