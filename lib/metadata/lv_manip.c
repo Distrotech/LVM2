@@ -1290,11 +1290,11 @@ static int _lv_segment_add_areas(struct logical_volume *lv,
 /* Return area_len for @extents based on @seg's properties (e.g. striped, ...) */
 static uint32_t _seg_area_len(struct lv_segment *seg, uint32_t extents)
 {
-	uint32_t r;
-	uint32_t stripes = seg->area_count - ((seg->area_count > 2) ? seg->segtype->parity_devs : 0);
+	/* Prevent parity_devs to be subtracted in case of 2 devs raid4/5 */
+	uint32_t r, stripes = seg->area_count - (seg->area_count > 2 ? seg->segtype->parity_devs : 0);
 
 PFLA("lv=%s extents=%u", display_lvname(seg->lv), extents);
-PFLA("segtype=%s stripes=%u data_copies=%u", lvseg_name(seg), stripes, seg->data_copies);
+PFLA("segtype=%s seg->reshape_len=%u stripes=%u data_copies=%u", lvseg_name(seg), seg->reshape_len, stripes, seg->data_copies);
 	r = raid_rimage_extents(seg->segtype, extents - seg->reshape_len * stripes,
 				   stripes, seg->data_copies ?: 1);
 PFLA("area_len=%u", r);
@@ -1809,13 +1809,10 @@ PFLA("extend=%u existing_extents=%u, new_extents=%u, area_count=%u mirrors=%u st
 	 * exists and they only want replacement drives.
 	 */
 	/* HM FIXME: avoid this overload to define the parity_count to allocate! */
-#if 0
 	parity_count = (area_count <= segtype->parity_devs) ? 0 : segtype->parity_devs;
-	parity_count = segtype->parity_devs;
-#else
-	parity_count = extend ? 0 : segtype->parity_devs;
-#endif
+
 	alloc_count = area_count + parity_count;
+
 PFLA("alloc_count=%u parity_count=%u metadata_area_count=%u", alloc_count, parity_count, metadata_area_count);
 	if (segtype_is_raid(segtype) && metadata_area_count) {
 		/* RAID has a meta area for each device */
@@ -1866,7 +1863,7 @@ PFLA("alloc_count=%u parity_count=%u metadata_area_count=%u", alloc_count, parit
 	ah->mirror_logs_separate = find_config_tree_bool(cmd, allocation_mirror_logs_require_separate_pvs_CFG, NULL);
 
 	total_extents = new_extents;
-PFLA("ah->area_multiple=%u area_count=%u new_extents=%u total_extents=%u", ah->area_multiple, area_count, new_extents, total_extents);
+PFLA("ah->area_multiple=%u area_count=%u new_extents=%u total_extents=%u stripes=%u mirrors=%u", ah->area_multiple, area_count, new_extents, total_extents, stripes, mirrors);
 	if (segtype_is_raid(segtype)) {
 #if 1
 		total_extents = raid_total_extents(segtype, total_extents, stripes, mirrors);
@@ -4394,14 +4391,15 @@ PFLA("recursive seg_lv(seg, %u)=%s extents=%u", s, display_lvname(lv1), extents)
 			mirrors = seg->data_copies;
 
 		} else {
+			area_count = seg->data_copies;
 			stripes = 1;
-			area_count = mirrors = seg->data_copies;
+			mirrors = seg->data_copies;
 		}
 
 	} else
 		area_count = max(stripes + segtype->parity_devs, mirrors);
 
-PFLA("mirrors=%u stripes=%u", mirrors, stripes);
+PFLA("area_count=%u mirrors=%u stripes=%u", area_count, mirrors, stripes);
 	if (segtype_is_virtual(segtype))
 		return lv_add_virtual_segment(lv, 0u, extents, segtype);
 
@@ -4444,7 +4442,7 @@ PFLA("extents=%u mirrors=%u stripes=%u log_count=%u", extents, mirrors, stripes,
 		return 0;
 	}
 
-	if (!(ah = allocate_extents(lv->vg, lv, segtype, (lv->le_count && mirrors == 1) ? area_count : stripes, mirrors,
+	if (!(ah = allocate_extents(lv->vg, lv, segtype, stripes, mirrors,
 				    log_count, region_size, extents,
 				    allocatable_pvs, alloc, approx_alloc, NULL)))
 		return_0;

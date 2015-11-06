@@ -1149,7 +1149,7 @@ int lv_raid_split_and_track(struct logical_volume *lv,
 			    struct dm_list *splittable_pvs);
 int lv_raid_merge(struct logical_volume *lv);
 int lv_raid_convert(struct logical_volume *lv,
-		    const struct segment_type *new_segtype,
+		    struct segment_type *new_segtype,
 		    int yes, int force,
 		    int duplicate, int unduplicate,
 		    const int data_copies,

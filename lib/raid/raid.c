@@ -494,31 +494,32 @@ static const struct raid_type {
 	const char name[19];
 	unsigned parity;
 	uint64_t extra_flags;
+	const char *descr; /* HM FIXME: use segtype flags instead and display based on them */
 } _raid_types[] = {
-	{ SEG_TYPE_NAME_RAID0,         0, SEG_RAID0 },
-	{ SEG_TYPE_NAME_RAID0_META,    0, SEG_RAID0_META },
-	{ SEG_TYPE_NAME_RAID1,         0, SEG_RAID1 | SEG_AREAS_MIRRORED },
+	{ SEG_TYPE_NAME_RAID0,         0, SEG_RAID0, "striped/raid4/raid5/raid6" },
+	{ SEG_TYPE_NAME_RAID0_META,    0, SEG_RAID0_META, "striped/raid4/raid5/raid6" },
+	{ SEG_TYPE_NAME_RAID1,         0, SEG_RAID1 | SEG_AREAS_MIRRORED, "linear/raid4(2)/raid5(2)/raid10" },
 	{ SEG_TYPE_NAME_RAID01,        0, SEG_RAID01 | SEG_AREAS_MIRRORED },
-	{ SEG_TYPE_NAME_RAID10_NEAR,   0, SEG_RAID10_NEAR | SEG_AREAS_MIRRORED },
-	{ SEG_TYPE_NAME_RAID10_FAR,    0, SEG_RAID10_FAR | SEG_AREAS_MIRRORED | SEG_CAN_SPLIT },
+	{ SEG_TYPE_NAME_RAID10_NEAR,   0, SEG_RAID10_NEAR | SEG_AREAS_MIRRORED, "raid1?" },
+	{ SEG_TYPE_NAME_RAID10_FAR,    0, SEG_RAID10_FAR | SEG_AREAS_MIRRORED | SEG_CAN_SPLIT, "striped/raid0" },
 	{ SEG_TYPE_NAME_RAID10_OFFSET, 0, SEG_RAID10_OFFSET | SEG_AREAS_MIRRORED },
-	{ SEG_TYPE_NAME_RAID10,        0, SEG_RAID10 | SEG_AREAS_MIRRORED }, /* is raid10_near" */
-	{ SEG_TYPE_NAME_RAID4,         1, SEG_RAID4 },
-	{ SEG_TYPE_NAME_RAID5_N,       1, SEG_RAID5_N },
-	{ SEG_TYPE_NAME_RAID5_LA,      1, SEG_RAID5_LA },
-	{ SEG_TYPE_NAME_RAID5_LS,      1, SEG_RAID5_LS },
-	{ SEG_TYPE_NAME_RAID5_RA,      1, SEG_RAID5_RA },
-	{ SEG_TYPE_NAME_RAID5_RS,      1, SEG_RAID5_RS },
-	{ SEG_TYPE_NAME_RAID5,         1, SEG_RAID5 }, /* is raid5_ls */
-	{ SEG_TYPE_NAME_RAID6_NC,      2, SEG_RAID6_NC },
-	{ SEG_TYPE_NAME_RAID6_NR,      2, SEG_RAID6_NR },
-	{ SEG_TYPE_NAME_RAID6_ZR,      2, SEG_RAID6_ZR },
-	{ SEG_TYPE_NAME_RAID6_LA_6,    2, SEG_RAID6_LA_6 },
-	{ SEG_TYPE_NAME_RAID6_LS_6,    2, SEG_RAID6_LS_6 },
-	{ SEG_TYPE_NAME_RAID6_RA_6,    2, SEG_RAID6_RA_6 },
-	{ SEG_TYPE_NAME_RAID6_RS_6,    2, SEG_RAID6_RS_6 },
-	{ SEG_TYPE_NAME_RAID6_N_6,     2, SEG_RAID6_N_6 },
-	{ SEG_TYPE_NAME_RAID6,         2, SEG_RAID6 }, /* is raid6_zr */
+	{ SEG_TYPE_NAME_RAID10,        0, SEG_RAID10 | SEG_AREAS_MIRRORED /* is raid10_near */, "raid1(!(stripes%mirrors)" },
+	{ SEG_TYPE_NAME_RAID4,         1, SEG_RAID4, "striped/raid0*/raid5/raid6" },
+	{ SEG_TYPE_NAME_RAID5_N,       1, SEG_RAID5_N, "raid0/striped/raid4/raid6" },
+	{ SEG_TYPE_NAME_RAID5_LA,      1, SEG_RAID5_LA, "raid5*/raid6" },
+	{ SEG_TYPE_NAME_RAID5_LS,      1, SEG_RAID5_LS, "raid5*/raid6" },
+	{ SEG_TYPE_NAME_RAID5_RA,      1, SEG_RAID5_RA, "raid5*/raid6" },
+	{ SEG_TYPE_NAME_RAID5_RS,      1, SEG_RAID5_RS, "raid5*/raid6" },
+	{ SEG_TYPE_NAME_RAID5,         1, SEG_RAID5 /* is raid5_ls */, "raid5*/raid6" },
+	{ SEG_TYPE_NAME_RAID6_NC,      2, SEG_RAID6_NC, "raid6*" },
+	{ SEG_TYPE_NAME_RAID6_NR,      2, SEG_RAID6_NR, "raid6*" },
+	{ SEG_TYPE_NAME_RAID6_ZR,      2, SEG_RAID6_ZR, "raid6*" },
+	{ SEG_TYPE_NAME_RAID6_LA_6,    2, SEG_RAID6_LA_6, "raid5/raid6*" },
+	{ SEG_TYPE_NAME_RAID6_LS_6,    2, SEG_RAID6_LS_6, "raid5/raid6*" },
+	{ SEG_TYPE_NAME_RAID6_RA_6,    2, SEG_RAID6_RA_6, "raid5/raid6*" },
+	{ SEG_TYPE_NAME_RAID6_RS_6,    2, SEG_RAID6_RS_6, "raid5/raid6*" },
+	{ SEG_TYPE_NAME_RAID6_N_6,     2, SEG_RAID6_N_6, "striped/raid0*/raid5/raid6*" },
+	{ SEG_TYPE_NAME_RAID6,         2, SEG_RAID6 /* is raid6_zr */, "raid6*" },
 };
 
 static struct segment_type *_init_raid_segtype(struct cmd_context *cmd,
@@ -535,6 +536,7 @@ static struct segment_type *_init_raid_segtype(struct cmd_context *cmd,
 
 	segtype->ops = &_raid_ops;
 	segtype->name = rt->name;
+	segtype->descr = rt->descr ?: "";
 	segtype->flags = SEG_RAID | SEG_ONLY_EXCLUSIVE | rt->extra_flags | monitored;
 	segtype->parity_devs = rt->parity;
 

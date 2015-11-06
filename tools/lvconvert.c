@@ -1703,8 +1703,7 @@ static void _lvconvert_raid_repair_ask(struct cmd_context *cmd,
 
 static int _lvconvert_raid(struct logical_volume *lv, struct lvconvert_params *lp)
 {
-	int replace = 0, image_count = 0;
-	uint32_t data_copies;
+	int data_copies, image_count = 0, replace = 0;
 	struct dm_list *failed_pvs;
 	struct cmd_context *cmd = lv->vg->cmd;
 	struct lv_segment *seg = first_seg(lv);
@@ -1761,6 +1760,7 @@ PFLA("image_count=%u\n", image_count);
 	     arg_is_set(cmd, mirrors_ARG) ||
 	     arg_is_set(cmd, stripes_long_ARG) ||
 	     arg_is_set(cmd, stripesize_ARG) ||
+	     arg_is_set(cmd, duplicate_ARG) ||
 	     arg_is_set(cmd, unduplicate_ARG))) {
 		unsigned stripes = 0;
 		unsigned stripe_size = arg_count(cmd, stripesize_ARG) ? lp->stripe_size  : 0;
@@ -1813,12 +1813,16 @@ PFLA("image_count=%u\n", image_count);
 			}
 			data_copies = stripes = 1;
 			stripe_size = 0;
-		}
 
-		return lv_raid_convert(lv, arg_count(cmd, type_ARG) ? lp->segtype : NULL, lp->yes, lp->force,
+		} else
+		       data_copies = arg_is_set(cmd, mirrors_ARG) ? lp->mirrors : -1;
+
+		return lv_raid_convert(lv, arg_count(cmd, type_ARG) ? (struct segment_type *) lp->segtype : NULL,
+				       lp->yes, lp->force,
 				       arg_is_set(cmd, duplicate_ARG), arg_is_set(cmd, unduplicate_ARG),
-				       arg_is_set(cmd, mirrors_ARG) ? lp->mirrors : -1, lp->region_size,
-				       stripes, stripe_size, lp->pool_data_name, lp->pvh);
+				       data_copies, lp->region_size,
+				       stripes, stripe_size,
+				       lp->pool_data_name, lp->pvh);
 	}
 
 	if (arg_count(cmd, replace_ARG))
