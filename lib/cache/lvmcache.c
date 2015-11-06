@@ -155,6 +155,24 @@ If we want to prevent pvcreate from being run on one of the ignored
 duplicate devices, then pvcreate would also check if the specified device
 is in the list of duplicates.
 
+Step 3
+------
+
+If a duplicate dev pair appears before either device is used, then a new config
+option can tell lvm to use neither.  Both devices would be put into the list of
+ignored duplicates, and commands would handle the PV as a "missing device".
+
+lvm will see one device first and make it usable before the second appears.
+So, it's possible that LVs were activated using the first duplicate.  The
+arrival of the second device will not change the state of the active LVs, but
+additional warnings can be printed (beyond the standard duplicate warnings),
+that explain LVs are using a PV that should be ignored.
+
+A more complete solution could involve lvm keeping a persistent list of devices
+that have been used before.  If a new PV appears on a device that is not in
+this list, then lvm would not automatically use that device until some lvm
+command or config was used to accept it.
+
 */
 
 
