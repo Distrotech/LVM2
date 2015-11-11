@@ -233,6 +233,7 @@ uint32_t raid_rimage_extents(const struct segment_type *segtype,
 	RETURN_IF_ZERO(segtype, "segtype argument");
 
 	if (!extents ||
+	    segtype_is_mirror(segtype) ||
 	    segtype_is_raid1(segtype))
 		return extents;
 

@@ -1995,10 +1995,13 @@ static int _get_seg_used_stripes(const struct lv_segment *seg)
 	uint32_t s;
 	uint32_t stripes = seg->area_count;
 
-	for (s = seg->area_count - 1; s; s--)
+	for (s = seg->area_count - 1; stripes && s; s--) {
 		if (seg_type(seg, s) == AREA_LV &&
-		    (seg_lv(seg, s)->status & LV_RESHAPE_REMOVED))
+		    seg_lv(seg, s)->status & LV_RESHAPE_REMOVED)
 			stripes--;
+		else
+			break;
+	}
 
 	return stripes;
 }

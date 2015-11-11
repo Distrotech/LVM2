@@ -1335,8 +1335,7 @@ PFLA("seg->len=%u seg->lv->size=%llu, seg->area_len=%u", seg->len, (unsigned lon
 
 static uint32_t _calc_area_multiple(const struct segment_type *segtype,
 				    const uint32_t area_count,
-				    const uint32_t stripes,
-				    const uint32_t mirrors)
+				    const uint32_t stripes)
 {
 	if (!area_count)
 		return 1;
@@ -1356,9 +1355,8 @@ PFL();
 	 *          the 'stripes' argument will always need to
 	 *          be given.
 	 */
-	/* HM FIXME: mirrors != 0 */
 	if (segtype_is_any_raid10(segtype))
-		return stripes; //  / (mirrors ?: 2);
+		return stripes;
 PFL();
 	/* RAID0 and parity RAID (e.g. RAID 4/5/6) */
 	if (segtype_is_striped_raid(segtype)) {
@@ -1393,8 +1391,7 @@ static int _is_layered_lv(struct logical_volume *lv, uint32_t s)
 	return seg &&
 	       seg_is_raid1(seg) && 
 	       seg_type(seg, s) == AREA_LV &&
-	       (seg1 = last_seg(seg_lv(seg, s))) &&
-		!seg_is_striped(seg1);
+	       strstr(seg_lv(seg, s)->name, "_dup_");
 }
 
 /* Find smallest one of any sub lvs of @seg */
@@ -1877,7 +1874,7 @@ PFLA("alloc_count=%u parity_count=%u metadata_area_count=%u", alloc_count, parit
 	 * is calculated from.  So, we must pass in the total count to get
 	 * a correct area_multiple.
 	 */
-	ah->area_multiple = _calc_area_multiple(segtype, area_count + segtype->parity_devs, stripes, mirrors);
+	ah->area_multiple = _calc_area_multiple(segtype, area_count + segtype->parity_devs, stripes);
 
 	//FIXME: s/mirror_logs_separate/metadata_separate/ so it can be used by others?
 	ah->mirror_logs_separate = find_config_tree_bool(cmd, allocation_mirror_logs_require_separate_pvs_CFG, NULL);
@@ -1990,8 +1987,8 @@ static int _sufficient_pes_free(struct alloc_handle *ah, struct dm_list *pvms,
 #if 1
 	uint32_t area_extents_needed =
 		raid_rimage_extents(ah->segtype, extents_still_needed - allocated, ah->area_count, ah->data_copies);
-	uint32_t parity_extents_needed =
-		raid_rimage_extents(ah->segtype, extents_still_needed - allocated, ah->parity_count, ah->data_copies);
+	uint32_t parity_extents_needed = ah->parity_count ? 
+		raid_rimage_extents(ah->segtype, extents_still_needed - allocated, ah->parity_count, ah->data_copies) : 0;
 #else
 	uint32_t area_extents_needed = (extents_still_needed - allocated) * ah->area_count / ah->area_multiple;
 	uint32_t parity_extents_needed = (extents_still_needed - allocated) * ah->parity_count / ah->area_multiple;
@@ -2000,7 +1997,7 @@ static int _sufficient_pes_free(struct alloc_handle *ah, struct dm_list *pvms,
 	uint32_t total_extents_needed = area_extents_needed + parity_extents_needed + metadata_extents_needed;
 	uint32_t free_pes = pv_maps_size(pvms);
 
-PFLA("extents_still_needed=%u allocated=%u ah->area_count=%u ah->parity_count=%u ah->area_multiple=%u", extents_still_needed, allocated, ah->area_count, ah->parity_count, ah->area_multiple);
+PFLA("extents_still_needed=%u allocated=%u ah->area_count=%u ah->data_copies=%u ah->parity_count=%u ah->area_multiple=%u", extents_still_needed, allocated, ah->area_count, ah->data_copies, ah->parity_count, ah->area_multiple);
 PFLA("free_pes=%u area_extents_needed=%u parity_extents_needed=%u metadata_extents_needed=%u total_extents_needed=%u", free_pes, area_extents_needed, parity_extents_needed, metadata_extents_needed, total_extents_needed);
 	if (total_extents_needed > free_pes) {
 		log_error("Insufficient free space: %" PRIu32 " extents needed,"
@@ -2146,9 +2143,9 @@ PFLA("area_count=%u data_copies=%u segtype=%s", area_count, data_copies, segtype
 		extents = raid_rimage_extents(segtype, aa[0].len * stripes, stripes, data_copies);
 	else {
 #if 1
-		extents = raid_rimage_extents(segtype, aa[0].len, stripes, data_copies) * stripes;
+		extents = raid_total_extents(segtype, aa[0].len * stripes, stripes, data_copies);
 #else
-		area_multiple = _calc_area_multiple(segtype, area_count, stripes, data_copies);
+		area_multiple = _calc_area_multiple(segtype, area_count, stripes);
 PFLA("aa[0]=%p area_multiple=%u", (void *) aa, area_multiple);
 		extents = aa[0].len * area_multiple;
 #endif
@@ -2310,7 +2307,11 @@ PFLA("aa[s=%u].len=%u", s, aa[s].len);
 	ah->total_area_len += area_len;
 
 #if 1
-	alloc_state->allocated += area_len * ah->area_multiple;
+	if (segtype_is_striped(ah->segtype) ||
+	    segtype_is_striped_raid(ah->segtype))
+		area_len *= ah->area_count;
+
+	alloc_state->allocated += area_len;
 #else
 	alloc_state->allocated += area_len * ah->area_multiple;
 #endif
@@ -2360,7 +2361,7 @@ static int _for_each_pv(struct cmd_context *cmd, struct logical_volume *lv,
 
 	/* HM FIXME: get rid of area_multiple, because it does not cut raid10* */
 #if 0
-	area_multiple = _calc_area_multiple(seg->segtype, seg->area_count, 0, 1);
+	area_multiple = _calc_area_multiple(seg->segtype, seg->area_count, 0);
 PFLA("area_multiple=%u remaining_seg_len=%u", area_multiple, remaining_seg_len);
 
 	area_len = remaining_seg_len / (area_multiple ?: 1);
@@ -3439,7 +3440,6 @@ static int _allocate(struct alloc_handle *ah,
 #if 1
         extents_still_needed = ah->new_extents - alloc_state.allocated;
 	rimage_extents = raid_rimage_extents(ah->segtype, ah->new_extents, ah->area_count, 1);
-	goto skip;
 
 PFLA("extents_still_needed=%u rimage_extents=%u", ah->new_extents - alloc_state.allocated, rimage_extents);
         if (extents_still_needed > rimage_extents &&
@@ -3449,7 +3449,6 @@ PFLA("extents_still_needed=%u rimage_extents=%u", ah->new_extents - alloc_state.
 			  rimage_extents);
 		return 0;
 	}
-skip:
 #else
         if (ah->area_multiple > 1 &&
             (ah->new_extents - alloc_state.allocated) % ah->area_multiple) {
@@ -3536,13 +3535,21 @@ PFLA("ah->new_extents=%u", ah->new_extents);
 
 PFLA("alloc_stats.allocated=%u ah->new_extents=%u", alloc_state.allocated, ah->new_extents);
 	if (alloc_state.allocated != ah->new_extents) {
+#if 1
+		rimage_extents = raid_total_extents(ah->segtype, ah->new_extents - alloc_state.allocated,
+						    ah->area_count, ah->data_copies);
+#endif
 		if (!ah->approx_alloc) {
 			log_error("Insufficient suitable %sallocatable extents "
 				  "for logical volume %s: %u more required",
 				  can_split ? "" : "contiguous ",
 				  lv ? lv->name : "",
+#if 1
+			 	  rimage_extents);
+#else
 				  (ah->new_extents - alloc_state.allocated) *
 				  ah->area_count / ah->area_multiple);
+#endif
 			goto out;
 		}
 		if (!alloc_state.allocated) {
@@ -3557,7 +3564,11 @@ PFLA("alloc_stats.allocated=%u ah->new_extents=%u", alloc_state.allocated, ah->n
 			    can_split ? "" : "contiguous ",
 			    lv ? lv->name : "",
 			    alloc_state.allocated,
+#if 1
+			    rimage_extents);
+#else
 			    (ah->new_extents - alloc_state.allocated) * ah->area_count / ah->area_multiple);
+#endif
 		ah->new_extents = alloc_state.allocated;
 	}
 
@@ -5474,7 +5485,7 @@ PFLA("seg->segtype=%s", seg->segtype->name);
 
 		/* Convert PEs to LEs */
 		if (lp->extents_are_pes && !seg_is_striped(last_seg(lv)) && !seg_is_virtual(last_seg(lv))) {
-			area_multiple = _calc_area_multiple(last_seg(lv)->segtype, last_seg(lv)->area_count, 0, 1);
+			area_multiple = _calc_area_multiple(last_seg(lv)->segtype, last_seg(lv)->area_count, 0);
 			seg_size = seg_size * area_multiple / (last_seg(lv)->area_count - last_seg(lv)->segtype->parity_devs);
 			seg_size = (seg_size / area_multiple) * area_multiple;
 		}
@@ -6139,7 +6150,7 @@ PFL();
 		/* FIXME Unnecessary nesting! */
 		if (!_for_each_pv(cmd, use_pvmove_parent_lv ? seg->pvmove_source_seg->lv : lv,
 				  use_pvmove_parent_lv ? seg->pvmove_source_seg->le : current_le,
-				  use_pvmove_parent_lv ? spvs->len * _calc_area_multiple(seg->pvmove_source_seg->segtype, seg->pvmove_source_seg->area_count, 0, 1) : spvs->len,
+				  use_pvmove_parent_lv ? spvs->len * _calc_area_multiple(seg->pvmove_source_seg->segtype, seg->pvmove_source_seg->area_count, 0) : spvs->len,
 				  use_pvmove_parent_lv ? seg->pvmove_source_seg : NULL,
 				  &spvs->len,
 				  0, 0, -1, 0, _add_pvs, (void *) spvs)) {
@@ -6677,13 +6688,9 @@ static int _split_parent_area(struct lv_segment *seg, uint32_t s,
 			      struct dm_list *layer_seg_pvs)
 {
 	uint32_t parent_area_len, parent_le, layer_le;
-	uint32_t area_multiple;
+	uint32_t area_multiple = (seg_is_striped(seg) || seg_is_striped_raid(seg)) ?
+				 seg->area_count - seg->segtype->parity_devs : 1;
 	struct seg_pvs *spvs;
-
-	if (seg_is_striped(seg))
-		area_multiple = seg->area_count;
-	else
-		area_multiple = 1;
 
 	parent_area_len = seg->area_len;
 	parent_le = seg->le;

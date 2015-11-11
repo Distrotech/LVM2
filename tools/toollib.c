@@ -1360,9 +1360,9 @@ static int _validate_stripe_params(struct cmd_context *cmd, uint32_t *stripes,
 			  display_size(cmd, (uint64_t) *stripe_size));
 	}
 
-	if (*stripes < 1 || *stripes > MAX_STRIPES) {
+	if (*stripes < 1 || *stripes > MAX_AREAS) {
 		log_error("Number of stripes (%d) must be between %d and %d.",
-			  *stripes, 1, MAX_STRIPES);
+			  *stripes, 1, MAX_AREAS);
 		return 0;
 	}
 
