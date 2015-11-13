@@ -4462,6 +4462,7 @@ int scan_vgs_for_pvs(struct cmd_context *cmd, uint32_t warn_flags)
 int pv_write(struct cmd_context *cmd __attribute__((unused)),
 	     struct physical_volume *pv, int allow_non_orphan)
 {
+PFL();
 	if (!pv->fmt->ops->pv_write) {
 		log_error("Format does not support writing physical volumes");
 		return 0;

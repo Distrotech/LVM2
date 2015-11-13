@@ -1331,6 +1331,7 @@ static int _text_pv_write(const struct format_type *fmt, struct physical_volume 
 	struct _write_single_mda_baton baton;
 	unsigned mda_index;
 
+PFL();
 	/* Add a new cache entry with PV info or update existing one. */
 	if (!(info = lvmcache_add(fmt->labeller, (const char *) &pv->id,
 				  pv->dev, pv->vg_name,

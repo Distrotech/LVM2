@@ -2049,8 +2049,8 @@ static int _segdata_copies_disp(struct dm_report *rh, struct dm_pool *mem,
 	uint32_t data_copies = seg->segtype->parity_devs ?
 			       (seg->segtype->parity_devs + 1) : seg->data_copies;
 
-PFLA("seg->data_copies=%u data_copies=%u", seg->data_copies, data_copies);
 #if 0
+PFLA("seg->data_copies=%u data_copies=%u", seg->data_copies, data_copies);
 	if ((seg_is_raid1(seg) || seg_is_mirror(seg)) &&
 	    !seg_is_any_raid10(seg))
 		data_copies = seg->area_count;

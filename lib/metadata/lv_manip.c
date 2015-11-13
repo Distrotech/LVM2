@@ -1388,8 +1388,13 @@ static int _is_layered_lv(struct logical_volume *lv, uint32_t s)
 {
 	struct lv_segment *seg = last_seg(lv), *seg1;
 
-	return seg &&
-	       seg_is_raid1(seg) && 
+	if (!seg)
+		return 0;
+
+	if (seg_is_raid01(seg))
+		return 1;
+
+	return seg_is_raid1(seg) && 
 	       seg_type(seg, s) == AREA_LV &&
 	       strstr(seg_lv(seg, s)->name, "_dup_");
 }
@@ -3439,9 +3444,9 @@ static int _allocate(struct alloc_handle *ah,
 
 #if 1
         extents_still_needed = ah->new_extents - alloc_state.allocated;
-	rimage_extents = raid_rimage_extents(ah->segtype, ah->new_extents, ah->area_count, 1);
+	rimage_extents = raid_rimage_extents(ah->segtype, extents_still_needed, ah->area_count, 1);
 
-PFLA("extents_still_needed=%u rimage_extents=%u", ah->new_extents - alloc_state.allocated, rimage_extents);
+PFLA("ah->new_extents=%u extents_still_needed=%u rimage_extents=%u", ah->new_extents, ah->new_extents - alloc_state.allocated, rimage_extents);
         if (extents_still_needed > rimage_extents &&
 	    (extents_still_needed % rimage_extents)) {
 		log_error("Number of extents requested (%u) needs to be divisible by %d.",
@@ -5436,7 +5441,7 @@ PFLA("seg->segtype=%s", seg->segtype->name);
 				    strcmp(seg->segtype->name, _lv_type_names[LV_TYPE_RAID0]) &&
 				    strcmp(seg->segtype->name, _lv_type_names[LV_TYPE_RAID10]))
 					continue;
-	
+PFL();	
 				sz = seg->stripe_size;
 				str = seg->area_count - lp->segtype->parity_devs;
 	
