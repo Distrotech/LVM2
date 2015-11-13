@@ -209,7 +209,7 @@ xx(lvconvert,
    "\t[-R|--regionsize MirrorLogRegionSize]\n"
    "\t[--alloc AllocationPolicy]\n"
    "\t[-b|--background]\n"
-   "\t[--duplicate]\n"
+   "\t[--duplicate/--unduplicate]\n"
    "\t[-f|--force]\n"
    "\t[-i|--interval seconds]\n"
    "\t[--stripes Stripes [-I|--stripesize StripeSize]]\n"

@@ -438,7 +438,6 @@ PFLA("lv=%s segtype=%s seg->len=%u seg->area_len=%u seg->area_count=%u data_rima
 		for (s = 0; s < seg->area_count; s++) {
 			if (seg_type(seg, s) != AREA_LV)
 				continue;
-PFLA("lv=%s s=%u seg->status=%lX seg_lv(seg, %u)=%s", lv->name, s, seg->status, s, seg_lv(seg, s)->name);
 			/* HM FIXME: TESTME */
 			if (seg_is_raid(seg) && seg->meta_areas && lv == seg_metalv(seg, s))
 {
