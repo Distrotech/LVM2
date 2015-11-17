@@ -1648,32 +1648,20 @@ int lvm_run_command(struct cmd_context *cmd, int argc, char **argv)
 	 * - Another local command may have run with a different global filter
 	 *   which changed the content of lvmetad from what we want (recognized
 	 *   by differnet token values.)
+	 * - Duplicate PVs are present.  Since duplicate PVs cannot be managed
+	 *   by lvmetad, commands revert to scanning devices when they are present.
 	 *
 	 * The pvscan command does rescanning and lvmetad upates itself,
 	 * so it doesn't want this automatic rescanning.
 	 */
 	if (lvmetad_is_connected() && !(cmd->command->flags & SKIP_AUTO_PVSCAN)) {
-		if (!lvmetad_token_matches(cmd) || cmd->include_foreign_vgs) {
+		if (!lvmetad_token_matches(cmd) ||
+		    lvmetad_check_duplicates(cmd) ||
+		    cmd->include_foreign_vgs) {
 			if (!lvmetad_pvscan_all_devs(cmd, NULL)) {
 				log_error("Failed to scan devices");
 				return ECMD_FAILED;
 			}
-		} else if (lvmetad_check_duplicates(cmd)) {
-			/*
-			 * Warn if duplicate PVs exist.  Because we're using lvmetad,
-			 * we won't be scanning devices, so we rely on lvmetad to tell
-			 * us if duplicate devices were seen by the last device scan.
-			 *
-			 * FIXME: maybe enhance this by listing the actual duplicate devices?
-			 * The device scan that set the duplicates flag in lvmetad could
-			 * also send lvmetad the names of the duplicate devices it ignored.
-			 * That list could then be returned here and included in this
-			 * warning.  However, that list would not always be accurate,
-			 * because a "full picture" scan is needed to construct a truely
-			 * accurate picture of duplicate PVs.
-			 */
-			log_warn("WARNING: duplicate PVs have been found.");
-			log_warn("WARNING: duplicate PVs can be resolved with filters or vgimportclone.");
 		}
 	}
 
