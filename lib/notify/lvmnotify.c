@@ -20,13 +20,11 @@ void lvmnotify_send(struct cmd_context *cmd)
 {
 	GDBusProxy *con = NULL;
 	GError *error = NULL;
-	const char *vg_msg;
-	const char *pv_msg;
 	const char *cmd_name;
 	GVariant *rc;
 	int result = 0;
 
-	if (!cmd->vg_notify && !cmd->pv_notify)
+	if (!cmd->vg_notify && !cmd->lv_notify && !cmd->pv_notify)
 		return;
 
 	con = g_dbus_proxy_new_for_bus_sync(G_BUS_TYPE_SYSTEM,
@@ -45,12 +43,10 @@ void lvmnotify_send(struct cmd_context *cmd)
 	}
 
 	cmd_name = get_cmd_name();
-	vg_msg = cmd->vg_notify ? "vg_update" : "vg_none";
-	pv_msg = cmd->pv_notify ? "pv_update" : "pv_none";
 
 	rc = g_dbus_proxy_call_sync(con,
 				    "ExternalEvent",
-				    g_variant_new("(sss)", cmd_name, vg_msg, pv_msg),
+				    g_variant_new("(s)", cmd_name),
 				    G_DBUS_CALL_FLAGS_NONE,
 				    -1, NULL, &error);
 
@@ -78,6 +74,11 @@ void set_vg_notify(struct cmd_context *cmd)
 	cmd->vg_notify = 1;
 }
 
+void set_lv_notify(struct cmd_context *cmd)
+{
+	cmd->lv_notify = 1;
+}
+
 void set_pv_notify(struct cmd_context *cmd)
 {
 	cmd->pv_notify = 1;
@@ -90,6 +91,10 @@ void lvmnotify_send(struct cmd_context *cmd)
 }
 
 void set_vg_notify(struct cmd_context *cmd)
+{
+}
+
+void set_lv_notify(struct cmd_context *cmd)
 {
 }
 

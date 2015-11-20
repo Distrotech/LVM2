@@ -1056,6 +1056,8 @@ int lv_change_activate(struct cmd_context *cmd, struct logical_volume *lv,
 	if (!lv_active_change(cmd, lv, activate, 0))
 		return_0;
 
+	set_lv_notify(lv->vg->cmd);
+
 	return r;
 }
 
