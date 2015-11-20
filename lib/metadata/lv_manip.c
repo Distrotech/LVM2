@@ -1044,6 +1044,7 @@ PFLA("extents=%u stripes=%u", extents, stripes);
 	if (r != extents)
 		log_print_unless_silent("Rounding up size to full stripe size %s",
 			  		display_size(lv->vg->cmd, r * lv->vg->extent_size));
+PFLA("r=%u stripes=%u", r, stripes);
 	return r;
 }
 
@@ -1295,11 +1296,8 @@ static uint32_t _seg_area_len(struct lv_segment *seg, uint32_t extents)
 
 PFLA("lv=%s extents=%u", display_lvname(seg->lv), extents);
 PFLA("segtype=%s seg->reshape_len=%u stripes=%u data_copies=%u", lvseg_name(seg), seg->reshape_len, stripes, seg->data_copies);
-	r = raid_rimage_extents(seg->segtype, extents - seg->reshape_len * stripes,
-				   stripes, seg->data_copies ?: 1);
-PFLA("area_len=%u", r);
 
-	return r;
+	return raid_rimage_extents(seg->segtype, extents, stripes, seg->data_copies ?: 1);
 }	
 
 /*
@@ -1453,7 +1451,8 @@ PFLA("end recursive seg_lv(seg, %u)=%s", s, display_lvname(seg_lv(seg, s)));
 
 		if (reduced) {
 			seg->len = _seg_smallest_sub_lv(seg);
-			seg->area_len = _seg_area_len(seg, seg->len);
+			seg->area_len = _seg_area_len(seg, seg->len) + seg->reshape_len;
+			seg->len += seg->reshape_len;
 			lv->le_count = seg->len;
 			lv->size = (uint64_t) lv->le_count * lv->vg->extent_size;
 
@@ -1953,8 +1952,10 @@ PFLA("ah->log_area_count=%u ah->log_len=%u existing_extents=%u total_extents=%u"
 		  total_extents, existing_extents, total_extents + existing_extents);
 
 	// if (extend && (mirrors || stripes))
+#if 1
 	if (mirrors || stripes)
 		total_extents += existing_extents;
+#endif
 #if 1
 PFLA("total_extents=%u", total_extents);
 	if (total_extents < stripes)
@@ -4349,7 +4350,7 @@ PFLA("last_seg(seg_lv(seg, s))->len=%u last_seg(seg_lv(seg, s))->area_len=%u", l
 
 #if 1
 	seg->len += extents;
-	seg->area_len = _seg_area_len(seg, seg->len) + seg->reshape_len;
+	seg->area_len = _seg_area_len(seg, seg->len);
 #endif
 PFLA("segtye=%s lv->le_count=%u seg->len=%u seg->area_len=%u", lvseg_name(seg), lv->le_count, seg->len, seg->area_len);
 	lv->le_count += extents;
@@ -4419,8 +4420,9 @@ PFLA("recursive seg_lv(seg, %u)=%s extents=%u", s, display_lvname(lv1), extents)
 		}
 
 		if (extended) {
-			seg->len =  _seg_smallest_sub_lv(seg);
-			seg->area_len = _seg_area_len(seg, seg->len);
+			seg->len =  _seg_smallest_sub_lv(seg) + seg->reshape_len;
+			seg->area_len = _seg_area_len(seg, seg->len) + seg->reshape_len;
+			seg->len +=  seg->reshape_len;
 			lv->le_count = seg->len;
 			lv->size = (uint64_t) lv->le_count * lv->vg->extent_size;
 			return 1;
@@ -4457,6 +4459,7 @@ PFLA("extents=%u stripe_size=%u", extents, stripe_size);
 
 	} else if (segtype_is_striped(segtype) || segtype_is_striped_raid(segtype))
 		extents = _round_to_stripe_boundary(lv, extents, stripes, 1 /* extend */);
+
 PFLA("extents=%u segtype=%s mirrors=%u stripes=%u log_count=%u", extents, segtype->name, mirrors, stripes, log_count);
 
 	/* Special creation case for raid01 (mirror(s) on top of raid0 stripes */
@@ -4473,6 +4476,7 @@ PFLA("extents=%u segtype=%s mirrors=%u stripes=%u log_count=%u", extents, segtyp
 PFLA("extents=%u mirrors=%u stripes=%u log_count=%u", extents, mirrors, stripes, log_count);
 
 	lv_size = lv->size + (uint64_t) extents * lv->vg->extent_size;
+
 	prev_region_size = region_size;
 	_adjust_region_size(lv, segtype, lv_size, &region_size);
 
@@ -4493,7 +4497,7 @@ PFLA("extents=%u mirrors=%u stripes=%u log_count=%u", extents, mirrors, stripes,
 {
 struct alloced_area *aa;
 
-for (s = 0; s < ah->area_count + ah->log_area_count; s++) {
+for (s = 0; s < ah->area_count + log_count; s++) {
 dm_list_iterate_items(aa, ah->alloced_areas + s)
 {
 PFLA("%u aa->len=%u", s >= ah->log_area_count ? s - ah->log_area_count : s, aa->len);
@@ -5358,14 +5362,14 @@ static int _lvresize_adjust_extents(struct cmd_context *cmd, struct logical_volu
 	uint32_t physical_extents_used = 0;
 	uint32_t seg_stripes = 0, seg_stripesize = 0;
 	uint32_t seg_mirrors = 0;
-	struct lv_segment *seg, *mirr_seg;
+	struct lv_segment *seg = first_seg(lv), *mirr_seg;
 	uint32_t sz, str;
 	uint32_t seg_logical_extents;
 	uint32_t seg_physical_extents;
 	uint32_t area_multiple;
 	uint32_t stripesize_extents;
 	uint32_t size_rest;
-	uint32_t existing_logical_extents = lv->le_count;
+	uint32_t existing_logical_extents = lv->le_count - seg->reshape_len * (seg->area_count - seg->segtype->parity_devs);
 	uint32_t existing_physical_extents, saved_existing_physical_extents;
 	uint32_t seg_size = 0;
 	uint32_t new_extents;
@@ -5726,15 +5730,6 @@ static int _lvresize_check_type(struct cmd_context *cmd, const struct logical_vo
 	return 1;
 }
 
-/* Return length of segment depending on type and reshape_len */
-static uint32_t _seg_len(const struct lv_segment *seg)
-{
-	if (seg_is_reshapable_raid(seg))
-		return seg->len - seg->reshape_len * (seg->area_count - seg->segtype->parity_devs);
-
-	return seg->len;
-}
-
 static struct logical_volume *_lvresize_volume(struct cmd_context *cmd,
 					       struct logical_volume *lv,
 					       struct lvresize_params *lp,
@@ -5794,6 +5789,7 @@ static struct logical_volume *_lvresize_volume(struct cmd_context *cmd,
 		    display_lvname(lv), lp->approx_alloc ? "up to " : "",
 		    display_size(cmd, (uint64_t) lp->extents * vg->extent_size));
 
+PFLA("lp->extents=%u, lv->le_count=%u", lp->extents, lv->le_count);
 	if (lp->resize == LV_REDUCE) {
 		if (!lv_reduce(lv, lv->le_count - lp->extents))
 			return_NULL;
@@ -5801,7 +5797,7 @@ static struct logical_volume *_lvresize_volume(struct cmd_context *cmd,
 		   !lv_extend(lv, lp->segtype,
 			      lp->stripes, lp->stripe_size,
 			      lp->mirrors, first_seg(lv)->region_size,
-			      lp->extents - _seg_len(first_seg(lv)),
+			      lp->extents - lv->le_count,
 			      pvh, alloc, lp->approx_alloc))
 		return_NULL;
 	else if (!pool_check_overprovisioning(lv))
@@ -6935,7 +6931,7 @@ PFL();
 	 * Before removal, the layer should be cleaned up,
 	 * i.e. additional segments and areas should have been removed.
 	 */
-PFLA("segments=%u area_count=%u layer_lv!=%u parent_lv->le_count=%u layer_lv->le_count=%u", dm_list_size(&parent_lv->segments), parent_seg->area_count, layer_lv != seg_lv(parent_seg, 0), parent_lv->le_count, layer_lv->le_count)
+PFLA("lv=%s layer_lv=%s segments=%u area_count=%u layer_lv!=%u parent_lv->le_count=%u layer_lv->le_count=%u", display_lvname(lv), layer_lv ? display_lvname(layer_lv) : NULL, dm_list_size(&parent_lv->segments), parent_seg->area_count, layer_lv != seg_lv(parent_seg, 0), parent_lv->le_count, layer_lv->le_count)
 	if (dm_list_size(&parent_lv->segments) != 1 ||
 	    parent_seg->area_count != 1 ||
 	    seg_type(parent_seg, 0) != AREA_LV ||
@@ -6988,7 +6984,7 @@ struct logical_volume *insert_layer_for_lv(struct cmd_context *cmd,
 {
 	static const char _suffixes[][8] = { "_tdata", "_cdata", "_corig", "_dup" };
 	int r;
-	uint32_t le_count;
+	uint32_t le_count = lv_where->le_count;
 	char name[NAME_LEN];
 	struct dm_str_list *sl;
 	struct logical_volume *layer_lv;
@@ -7021,7 +7017,7 @@ PFLA("lv_is_active()=%d", lv_is_active(lv_where));
 
 		segtype = get_segtype_from_string(cmd, "error");
 
-		if (!lv_add_virtual_segment(layer_lv, 0, lv_where->le_count, segtype)) {
+		if (!lv_add_virtual_segment(layer_lv, 0, le_count, segtype)) {
 			log_error("Creation of transient LV %s for mirror conversion in VG %s failed.", name, lv_where->vg->name);
 			return NULL;
 		}
@@ -7072,7 +7068,6 @@ PFLA("%s", "vg_commit");
 		return_NULL;
 
 	/* allocate a new linear segment */
-	le_count = _seg_len(first_seg(layer_lv));
 	if (!(mapseg = alloc_lv_segment(segtype, lv_where, 0, le_count, 0,
 					status, 0, NULL, 1, le_count, 1,
 					0, 0, 0, NULL)))
@@ -7084,7 +7079,7 @@ PFLA("%s", "vg_commit");
 
 	/* add the new segment to the layer LV */
 	dm_list_add(&lv_where->segments, &mapseg->list);
-	lv_where->le_count = _seg_len(first_seg(layer_lv));
+	lv_where->le_count = le_count;
 	lv_where->size = (uint64_t) lv_where->le_count * lv_where->vg->extent_size;
 
 	/*
