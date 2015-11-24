@@ -4198,7 +4198,24 @@ static int _sort_rows(struct dm_report *rh)
 #define STANDARD_QUOTE		"\'"
 #define STANDARD_PAIR		"="
 
+#define JSON_INDENT_UNIT       4
+#define JSON_SPACE             " "
+#define JSON_QUOTE             "\""
+#define JSON_PAIR              ":"
+#define JSON_SEPARATOR         ","
+#define JSON_OBJECT_START      "{"
+#define JSON_OBJECT_END        "}"
+#define JSON_ARRAY_START       "["
+#define JSON_ARRAY_END         "]"
+#define JSON_VALUE_NULL        "null"
+
 #define UNABLE_TO_EXTEND_OUTPUT_LINE_MSG "dm_report: Unable to extend output line"
+
+static int _is_json_report(struct dm_report *rh)
+{
+	return rh->group_item &&
+	       (rh->group_item->group->type == DM_REPORT_GROUP_JSON);
+}
 
 /*
  * Produce report output
@@ -4213,8 +4230,18 @@ static int _output_field(struct dm_report *rh, struct dm_report_field *field)
 	const char *repstr;
 	char *buf = NULL;
 	size_t buf_size = 0;
+	int field_has_data = field->report_string && *field->report_string;
 
-	if (rh->flags & DM_REPORT_OUTPUT_FIELD_NAME_PREFIX) {
+	if (_is_json_report(rh)) {
+		if (!dm_pool_grow_object(rh->mem, JSON_QUOTE, 1) ||
+		    !dm_pool_grow_object(rh->mem, fields[field->props->field_num].id, 0) ||
+		    !dm_pool_grow_object(rh->mem, JSON_QUOTE, 1) ||
+		    !dm_pool_grow_object(rh->mem, JSON_PAIR, 1) ||
+		    (field_has_data && !dm_pool_grow_object(rh->mem, JSON_QUOTE, 1))) {
+			log_error("dm_report: Unable to extend output line");
+			return 0;
+		}
+	} else if (rh->flags & DM_REPORT_OUTPUT_FIELD_NAME_PREFIX) {
 		if (!(field_id = dm_strdup(fields[field->props->field_num].id))) {
 			log_error("dm_report: Failed to copy field name");
 			return 0;
@@ -4246,7 +4273,7 @@ static int _output_field(struct dm_report *rh, struct dm_report_field *field)
 		}
 	}
 
-	repstr = field->report_string;
+	repstr = (_is_json_report(rh) && !field_has_data) ? JSON_VALUE_NULL : field->report_string;
 	width = field->props->width;
 	if (!(rh->flags & DM_REPORT_OUTPUT_ALIGNED)) {
 		if (!dm_pool_grow_object(rh->mem, repstr, 0)) {
@@ -4289,12 +4316,21 @@ static int _output_field(struct dm_report *rh, struct dm_report_field *field)
 		}
 	}
 
-	if ((rh->flags & DM_REPORT_OUTPUT_FIELD_NAME_PREFIX) &&
-	    !(rh->flags & DM_REPORT_OUTPUT_FIELD_UNQUOTED))
-		if (!dm_pool_grow_object(rh->mem, STANDARD_QUOTE, 1)) {
-			log_error(UNABLE_TO_EXTEND_OUTPUT_LINE_MSG);
-			goto bad;
+	if (rh->flags & DM_REPORT_OUTPUT_FIELD_NAME_PREFIX) {
+		if (!(rh->flags & DM_REPORT_OUTPUT_FIELD_UNQUOTED)) {
+			if (!dm_pool_grow_object(rh->mem, STANDARD_QUOTE, 1)) {
+				log_error(UNABLE_TO_EXTEND_OUTPUT_LINE_MSG);
+				goto bad;
+			}
 		}
+	} else if (_is_json_report(rh)) {
+		if (field_has_data) {
+			if (!dm_pool_grow_object(rh->mem, JSON_QUOTE, 1)) {
+				log_error(UNABLE_TO_EXTEND_OUTPUT_LINE_MSG);
+				goto bad;
+			}
+		}
+	}
 
 	dm_free(buf);
 	return 1;
@@ -4396,39 +4432,79 @@ static int _output_as_columns(struct dm_report *rh)
 	struct dm_list *fh, *rowh, *ftmp, *rtmp;
 	struct row *row = NULL;
 	struct dm_report_field *field;
+	struct dm_list *last_row;
+	int do_field_delim;
+	unsigned indent = 0;
+	char *line;
 
 	/* If headings not printed yet, calculate field widths and print them */
 	if (!(rh->flags & RH_HEADINGS_PRINTED))
 		_report_headings(rh);
 
 	/* Print and clear buffer */
+	last_row = dm_list_last(&rh->rows);
 	dm_list_iterate_safe(rowh, rtmp, &rh->rows) {
 		if (!dm_pool_begin_object(rh->mem, 512)) {
 			log_error("dm_report: Unable to allocate output line");
 			return 0;
 		}
+
+		if (_is_json_report(rh)) {
+			if (!dm_pool_grow_object(rh->mem, JSON_OBJECT_START, 0)) {
+				log_error(UNABLE_TO_EXTEND_OUTPUT_LINE_MSG);
+				goto bad;
+			}
+		}
+
 		row = dm_list_item(rowh, struct row);
+		do_field_delim = 0;
+
 		dm_list_iterate_safe(fh, ftmp, &row->fields) {
 			field = dm_list_item(fh, struct dm_report_field);
 			if (field->props->flags & FLD_HIDDEN)
 				continue;
 
+			if (do_field_delim) {
+				if (_is_json_report(rh)) {
+					if (!dm_pool_grow_object(rh->mem, JSON_SEPARATOR, 0) ||
+					    !dm_pool_grow_object(rh->mem, JSON_SPACE, 0)) {
+						log_error(UNABLE_TO_EXTEND_OUTPUT_LINE_MSG);
+						goto bad;
+					}
+				} else {
+					if (!dm_pool_grow_object(rh->mem, rh->separator, 0)) {
+						log_error(UNABLE_TO_EXTEND_OUTPUT_LINE_MSG);
+						goto bad;
+					}
+				}
+			} else
+				do_field_delim = 1;
+
 			if (!_output_field(rh, field))
 				goto bad;
 
-			if (!dm_list_end(&row->fields, fh))
-				if (!dm_pool_grow_object(rh->mem, rh->separator, 0)) {
-					log_error(UNABLE_TO_EXTEND_OUTPUT_LINE_MSG);
-					goto bad;
-				}
-
 			dm_list_del(&field->list);
 		}
+
+		if (_is_json_report(rh)) {
+			if (!dm_pool_grow_object(rh->mem, JSON_OBJECT_END, 0)) {
+				log_error(UNABLE_TO_EXTEND_OUTPUT_LINE_MSG);
+				goto bad;
+			}
+			if (rowh != last_row &&
+			    !dm_pool_grow_object(rh->mem, JSON_SEPARATOR, 0)) {
+				log_error(UNABLE_TO_EXTEND_OUTPUT_LINE_MSG);
+				goto bad;
+			}
+		}
+
 		if (!dm_pool_grow_object(rh->mem, "\0", 1)) {
 			log_error("dm_report: Unable to terminate output line");
 			goto bad;
 		}
-		log_print("%s", (char *) dm_pool_end_object(rh->mem));
+
+		line = (char *) dm_pool_end_object(rh->mem);
+		log_print("%*s",  indent + (int) strlen(line), line);
 		dm_list_del(&row->list);
 	}
 
@@ -4458,9 +4534,66 @@ static struct report_group_item *_get_topmost_report_group_item(struct dm_report
 	return item;
 }
 
+static int _prepare_json_report_output(struct dm_report *rh)
+{
+	const char *name = (const char *) rh->group_item->data;
+	struct dm_pool *mem = rh->mem;
+	char *output;
+
+	if (rh->group_item->output_done && dm_list_empty(&rh->rows))
+		return 1;
+
+	/*
+	 * If this report is in JSON group, it must be at the
+	 * top of the stack of reports so the output from
+	 * different reports do not interleave with each other.
+	 */
+	if (_get_topmost_report_group_item(rh->group_item->group) != rh->group_item) {
+		log_error("dm_report: dm_report_output: interleaved reports detected for JSON output");
+		return 0;
+	}
+
+	if (rh->group_item->needs_closing) {
+		log_error("dm_report: dm_report_output: unfinished JSON output detected");
+		return 0;
+	}
+
+	if (!dm_pool_begin_object(mem, 32)) {
+		log_error(UNABLE_TO_EXTEND_OUTPUT_LINE_MSG);
+		return 0;
+	}
+
+	if (!dm_pool_grow_object(mem, JSON_QUOTE, 1) ||
+	    !dm_pool_grow_object(mem, name, 0) ||
+	    !dm_pool_grow_object(mem, JSON_QUOTE JSON_PAIR JSON_SPACE JSON_ARRAY_START, 0) ||
+	    !dm_pool_grow_object(mem, "\0", 1)) {
+		log_error(UNABLE_TO_EXTEND_OUTPUT_LINE_MSG);
+		goto bad;
+	}
+
+	if (!(output = dm_pool_end_object(mem))) {
+		log_error(UNABLE_TO_EXTEND_OUTPUT_LINE_MSG);
+		goto bad;
+	}
+
+	if (rh->group_item->group->finished_reports_count > 0)
+		log_print(JSON_SEPARATOR);
+	log_print("%s", output);
+	dm_pool_free(mem, output);
+	rh->group_item->needs_closing = 1;
+	return 1;
+bad:
+	dm_pool_abandon_object(mem);
+	return 0;
+}
+
 int dm_report_output(struct dm_report *rh)
 {
 	int r;
+
+	if (_is_json_report(rh) &&
+	    !_prepare_json_report_output(rh))
+		return_0;
 
 	if (dm_list_empty(&rh->rows)) {
 		r = 1;
@@ -4478,6 +4611,12 @@ out:
 	if (r && rh->group_item)
 		rh->group_item->output_done = 1;
 	return r;
+}
+
+static int _report_group_init_json(void)
+{
+	log_print(JSON_OBJECT_START);
+	return 1;
 }
 
 struct dm_report_group *dm_report_group_init(dm_report_group_type_t type, void *data)
@@ -4500,6 +4639,10 @@ struct dm_report_group *dm_report_group_init(dm_report_group_type_t type, void *
 	dm_list_init(&group->items);
 
 	switch (type) {
+		case DM_REPORT_GROUP_JSON:
+			if (!_report_group_init_json())
+				goto_bad;
+			break;
 		default:
 			goto_bad;
 	}
@@ -4508,6 +4651,16 @@ struct dm_report_group *dm_report_group_init(dm_report_group_type_t type, void *
 bad:
 	dm_pool_destroy(mem);
 	return NULL;
+}
+
+static int _report_group_push_json(struct report_group_item *item, const char *name)
+{
+	item->report->flags &= ~(DM_REPORT_OUTPUT_ALIGNED |
+				 DM_REPORT_OUTPUT_HEADINGS |
+				 DM_REPORT_OUTPUT_COLUMNS_AS_ROWS);
+	item->report->flags |= DM_REPORT_OUTPUT_BUFFERED;
+
+	return 1;
 }
 
 int dm_report_group_push(struct dm_report_group *group, struct dm_report *report, void *data)
@@ -4527,6 +4680,10 @@ int dm_report_group_push(struct dm_report_group *group, struct dm_report *report
 	dm_list_add_h(&group->items, &item->list);
 
 	switch (group->type) {
+		case DM_REPORT_GROUP_JSON:
+			if (!_report_group_push_json(item, data))
+				goto_bad;
+			break;
 		default:
 			goto_bad;
 	}
@@ -4536,6 +4693,16 @@ bad:
 	dm_list_del(&item->list);
 	dm_pool_free(group->mem, item);
 	return 0;
+}
+
+static int _report_group_pop_json(struct report_group_item *item)
+{
+	if (item->output_done && item->needs_closing) {
+		log_print(JSON_ARRAY_END);
+		item->needs_closing = 0;
+	}
+
+	return 1;
 }
 
 int dm_report_group_pop(struct dm_report_group *group)
@@ -4548,6 +4715,10 @@ int dm_report_group_pop(struct dm_report_group *group)
 	}
 
 	switch (group->type) {
+		case DM_REPORT_GROUP_JSON:
+			if (!_report_group_pop_json(item))
+				return_0;
+			break;
 		default:
 			return 0;
         }
@@ -4558,6 +4729,12 @@ int dm_report_group_pop(struct dm_report_group *group)
 	dm_pool_free(group->mem, item);
 	group->finished_reports_count++;
 
+	return 1;
+}
+
+static int _report_group_destroy_json(void)
+{
+	log_print(JSON_OBJECT_END);
 	return 1;
 }
 
@@ -4572,6 +4749,10 @@ int dm_report_group_destroy(struct dm_report_group *group)
 	}
 
 	switch (group->type) {
+		case DM_REPORT_GROUP_JSON:
+			if (!_report_group_destroy_json())
+				return_0;
+			break;
 		default:
 			return_0;
         }
