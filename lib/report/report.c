@@ -3283,6 +3283,16 @@ static void *_obj_get_devtypes(void *obj)
 	return obj;
 }
 
+static void *_obj_get_cmdstatus(void *obj)
+{
+	return obj;
+}
+
+static const struct dm_report_object_type _status_report_types[] = {
+	{ CMDSTATUS, "Command Status", "status_", _obj_get_cmdstatus },
+	{ 0, "", "", NULL },
+};
+
 static const struct dm_report_object_type _report_types[] = {
 	{ VGS, "Volume Group", "vg_", _obj_get_vg },
 	{ LVS, "Logical Volume", "lv_", _obj_get_lv },
@@ -3327,6 +3337,8 @@ typedef struct label type_label;
 
 typedef dev_known_type_t type_devtype;
 
+typedef struct cmd_status type_cmd_status;
+
 static const struct dm_report_field_type _fields[] = {
 #include "columns.h"
 {0, 0, 0, 0, "", "", NULL, NULL},
@@ -3334,6 +3346,11 @@ static const struct dm_report_field_type _fields[] = {
 
 static const struct dm_report_field_type _devtypes_fields[] = {
 #include "columns-devtypes.h"
+{0, 0, 0, 0, "", "", NULL, NULL},
+};
+
+static const struct dm_report_field_type _status_fields[] = {
+#include "columns-cmdstatus.h"
 {0, 0, 0, 0, "", "", NULL, NULL},
 };
 
@@ -3351,7 +3368,8 @@ void *report_init(struct cmd_context *cmd, const char *format, const char *keys,
 		  int quoted, int columns_as_rows, const char *selection)
 {
 	uint32_t report_flags = 0;
-	int devtypes_report = *report_type & DEVTYPES ? 1 : 0;
+	const struct dm_report_object_type *types;
+	const struct dm_report_field_type *fields;
 	void *rh;
 
 	if (aligned)
@@ -3372,9 +3390,18 @@ void *report_init(struct cmd_context *cmd, const char *format, const char *keys,
 	if (columns_as_rows)
 		report_flags |= DM_REPORT_OUTPUT_COLUMNS_AS_ROWS;
 
-	rh = dm_report_init_with_selection(report_type,
-		devtypes_report ? _devtypes_report_types : _report_types,
-		devtypes_report ? _devtypes_fields : _fields,
+	if (*report_type & CMDSTATUS) {
+		types = _status_report_types;
+		fields = _status_fields;
+	} else if (*report_type & DEVTYPES) {
+		types = _devtypes_report_types;
+		fields = _devtypes_fields;
+	} else {
+		types = _report_types;
+		fields = _fields;
+	}
+
+	rh = dm_report_init_with_selection(report_type, types, fields,
 		format, separator, report_flags, keys,
 		selection, _report_reserved_values, cmd);
 
@@ -3472,4 +3499,10 @@ int report_devtypes(void *handle)
 			return 0;
 
 	return 1;
+}
+
+int report_cmdstatus(void *handle, unsigned type, const char *msg)
+{
+	struct cmd_status cmd_status = {type, msg};
+	return dm_report_object(handle, &cmd_status);
 }

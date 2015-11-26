@@ -867,6 +867,9 @@ static int _report(struct cmd_context *cmd, int argc, char **argv,
 	}
 
 	switch (report_type) {
+	case CMDSTATUS:
+		/* CMDSTATUS is reported throughout the code */
+		break;
 	case DEVTYPES:
 		r = _process_each_devtype(cmd, argc, handle);
 		break;

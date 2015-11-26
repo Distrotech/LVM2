@@ -21,17 +21,18 @@
 #include "activate.h"
 
 typedef enum {
-	LVS		= 1,
-	LVSINFO		= 2,
-	LVSSTATUS	= 4,
-	LVSINFOSTATUS   = 8,
-	PVS		= 16,
-	VGS		= 32,
-	SEGS		= 64,
-	SEGSSTATUS	= 128,
-	PVSEGS		= 256,
-	LABEL		= 512,
-	DEVTYPES	= 1024
+	CMDSTATUS	= 1,
+	LVS		= 2,
+	LVSINFO		= 4,
+	LVSSTATUS	= 8,
+	LVSINFOSTATUS   = 16,
+	PVS		= 32,
+	VGS		= 64,
+	SEGS		= 128,
+	SEGSSTATUS	= 256,
+	PVSEGS		= 512,
+	LABEL		= 1024,
+	DEVTYPES	= 2048
 } report_type_t;
 
 /*
@@ -59,6 +60,11 @@ struct selection_handle {
 	int selected;
 };
 
+struct cmd_status {
+	unsigned type;
+	const char *msg;
+};
+
 struct field;
 struct report_handle;
 
@@ -84,6 +90,7 @@ int report_object(void *handle, int selection_only, const struct volume_group *v
 		  const struct lv_with_info_and_seg_status *lvdm,
 		  const struct label *label);
 int report_devtypes(void *handle);
+int report_cmdstatus(void *handle, unsigned type, const char *msg);
 int report_output(void *handle);
 
 #endif
