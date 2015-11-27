@@ -930,6 +930,9 @@ static int _report(struct cmd_context *cmd, int argc, char **argv,
 		break;
 	}
 
+	if (handle->status_rh)
+		report_cmdstatus(handle->status_rh, 0, "Test");
+
 	if (find_config_tree_bool(cmd, report_compact_output_CFG, NULL)) {
 		if (!dm_report_compact_fields(report_handle))
 			log_error("Failed to compact report output.");
