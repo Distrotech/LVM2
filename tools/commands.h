@@ -68,6 +68,7 @@ xx(devtypes,
    "\t[--commandprofile ProfileName]\n"
    "\t[-d|--debug]\n"
    "\t[-h|--help]\n"
+   "\t[-J|--json]\n"
    "\t[--nameprefixes]\n"
    "\t[--noheadings]\n"
    "\t[--nosuffix]\n"
@@ -80,7 +81,7 @@ xx(devtypes,
    "\t[--unquoted]\n"
    "\t[--version]\n",
 
-   aligned_ARG, binary_ARG, nameprefixes_ARG,
+   aligned_ARG, binary_ARG, json_ARG, nameprefixes_ARG,
    noheadings_ARG, nosuffix_ARG, options_ARG,
    rows_ARG, select_ARG, separator_ARG, sort_ARG,
    unbuffered_ARG, unquoted_ARG)
@@ -665,6 +666,7 @@ xx(lvs,
    "\t[-h|--help]\n"
    "\t[--ignorelockingfailure]\n"
    "\t[--ignoreskippedcluster]\n"
+   "\t[-J|--json]\n"
    "\t[--nameprefixes]\n"
    "\t[--noheadings]\n"
    "\t[--nosuffix]\n"
@@ -685,7 +687,7 @@ xx(lvs,
    "\t[LogicalVolume[Path] [LogicalVolume[Path]...]]\n",
 
    aligned_ARG, all_ARG, binary_ARG, foreign_ARG, ignorelockingfailure_ARG,
-   ignoreskippedcluster_ARG, nameprefixes_ARG, noheadings_ARG,
+   ignoreskippedcluster_ARG, json_ARG, nameprefixes_ARG, noheadings_ARG,
    nolocking_ARG, nosuffix_ARG, options_ARG, partial_ARG,
    readonly_ARG, rows_ARG, segments_ARG, select_ARG, separator_ARG, shared_ARG,
    sort_ARG, trustcache_ARG, unbuffered_ARG, units_ARG, unquoted_ARG)
@@ -938,6 +940,7 @@ xx(pvs,
    "\t[-h|-?|--help]\n"
    "\t[--ignorelockingfailure]\n"
    "\t[--ignoreskippedcluster]\n"
+   "\t[-J|--json]\n"
    "\t[--nameprefixes]\n"
    "\t[--noheadings]\n"
    "\t[--nosuffix]\n"
@@ -958,8 +961,8 @@ xx(pvs,
    "\t[PhysicalVolume [PhysicalVolume...]]\n",
 
    aligned_ARG, all_ARG, binary_ARG, foreign_ARG, ignorelockingfailure_ARG,
-   ignoreskippedcluster_ARG, nameprefixes_ARG, noheadings_ARG, nolocking_ARG,
-   nosuffix_ARG, options_ARG, partial_ARG, readonly_ARG, rows_ARG,
+   ignoreskippedcluster_ARG, json_ARG, nameprefixes_ARG, noheadings_ARG,
+   nolocking_ARG, nosuffix_ARG, options_ARG, partial_ARG, readonly_ARG, rows_ARG,
    segments_ARG, select_ARG, separator_ARG, shared_ARG, sort_ARG, trustcache_ARG,
    unbuffered_ARG, units_ARG, unquoted_ARG)
 
@@ -1350,6 +1353,7 @@ xx(vgs,
    "\t[-h|--help]\n"
    "\t[--ignorelockingfailure]\n"
    "\t[--ignoreskippedcluster]\n"
+   "\t[-J|--json]\n"
    "\t[--nameprefixes]\n"
    "\t[--noheadings]\n"
    "\t[--nosuffix]\n"
@@ -1369,7 +1373,7 @@ xx(vgs,
    "\t[VolumeGroupName [VolumeGroupName...]]\n",
 
    aligned_ARG, all_ARG, binary_ARG, foreign_ARG, ignorelockingfailure_ARG,
-   ignoreskippedcluster_ARG, nameprefixes_ARG, noheadings_ARG,
+   ignoreskippedcluster_ARG, json_ARG, nameprefixes_ARG, noheadings_ARG,
    nolocking_ARG, nosuffix_ARG, options_ARG, partial_ARG,
    readonly_ARG, rows_ARG, select_ARG, separator_ARG, shared_ARG, sort_ARG,
    trustcache_ARG, unbuffered_ARG, units_ARG, unquoted_ARG)
