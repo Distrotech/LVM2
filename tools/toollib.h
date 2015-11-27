@@ -71,6 +71,8 @@ int become_daemon(struct cmd_context *cmd, int skip_lvm);
 struct processing_handle {
 	int internal_report_for_select;
 	struct selection_handle *selection_handle;
+	struct dm_report_group *report_group;
+	struct dm_report *status_rh;
 	void *custom_handle;
 };
 
