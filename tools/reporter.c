@@ -737,6 +737,7 @@ static int _report(struct cmd_context *cmd, int argc, char **argv,
 	int lv_info_needed, lv_segment_status_needed;
 	int lock_global = 0;
 	const char *fields_to_compact = NULL;
+	static char report_name[] = "report";
 
 	aligned = find_config_tree_bool(cmd, report_aligned_CFG, NULL);
 	buffered = find_config_tree_bool(cmd, report_buffered_CFG, NULL);
@@ -846,6 +847,11 @@ static int _report(struct cmd_context *cmd, int argc, char **argv,
 
 	handle->internal_report_for_select = 0;
 	handle->custom_handle = report_handle;
+	if (handle->report_group &&
+	    !dm_report_group_push(handle->report_group, report_handle, report_name)) {
+		log_error("Failed to add main report to report group.");
+		goto out;
+	}
 
 	if (!_get_final_report_type(args_are_pvs,
 				    report_type, &lv_info_needed,
