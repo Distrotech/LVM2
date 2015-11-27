@@ -1790,6 +1790,10 @@ static int _get_arg_vgnames(struct cmd_context *cmd,
 struct processing_handle *init_processing_handle(struct cmd_context *cmd)
 {
 	struct processing_handle *handle;
+	const char *separator;
+	uint32_t report_type;
+	const char *options, *keys;
+	static char status_report_name[] = "status";
 
 	if (!(handle = dm_pool_zalloc(cmd->mem, sizeof(struct processing_handle)))) {
 		log_error("_init_processing_handle: failed to allocate memory for processing handle");
@@ -1806,7 +1810,40 @@ struct processing_handle *init_processing_handle(struct cmd_context *cmd)
 	 */
 	handle->internal_report_for_select = arg_is_set(cmd, select_ARG);
 
+	if (!arg_count(cmd, json_ARG))
+		return handle;
+
+	if (!(handle->report_group = dm_report_group_init(DM_REPORT_GROUP_JSON, NULL))) {
+		log_error("Failed to create report group.");
+		goto bad;
+	}
+
+	report_type = CMDSTATUS;
+	separator = arg_str_value(cmd, separator_ARG, find_config_tree_str(cmd, report_separator_CFG, NULL));
+
+	// TODO: read options and sort keys from config
+	options = "status_type,status_message";
+	keys = "status_type";
+
+	if (!(handle->status_rh = report_init(cmd, options, keys, &report_type,
+					      separator, 0, 1, 0, 0, 0, 0, NULL))) {
+		log_error("Failed to create status report.");
+		goto bad;
+	}
+
+	if (!(dm_report_group_push(handle->report_group, handle->status_rh, status_report_name))) {
+		log_error("Failed to add status report to report group.");
+		goto bad;
+	}
+
 	return handle;
+bad:
+	if (handle->report_group)
+		dm_report_group_destroy(handle->report_group);
+	if (handle->status_rh)
+		dm_report_free(handle->status_rh);
+	dm_pool_free(cmd->mem, handle);
+	return NULL;
 }
 
 int init_selection_handle(struct cmd_context *cmd, struct processing_handle *handle,
