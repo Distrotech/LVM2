@@ -204,7 +204,7 @@ static int _raid_add_target_line(struct dev_manager *dm __attribute__((unused)),
 				 struct dm_tree_node *node, uint64_t len,
 				 uint32_t *pvmove_mirror_count __attribute__((unused)))
 {
-	int r, delta_disks = 0, data_offset = 0;
+	int delta_disks = 0, data_offset = 0;
 	uint32_t s;
 	uint64_t flags = 0;
 	uint64_t rebuilds[4];
@@ -314,9 +314,6 @@ PFL();
 	if (!dm_tree_node_add_raid_target_with_params(node, len, &params))
 		return_0;
 PFL();
-	r = add_areas_line(dm, seg, node, 0u, seg->area_count);
-PFLA("r=%d", r);
-	return r;
 	return add_areas_line(dm, seg, node, 0u, seg->area_count);
 }
 

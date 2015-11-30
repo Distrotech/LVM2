@@ -2062,6 +2062,45 @@ PFLA("seg->data_copies=%u data_copies=%u", seg->data_copies, data_copies);
 	return _field_set_value(field, "", &GET_TYPE_RESERVED_VALUE(num_undef_32));
 }
 
+#if 1
+static int _segdata_offset_disp(struct dm_report *rh, struct dm_pool *mem,
+				struct dm_report_field *field,
+				const void *data, void *private)
+{
+	const struct lv_segment *seg = (const struct lv_segment *) data;
+	const struct lv_segment *raid_seg = NULL;
+	const char *what = "";
+
+	if (lv_is_raid_image(seg->lv) && !seg->le) {
+		struct lv_list *lvl;
+		char *lv_name = strdup(seg->lv->name);
+
+PFLA("seg->lv=%s", display_lvname(seg->lv));
+		if (lv_name) {
+			char *p = strchr(lv_name, '_');
+
+			if (p) {
+				*p = '\0';
+
+				if ((lvl = find_lv_in_vg(seg->lv->vg, lv_name))) {
+PFLA("lvl->lv=%s", display_lvname(lvl->lv));
+					if (seg_is_reshapable_raid(first_seg(lvl->lv))) {
+						uint64_t data_offset;
+
+						if (lv_raid_offset_and_sectors(lvl->lv, &data_offset, NULL))
+							return dm_report_field_uint64(rh, field, &data_offset);
+
+						what = _str_unknown;
+					}
+				}
+			}
+		}
+
+	}
+
+	return _field_set_value(field, what, &GET_TYPE_RESERVED_VALUE(num_undef_64));
+}
+#else
 static int _segdata_offset_disp(struct dm_report *rh, struct dm_pool *mem,
 				struct dm_report_field *field,
 				const void *data, void *private)
@@ -2081,7 +2120,7 @@ static int _segdata_offset_disp(struct dm_report *rh, struct dm_pool *mem,
 
 	return _field_set_value(field, what, &GET_TYPE_RESERVED_VALUE(num_undef_64));
 }
-
+#endif
 
 static int _seg_parity_chunks_disp(struct dm_report *rh, struct dm_pool *mem,
 		   		   struct dm_report_field *field,

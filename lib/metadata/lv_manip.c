@@ -1451,8 +1451,7 @@ PFLA("end recursive seg_lv(seg, %u)=%s", s, display_lvname(seg_lv(seg, s)));
 
 		if (reduced) {
 			seg->len = _seg_smallest_sub_lv(seg);
-			seg->area_len = _seg_area_len(seg, seg->len) + seg->reshape_len;
-			seg->len += seg->reshape_len;
+			seg->area_len = _seg_area_len(seg, seg->len);
 			lv->le_count = seg->len;
 			lv->size = (uint64_t) lv->le_count * lv->vg->extent_size;
 
@@ -1471,8 +1470,11 @@ PFLA("end recursive seg_lv(seg, %u)=%s", s, display_lvname(seg_lv(seg, s)));
 #endif
 
 	extents_sav = extents;
-	if (seg_is_striped(seg) || seg_is_striped_raid(seg))
+#if 0
+	if (extents != lv->le_count &&
+	    (seg_is_striped(seg) || seg_is_striped_raid(seg)))
 		extents = _round_to_stripe_boundary(lv, extents, stripes, 0 /* reduce */);
+#endif
 
 	if (extents > extents_sav) {
 		log_warn("LV %s would be %u extents smaller than requested due to stripe boundary rounding!",
@@ -1568,17 +1570,6 @@ PFLA("seg->lv=%s reduction=%u", display_lvname(seg->lv), reduction);
 	if (!delete)
 		return 1;
 out:
-#if 0
-	if (seg_is_raid1(seg)) {
-		uint32_t s;
-
-		for (s = 0; s < seg->area_count; s++) {
-			lv_remove(seg_lv(seg, s));
-			lv_remove(seg_metalv(seg, s));
-		}
-	}
-#endif
-
 PFLA("deleting %s le_count=%u", lv->name, lv->le_count);
 	if (lv == lv->vg->pool_metadata_spare_lv) {
 		lv->status &= ~POOL_METADATA_SPARE;
@@ -1886,14 +1877,7 @@ PFLA("alloc_count=%u parity_count=%u metadata_area_count=%u", alloc_count, parit
 	total_extents = new_extents;
 PFLA("ah->area_multiple=%u area_count=%u new_extents=%u total_extents=%u stripes=%u mirrors=%u", ah->area_multiple, area_count, new_extents, total_extents, stripes, mirrors);
 	if (segtype_is_raid(segtype)) {
-#if 1
 		total_extents = raid_total_extents(segtype, total_extents, stripes, mirrors);
-#else
-		if (segtype_is_raid01(segtype))
-			total_extents /= stripes;
-		else if (segtype_is_any_raid10(segtype))
-			total_extents = stripes * raid_rimage_extents(segtype, total_extents, stripes, mirrors);
-#endif
 
 PFLA("total_extents=%u stripes=%u mirrors=%u", total_extents, stripes, mirrors);
 		if (metadata_area_count) {
@@ -2384,8 +2368,8 @@ PFLA("area_multiple=%u remaining_seg_len=%u", area_multiple, remaining_seg_len);
 	     s++) {
 		if (seg_type(seg, s) == AREA_LV) {
 			uint32_t image_le = raid_rimage_extents(seg->segtype, le - seg->le,
-								   seg->area_count - seg->segtype->parity_devs,
-								   1 /* seg->data_copies */);
+								seg->area_count - seg->segtype->parity_devs,
+								1 /* seg->data_copies */);
 
 			if (!(r = _for_each_pv(cmd, seg_lv(seg, s),
 #if 1
@@ -4093,10 +4077,44 @@ static int _lv_insert_empty_data_sublvs(struct logical_volume *lv,
 	return 1;
 }
 
+#if 1
+/* Wipe first sector of metadata LV @meta_lv */
+static int _clear_raid_meta_lv(struct logical_volume *meta_lv)
+{
+	uint64_t offset;
+	struct volume_group *vg = meta_lv->vg;
+	struct lv_segment *seg = first_seg(meta_lv);
+	struct physical_volume *pv;
+
+	if (seg->area_count != 1 ||
+	    seg_type(seg, 0) != AREA_PV)
+		return 0;
+
+	pv = seg_pv(seg, 0);
+	offset = (pv->pe_start + seg_pe(seg, 0) * vg->extent_size) << 9;
+
+	/*
+	 * Rather than wiping meta_lv->size, we can simply
+	 * wipe '1' to remove the superblock of any previous
+	 * RAID devices.  It is much quicker.
+	 */
+	log_verbose("Clearing metadata area of %s/%s", vg->name, meta_lv->name);
+	lv_set_hidden(meta_lv);
+	return dev_set(pv->dev, offset, 4096, 0);
+}
+#endif
+
 /* Wipe first sector of metadata LV @meta_lv */
 static int _clear_meta_lv(struct logical_volume *meta_lv)
 {
 	struct volume_group *vg = meta_lv->vg;
+#if 1
+	struct lv_segment *seg = first_seg(meta_lv);
+
+	/* If this is a segment with a single AREA_PV -> avoid wiping overhead */
+	if (seg->area_count == 1 && seg_type(seg, 0) == AREA_PV)
+		return _clear_raid_meta_lv(meta_lv);
+#endif
 
 	/* For clearing, simply activate locally */
 	if (!activate_lv_local(vg->cmd, meta_lv)) {
@@ -4104,13 +4122,12 @@ static int _clear_meta_lv(struct logical_volume *meta_lv)
 		return 0;
 	}
 
-	log_verbose("Clearing metadata area of %s/%s", vg->name, meta_lv->name);
-
 	/*
 	 * Rather than wiping meta_lv->size, we can simply
 	 * wipe '1' to remove the superblock of any previous
 	 * RAID devices.  It is much quicker.
 	 */
+	log_verbose("Clearing metadata area of %s/%s", vg->name, meta_lv->name);
 	if (!wipe_lv(meta_lv, (struct wipe_params) { .do_zero = 1, .zero_sectors = 1 })) {
 		log_error("Failed to zero %s/%s", vg->name, meta_lv->name);
 		return 0;
@@ -4126,6 +4143,7 @@ static int _clear_meta_lv(struct logical_volume *meta_lv)
 	return 1;
 }
 
+#if 0
 /* Wipe first sector of all metadata LVs of @lv */
 static int _clear_metadata(struct logical_volume *lv)
 {
@@ -4151,6 +4169,7 @@ static int _clear_metadata(struct logical_volume *lv)
 
 	return 1;
 }
+#endif
 
 /*
  * Create @sub_lv_countfor @stripes raid metadata images from allocation
@@ -4217,13 +4236,34 @@ static int _lv_create_and_clear_metadata_lvs(struct logical_volume *lv,
 		return_0;
 #endif
 
+#if 1
+	/*
+	 * If we have a non-linear metadata LV we need to write+commit the vg metadata,
+	 * because _clear_metadata() will activate the respective metadata LV(s).
+	 * It can cope with mixtures of linear and non-linear metadata LVs,
+	 * thus optimizing qiping of the former.
+	 */
+	dm_list_iterate_items(lvl, meta_lvs) {
+		struct lv_segment *seg = first_seg(lvl->lv);
+
+		if (seg->area_count != 1 ||
+		    seg_type(seg, 0) != AREA_PV) {
+			/* Write and commit vg with @lv wit one error segment and the sub_lv_count metadata LVs */
+			if (!vg_write(lv->vg) || !vg_commit(lv->vg))
+				return_0;
+
+			break;
+		}
+	}
+#else
 	/* Write and commit vg with @lv wit one error segment and the sub_lv_count metadata LVs */
 	if (!vg_write(lv->vg) || !vg_commit(lv->vg))
 		return_0;
+#endif
 
-		/*
-	 	 * We must clear the metadata areas only upon creation.
-	 	 */
+	/*
+ 	 * We must clear the metadata areas only upon creation.
+ 	 */
 	dm_list_iterate_items(lvl, meta_lvs)
 		if (!_clear_meta_lv(lvl->lv))
 			return 0;
@@ -4390,6 +4430,7 @@ int lv_extend(struct logical_volume *lv,
 {
 	int r = 1;
 	int log_count = 0;
+	int alloc_mirrors = 1;
 	uint32_t area_count, s;
 	struct alloc_handle *ah;
 	uint32_t sub_lv_count;
@@ -4398,6 +4439,13 @@ int lv_extend(struct logical_volume *lv,
 	uint64_t lv_size;
 	struct lv_segment *seg = last_seg(lv);
 
+	/*
+	 * HM FIXME:
+	 *
+	 * extents raid set capacity which fails for complex layouts and allocation of reshape space!
+	 *
+	 * e.g. too much allocated for raid10
+	 */
 	log_very_verbose("Adding segment of type %s to LV %s.", segtype->name, display_lvname(lv));
 PFLA("extents=%u", extents);
 #if 1
@@ -4420,9 +4468,9 @@ PFLA("recursive seg_lv(seg, %u)=%s extents=%u", s, display_lvname(lv1), extents)
 		}
 
 		if (extended) {
-			seg->len =  _seg_smallest_sub_lv(seg) + seg->reshape_len;
-			seg->area_len = _seg_area_len(seg, seg->len) + seg->reshape_len;
-			seg->len +=  seg->reshape_len;
+			seg->len =  _seg_smallest_sub_lv(seg); //  + seg->reshape_len;
+			seg->area_len = _seg_area_len(seg, seg->len); // + seg->reshape_len;
+			// seg->len +=  seg->reshape_len;
 			lv->le_count = seg->len;
 			lv->size = (uint64_t) lv->le_count * lv->vg->extent_size;
 			return 1;
@@ -4457,8 +4505,11 @@ PFLA("extents=%u stripe_size=%u", extents, stripe_size);
 		/* FIXME Support striped metadata pool */
 		log_count = 1;
 
-	} else if (segtype_is_striped(segtype) || segtype_is_striped_raid(segtype))
+	} else if (segtype_is_striped_raid(segtype)) {
+		/* If only one extent is being requested on a striped raid set, it's reshape space being requested */
+		alloc_mirrors = extents > 1 ? 1 : 0;
 		extents = _round_to_stripe_boundary(lv, extents, stripes, 1 /* extend */);
+	}
 
 PFLA("extents=%u segtype=%s mirrors=%u stripes=%u log_count=%u", extents, segtype->name, mirrors, stripes, log_count);
 
@@ -4489,10 +4540,12 @@ PFLA("extents=%u mirrors=%u stripes=%u log_count=%u", extents, mirrors, stripes,
 		return 0;
 	}
 
-	if (!(ah = allocate_extents(lv->vg, lv, segtype, stripes, mirrors,
+	if (!(ah = allocate_extents(lv->vg, lv, segtype, stripes, alloc_mirrors ? mirrors : 1,
 				    log_count, region_size, extents,
 				    allocatable_pvs, alloc, approx_alloc, NULL)))
 		return_0;
+
+	// extents = ah->new_extents - seg->len;
 
 {
 struct alloced_area *aa;
@@ -5369,7 +5422,7 @@ static int _lvresize_adjust_extents(struct cmd_context *cmd, struct logical_volu
 	uint32_t area_multiple;
 	uint32_t stripesize_extents;
 	uint32_t size_rest;
-	uint32_t existing_logical_extents = lv->le_count - seg->reshape_len * (seg->area_count - seg->segtype->parity_devs);
+	uint32_t existing_logical_extents = lv->le_count; //  - seg->reshape_len * (seg->area_count - seg->segtype->parity_devs);
 	uint32_t existing_physical_extents, saved_existing_physical_extents;
 	uint32_t seg_size = 0;
 	uint32_t new_extents;

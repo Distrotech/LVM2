@@ -2452,8 +2452,9 @@ static int _raid_emit_segment_line(struct dm_task *dmt, uint32_t major,
 	if (seg->region_size)
 		EMIT_PARAMS(pos, " region_size %u", seg->region_size);
 
+	/* If seg-data_offset = 1, kernel needs a zero offset to adjust to it */
 	if (seg->data_offset)
-		EMIT_PARAMS(pos, " data_offset %d", seg->data_offset);
+		EMIT_PARAMS(pos, " data_offset %d", seg->data_offset == 1 ? 0 : seg->data_offset);
 
 	if (seg->delta_disks)
 		EMIT_PARAMS(pos, " delta_disks %d", seg->delta_disks);
