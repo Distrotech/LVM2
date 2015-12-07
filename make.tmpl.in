@@ -65,9 +65,6 @@ BLKID_LIBS = @BLKID_LIBS@
 VALGRIND_CFLAGS = @VALGRIND_CFLAGS@
 TESTING = @TESTING@
 
-GIO_CFLAGS = @GIO_CFLAGS@
-GIO_LIBS = @GIO_LIBS@
-
 # Setup directory variables
 prefix = @prefix@
 exec_prefix = @exec_prefix@

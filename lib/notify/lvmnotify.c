@@ -14,59 +14,50 @@
 #include "lvmnotify.h"
 
 #ifdef NOTIFYDBUS_SUPPORT
-#include <gio/gio.h>
+#include <systemd/sd-bus.h>
 
 void lvmnotify_send(struct cmd_context *cmd)
 {
-	GDBusProxy *con = NULL;
-	GError *error = NULL;
+	sd_bus *bus = NULL;
+	sd_bus_message *m = NULL;
+	sd_bus_error error = SD_BUS_ERROR_NULL;
+	const char *path;
 	const char *cmd_name;
-	GVariant *rc;
-	int result = 0;
+	int ret;
 
 	if (!cmd->vg_notify && !cmd->lv_notify && !cmd->pv_notify)
 		return;
 
-	con = g_dbus_proxy_new_for_bus_sync(G_BUS_TYPE_SYSTEM,
-						  G_DBUS_PROXY_FLAGS_NONE,
-						  NULL,
-						  "com.redhat.lvmdbus1.Manager",
-						  "/com/redhat/lvmdbus1/Manager",
-						  "com.redhat.lvmdbus1.Manager",
-						  NULL,
-						  &error);
-	if (!con && error) {
-		log_debug("Failed to connect to dbus %d %s",
-			  error->code, error->message);
-		g_error_free(error);
+	cmd_name = get_cmd_name();
+
+	ret = sd_bus_open_system(&bus);
+	if (ret < 0) {
+		log_debug("Failed to connect to dbus: %d", ret);
 		return;
 	}
 
-	cmd_name = get_cmd_name();
+	ret = sd_bus_call_method(bus,
+				 "com.redhat.lvmdbus1.Manager",
+				 "/com/redhat/lvmdbus1/Manager",
+				 "com.redhat.lvmdbus1.Manager",
+				 "ExternalEvent",
+				 &error,
+				 NULL,
+				 "s",
+				 cmd_name);
 
-	rc = g_dbus_proxy_call_sync(con,
-				    "ExternalEvent",
-				    g_variant_new("(s)", cmd_name),
-				    G_DBUS_CALL_FLAGS_NONE,
-				    -1, NULL, &error);
-
-	if (rc) {
-		g_variant_get(rc, "(i)", &result);
-		if (result)
-			log_debug("Error from sending dbus notification %d", result);
-		g_variant_unref(rc);
-
-	} else if (error) {
-		if (error->code != 2)
-			log_debug("Failed to send dbus notification %d %s", error->code, error->message);
-		g_error_free(error);
-
-	} else {
-		log_debug("Undefined dbus result");
+	if (ret < 0) {
+		log_debug("Failed to issue dbus method call: %s", error.message);
+		goto out;
 	}
 
+	ret = sd_bus_message_read(m, "o", &path);
+	if (ret < 0)
+		log_debug("Failed to parse dbus response message: %d", ret);
 
-	g_object_unref(con);
+	sd_bus_error_free(&error);
+	sd_bus_message_unref(m);
+	sd_bus_unref(bus);
 }
 
 void set_vg_notify(struct cmd_context *cmd)

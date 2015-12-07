@@ -854,8 +854,6 @@ if test "$BUILDOPENAIS" = yes; then
 	CHECKCPG=yes
 fi
 
-PKG_CHECK_MODULES([GIO], [gio-unix-2.0])
-
 dnl -- Below are checks for libraries common to more than one build.
 
 dnl -- Check confdb library.
@@ -1290,12 +1288,13 @@ BUILD_NOTIFYDBUS=$NOTIFYDBUS
 
 if test "$BUILD_NOTIFYDBUS" = yes; then
 	AC_DEFINE([NOTIFYDBUS_SUPPORT], 1, [Define to 1 to include code that uses dbus notification.])
+	LIBS="-lsystemd $LIBS"
 fi
 
 ################################################################################
 dnl -- Look for dbus libraries
 if test "$BUILD_NOTIFYDBUS" = yes; then
-	PKG_CHECK_MODULES(NOTIFY_DBUS, gio-unix-2.0, [HAVE_NOTIFY_DBUS=yes], $bailout)
+	PKG_CHECK_MODULES(NOTIFY_DBUS, systemd >= 221, [HAVE_NOTIFY_DBUS=yes], $bailout)
 fi
 
 ################################################################################
@@ -2033,8 +2032,6 @@ AC_SUBST(SACKPT_CFLAGS)
 AC_SUBST(SACKPT_LIBS)
 AC_SUBST(SALCK_CFLAGS)
 AC_SUBST(SALCK_LIBS)
-AC_SUBST(GIO_CFLAGS)
-AC_SUBST(GIO_LIBS)
 AC_SUBST(SELINUX_LIBS)
 AC_SUBST(SELINUX_PC)
 AC_SUBST(SNAPSHOTS)
