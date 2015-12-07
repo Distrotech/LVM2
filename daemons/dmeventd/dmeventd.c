@@ -2205,3 +2205,49 @@ int main(int argc, char *argv[])
 
 	exit(EXIT_SUCCESS);
 }
+
+#ifdef NOTIFYDBUS_SUPPORT
+#include <systemd/sd-bus.h>
+
+static void *dbus_callback_data;
+
+static int dbus_callback(sd_bus_message *m, void *userdata, sd_bus_error *ret_error)
+{
+	return 0;
+}
+
+void lvmnotify_send_noreply(const char *name)
+{
+	sd_bus *bus = NULL;
+	int ret;
+
+	ret = sd_bus_open_system(&bus);
+	if (ret < 0) {
+		log_debug("Failed to connect to dbus: %d", ret);
+		return;
+	}
+
+	ret = sd_bus_call_method_async(bus, NULL,
+				 "com.redhat.lvmdbus1.Manager",
+				 "/com/redhat/lvmdbus1/Manager",
+				 "com.redhat.lvmdbus1.Manager",
+				 "ExternalEvent",
+				 dbus_callback,
+				 dbus_callback_data,
+				 "s",
+				 name);
+
+	if (ret < 0)
+		log_debug("Failed to issue dbus method call: %d", ret);
+
+	sd_bus_unref(bus);
+}
+
+#else
+
+void lvmnotify_send_noreply(const char *name)
+{
+}
+
+#endif
+

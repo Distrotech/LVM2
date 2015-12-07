@@ -93,6 +93,8 @@ void process_event(struct dm_task *dmt,
 			log_error("Failed to process event for %s.",
 				  device);
 	} while (next);
+
+	lvmnotify_send_noreply("dmeventd_raid");
 }
 
 int register_device(const char *device,

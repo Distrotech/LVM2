@@ -73,4 +73,6 @@ int init_fifos(struct dm_event_fifos *fifos);
 void fini_fifos(struct dm_event_fifos *fifos);
 int dm_event_get_version(struct dm_event_fifos *fifos, int *version);
 
+void lvmnotify_send_noreply(const char *name);
+
 #endif /* __DMEVENTD_DOT_H__ */
