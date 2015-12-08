@@ -1156,7 +1156,7 @@ int lv_raid_convert(struct logical_volume *lv,
 		    const unsigned region_size,
 		    const unsigned stripes,
 		    const unsigned stripe_size,
-		    const char *pool_data_name,
+		    const char *sub_lv_name,
 		    struct dm_list *allocate_pvs);
 int lv_raid_replace(struct logical_volume *lv, int yes,
 		    struct dm_list *remove_pvs,

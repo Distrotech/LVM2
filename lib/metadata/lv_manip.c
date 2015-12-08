@@ -1121,7 +1121,8 @@ PFLA("lv=%s,s=%u area_reduction=%u, with_discard=%d", seg_type(seg, s) == AREA_L
 			struct logical_volume *mlv;
 			struct volume_group *vg = lv->vg;
 
-			if (!(mlv = seg_metalv(seg, s)))
+			if (seg_metatype(seg, s) != AREA_LV ||
+			    !(mlv = seg_metalv(seg, s)))
 				return 0;
 
 PFLA("mlv=%s area_reduction=%u lv->le_count=%u mlv->le_count=%u" , mlv->name, area_reduction, lv->le_count, mlv->le_count);
@@ -1292,7 +1293,7 @@ static int _lv_segment_add_areas(struct logical_volume *lv,
 static uint32_t _seg_area_len(struct lv_segment *seg, uint32_t extents)
 {
 	/* Prevent parity_devs to be subtracted in case of 2 devs raid4/5 */
-	uint32_t r, stripes = seg->area_count - (seg->area_count > 2 ? seg->segtype->parity_devs : 0);
+	uint32_t stripes = seg->area_count - (seg->area_count > 2 ? seg->segtype->parity_devs : 0);
 
 PFLA("lv=%s extents=%u", display_lvname(seg->lv), extents);
 PFLA("segtype=%s seg->reshape_len=%u stripes=%u data_copies=%u", lvseg_name(seg), seg->reshape_len, stripes, seg->data_copies);
@@ -1384,7 +1385,7 @@ PFL();
 /* HM FIXME: correct? */
 static int _is_layered_lv(struct logical_volume *lv, uint32_t s)
 {
-	struct lv_segment *seg = last_seg(lv), *seg1;
+	struct lv_segment *seg = last_seg(lv);
 
 	if (!seg)
 		return 0;
@@ -1459,7 +1460,8 @@ PFLA("end recursive seg_lv(seg, %u)=%s", s, display_lvname(seg_lv(seg, s)));
 			    !lv->le_count &&
 			    seg->meta_areas) {
 				for (s = 0; s < seg->area_count; s++)
-					if (!lv_remove(seg_metalv(seg, s)))
+					if (seg_metatype(seg, s) == AREA_LV &&
+					    !lv_remove(seg_metalv(seg, s)))
 						return_0;
 				goto out;
 			}
@@ -1664,10 +1666,7 @@ int lv_reduce(struct logical_volume *lv, uint32_t extents)
  */
 int lv_remove(struct logical_volume *lv)
 {
-	if (!lv_reduce(lv, lv->le_count))
-		return 0;
-
-	return 1;
+	return lv_reduce(lv, lv->le_count);
 }
 
 /*
@@ -2125,7 +2124,7 @@ static int _setup_alloced_segment(struct logical_volume *lv, uint64_t status,
 				  struct alloced_area *aa,
 				  uint32_t region_size)
 {
-	uint32_t s, extents, area_multiple, stripes = area_count - segtype->parity_devs;
+	uint32_t s, extents, stripes = area_count - segtype->parity_devs;
 	struct lv_segment *seg;
 
 PFLA("area_count=%u data_copies=%u segtype=%s", area_count, data_copies, segtype->name);
@@ -2330,7 +2329,7 @@ static int _for_each_pv(struct cmd_context *cmd, struct logical_volume *lv,
 			void *data)
 {
 	uint32_t s;
-	uint32_t remaining_seg_len, area_len, area_multiple;
+	uint32_t remaining_seg_len, area_len;
 	uint32_t stripes_per_mimage = 1;
 	int r = 1;
 
@@ -3616,7 +3615,6 @@ struct alloc_handle *allocate_extents(struct volume_group *vg,
 				      alloc_policy_t alloc, int approx_alloc,
 				      struct dm_list *parallel_areas)
 {
-	struct lv_segment *seg = lv ? first_seg(lv) : NULL;
 	struct alloc_handle *ah;
 	uint32_t areas;
 

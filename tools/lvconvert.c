@@ -261,6 +261,7 @@ static int _snapshot_type_requested(struct cmd_context *cmd, const char *type_st
 /* mirror/raid* (1,10,4,5,6 and their variants) reshape */
 static int _mirror_or_raid_type_requested(struct cmd_context *cmd, const char *type_str) {
 	return (arg_count(cmd, mirrors_ARG) ||
+		arg_count(cmd, regionsize_ARG) ||
 		!strncmp(type_str, "raid", 4) ||
 		!strcmp(type_str, SEG_TYPE_NAME_MIRROR));
 }
@@ -523,6 +524,31 @@ static int _read_params(struct cmd_context *cmd, int argc, char **argv,
 		lp->keep_mimages = 1;
 		lp->mirrors = arg_uint_value(cmd, splitmirrors_ARG, 0);
 		lp->mirrors_sign = SIGN_MINUS;
+	/* --unduplicate given -> check for sub lv name or mirrors/stripes/stripe_size/region_size provided */
+	} else if (arg_count(cmd, unduplicate_ARG)) {
+		int ac = arg_count(cmd, mirrors_ARG) +
+			 arg_count(cmd, stripes_ARG) +
+			 arg_count(cmd, stripesize_ARG) +
+			 arg_count(cmd, regionsize_ARG);
+
+PFL();
+		if (arg_count(cmd, name_ARG)) {
+			if (ac) {
+				log_error("Can't provide any mirrors/stripes/stripesize/regionsize option with --name");
+				return 0;
+			}
+
+			lp->lv_split_name = arg_str_value(cmd, name_ARG, NULL);
+PFLA("lp->lv_split_name=%s", lp->lv_split_name);
+
+		}
+#if 0
+		} else if (!ac) {
+			log_error("Please name the new logical volume using '--name'");
+			return 0;
+		}
+#endif
+
 	} else if (arg_count(cmd, name_ARG)) {
 		log_error("The 'name' argument is only valid"
 			  " with --splitmirrors");
@@ -1758,6 +1784,7 @@ PFLA("image_count=%u\n", image_count);
 	if ((seg_is_linear(seg) || seg_is_striped(seg) || seg_is_mirror(seg) || seg_is_raid(seg)) &&
 	    (arg_count(cmd, type_ARG) ||
 	     arg_is_set(cmd, mirrors_ARG) ||
+	     arg_is_set(cmd, regionsize_ARG) ||
 	     arg_is_set(cmd, stripes_long_ARG) ||
 	     arg_is_set(cmd, stripesize_ARG) ||
 	     arg_is_set(cmd, duplicate_ARG) ||
@@ -1818,12 +1845,13 @@ PFLA("image_count=%u\n", image_count);
 		} else
 			data_copies = arg_is_set(cmd, mirrors_ARG) ? lp->mirrors + 1 : -1;
 
+PFLA("lp->region_size=%u", lp->region_size);
 		return lv_raid_convert(lv, arg_count(cmd, type_ARG) ? (struct segment_type *) lp->segtype : NULL,
 				       lp->yes, lp->force,
 				       arg_is_set(cmd, duplicate_ARG), arg_is_set(cmd, unduplicate_ARG),
 				       data_copies, lp->region_size,
 				       stripes, stripe_size,
-				       lp->pool_data_name, lp->pvh);
+				       lp->lv_split_name, lp->pvh);
 	}
 
 	if (arg_count(cmd, replace_ARG))
