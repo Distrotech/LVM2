@@ -701,6 +701,9 @@ static int _read_lvnames(struct format_instance *fid __attribute__((unused)),
 	if (timestamp && !lv_set_creation(lv, hostname, timestamp))
 		return_0;
 
+	if (!lv_is_visible(lv) && strstr(lv->name, "_dup_"))
+		lv->status |= LV_DUPLICATED;
+
 	if (!lv_is_visible(lv) && strstr(lv->name, "_pmspare")) {
 		if (vg->pool_metadata_spare_lv) {
 			log_error("Couldn't use another pool metadata spare "

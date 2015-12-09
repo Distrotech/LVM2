@@ -138,7 +138,8 @@
 #define LV_ERROR_WHEN_FULL	UINT64_C(0x0080000000000000)    /* LV - error when full */
 #define LOCKD_SANLOCK_LV	UINT64_C(0x0100000000000000)	/* LV - Internal use only */
 #define LV_RESHAPE_REMOVED	UINT64_C(0x0200000000000000)	/* LV got removed from raid set by shrinking reshape */
-/* Next unused flag:		UINT64_C(0x0400000000000000)    */
+#define	LV_DUPLICATED		UINT64_C(0x0400000000000000)    /* LV - duplicated, internal use only */
+/* Next unused flag:		UINT64_C(0x0800000000000000)    */
 
 /* Format features flags */
 #define FMT_SEGMENTS		0x00000001U	/* Arbitrary segment params? */
@@ -240,6 +241,8 @@
 #define lv_is_rlog(lv)		(((lv)->status & REPLICATOR_LOG) ? 1 : 0)
 
 #define lv_is_removed(lv)	(((lv)->status & LV_REMOVED) ? 1 : 0)
+#define lv_is_removed(lv)	(((lv)->status & LV_REMOVED) ? 1 : 0)
+#define lv_is_duplicated(lv)	(((lv)->status & LV_DUPLICATED) ? 1 : 0)
 
 int lv_layout_and_role(struct dm_pool *mem, const struct logical_volume *lv,
 		       struct dm_list **layout, struct dm_list **role);
