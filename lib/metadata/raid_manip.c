@@ -5901,6 +5901,59 @@ PFL();
 }
 
 /*
+ * HM Helper:
+ *
+ * create a new duplicating LV for @lv based on parameters
+ * @new_segtype, ...* and utilize PVs on @allocate_pvs list
+ * for allocation
+ */
+static struct logical_volume *_dup_lv_create(
+	struct logical_volume *lv, const struct segment_type *new_segtype,
+	const uint32_t new_data_copies, const uint32_t region_size,
+	const uint32_t new_stripes, const uint32_t new_stripe_size,
+	const uint32_t extents, const char *pool_lv_name,
+	struct dm_list *allocate_pvs)
+{
+	char *lv_name;
+	struct logical_volume *r;
+
+	RETURN_IF_LV_SEGTYPE_ZERO(lv, new_segtype);
+
+	log_debug_metadata("Creating unique LV name for destination sub LV");
+	RETURN_IF_ZERO((lv_name = _unique_lv_name(lv, "_dup_")), "lv_name allocation");
+
+	/* Create the destination lv */
+	log_debug_metadata("Creating destination sub LV");
+	if (!(r = _lv_create(lv->vg, lv_name, new_segtype, new_data_copies, region_size,
+			     new_stripes, new_stripe_size, extents, pool_lv_name, allocate_pvs))) {
+		log_error("Failed to create destination lv %s/%s", lv->vg->name, lv_name);
+		return 0;
+	}
+
+	r->status |= RAID_IMAGE;
+	lv_set_hidden(r);
+
+PFLA("dup_lv=%s", display_lvname(r));
+
+	if (extents != r->le_count) {
+		log_warn("Destination LV with %u extents is larger than source "
+			  "with %u due to stripe boundary rounding",
+			 r->le_count, extents);
+		log_warn("You may want to resize your LV content after the "
+			 "duplication conversion got removed (e.g. resize fs)");
+	}
+PFL();
+	/* Rename destination lvs sub lvs */
+	log_debug_metadata("Renaming destination LV %s sub LVs", display_lvname(r));
+	if (!_rename_sub_lvs(r, rename_to_dup)) {
+		log_error(INTERNAL_ERROR "Failed to rename %s sub LVs", display_lvname(r));
+		return 0;
+	}
+
+	return r;
+}
+
+/*
  * Helper: raid to raid conversion by duplication
  *
  * Inserts a layer on top of the given @lv (if not existing already),
@@ -5920,7 +5973,7 @@ static int _raid_conv_duplicate(struct logical_volume *lv,
 	int duplicating = _lv_is_duplicating(lv);
 	uint32_t data_copies = new_data_copies, extents, raid1_image_count, region_size = 1024, s;
 	char *lv_name, *p, *suffix;
-	struct logical_volume *dst_lv;
+	struct logical_volume *dup_lv;
 	struct lv_segment *seg;
 	const char **lv_name_sav;
 
@@ -6030,35 +6083,11 @@ PFLA("segtype=%s area_count=%u data_copies=%u stripe_size=%u", lvseg_name(seg), 
 PFLA("seg->area_count=%u", seg->area_count);
 PFLA("lv->name=%s lv->le_count=%u seg_lv(seg, 0)=%s", lv->name, lv->le_count, seg_lv(seg, 0)->name);
 
-	log_debug_metadata("Creating unique LV name for destination sub LV");
-	if (!(lv_name = _unique_lv_name(lv, "_dup_")))
+	if (!(dup_lv = _dup_lv_create(lv, new_segtype,
+				      new_data_copies, region_size,
+				      new_stripes, new_stripe_size,
+				      extents, pool_lv_name, allocate_pvs)))
 		return 0;
-
-	/* Create the destination lv */
-	log_debug_metadata("Creating destination sub LV");
-	if (!(dst_lv = _lv_create(lv->vg, lv_name, new_segtype, new_data_copies, region_size,
-				  new_stripes, new_stripe_size, extents, pool_lv_name, allocate_pvs))) {
-		log_error("Failed to create destination lv %s/%s", lv->vg->name, lv_name);
-		return 0;
-	}
-
-	dst_lv->status |= RAID_IMAGE;
-	lv_set_hidden(dst_lv);
-
-PFLA("dst_lv=%s", display_lvname(dst_lv));
-
-	if (extents != dst_lv->le_count) {
-		log_warn("Destination LV with %u extents is larger than source with %u due to stripe boundary rounding",
-			 dst_lv->le_count, extents);
-		log_warn("You may want to resize your LV content after the duplication conversion got removed (e.g. resize fs)");
-	}
-PFL();
-	/* Rename destination lvs sub lvs */
-	log_debug_metadata("Renaming destination LV %s sub LVs", display_lvname(dst_lv));
-	if (!_rename_sub_lvs(dst_lv, rename_to_dup)) {
-		log_error(INTERNAL_ERROR "Failed to rename %s sub LVs", display_lvname(dst_lv));
-		return 0;
-	}
 
 	/* Grow areas arrays for data and metadata devs to add destination lv */
 	log_debug_metadata("Reallocating areas array of %s", display_lvname(lv));
@@ -6072,12 +6101,12 @@ PFL();
 	seg->data_copies = seg->area_count;
 PFL();
 	log_debug_metadata("Add destination LV %s to top-level LV %s as second raid1 leg",
-			   display_lvname(dst_lv), display_lvname(lv));
+			   display_lvname(dup_lv), display_lvname(lv));
 	/* Set @layer_lv as the lv of @area of @lv */
-	if (!set_lv_segment_area_lv(seg, seg->area_count - 1, dst_lv, dst_lv->le_count, dst_lv->status)) {
+	if (!set_lv_segment_area_lv(seg, seg->area_count - 1, dup_lv, dup_lv->le_count, dup_lv->status)) {
 		log_error("Failed to add destination sublv %s to %s",
-			  display_lvname(dst_lv), display_lvname(lv));
-		return 0;
+			  display_lvname(dup_lv), display_lvname(lv));
+		return NULL;
 	}
 
 	/*
@@ -6097,7 +6126,7 @@ PFLA("lv->name=%s meta_areas=%p", lv->name, seg->meta_areas);
 		struct logical_volume *meta_lv;
 PFL();
 		/* We only have to allocate the new metadata...  */
-		if (!_alloc_rmeta_for_lv(dst_lv, &meta_lv))
+		if (!_alloc_rmeta_for_lv(dup_lv, &meta_lv))
 			return 0;
 
 		/* ...and correct its name */
@@ -6143,7 +6172,7 @@ PFLA("seg_metalv(seg, %u)=%s", s, seg_metalv(seg, s)->name);
 
 	/* If we were duplicating already, we need to define the new destination lv to be rebuild */
 	if (duplicating)
-		dst_lv->status |= LV_REBUILD;
+		dup_lv->status |= LV_REBUILD;
 
 	/* Set top-level LV status */
 	lv->status |= RAID;
@@ -6173,7 +6202,7 @@ PFLA("lv0->le_count=%u lv1->le_count=%u", seg_lv(seg, 0)->le_count, seg_lv(seg, 
 	if ((segtype_is_raid4(new_segtype) ||
 	     segtype_is_any_raid5(new_segtype) ||
 	     segtype_is_any_raid6(new_segtype)) &&
-	    !_lv_cond_repair(dst_lv))
+	    !_lv_cond_repair(dup_lv))
 		return 0;
 #endif
 
