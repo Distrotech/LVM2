@@ -315,7 +315,8 @@ static int _read_pool_params(struct cmd_context *cmd, int *pargc, char ***pargv,
 					 discards_ARG, originname_ARG, thinpool_ARG,
 					 zero_ARG, -1))
 			return_0;
-		if (lp->thin) {
+		if (lp->thin &&
+		    !arg_count(cmd, duplicate_ARG)) {
 			log_error("--thin requires --thinpool.");
 			return 0;
 		}
@@ -542,14 +543,9 @@ PFL();
 PFLA("lp->lv_split_name=%s", lp->lv_split_name);
 
 		}
-#if 0
-		} else if (!ac) {
-			log_error("Please name the new logical volume using '--name'");
-			return 0;
-		}
-#endif
 
-	} else if (arg_count(cmd, name_ARG)) {
+	} else if (arg_count(cmd, name_ARG) &&
+		   !arg_count(cmd, duplicate_ARG)) {
 		log_error("The 'name' argument is only valid"
 			  " with --splitmirrors");
 		return 0;
@@ -1845,13 +1841,17 @@ PFLA("image_count=%u\n", image_count);
 		} else
 			data_copies = arg_is_set(cmd, mirrors_ARG) ? lp->mirrors + 1 : -1;
 
+		if (segtype_is_thin(lp->segtype) && arg_count(cmd, name_ARG))
+			lp->pool_data_name = arg_str_value(cmd, name_ARG, NULL);
+
 PFLA("lp->region_size=%u", lp->region_size);
+PFLA("lp->pool_data_name=%s lp->lv_split_name=%s lp->lv_name=%s", lp->pool_data_name, lp->lv_split_name, lp->lv_name);
 		return lv_raid_convert(lv, arg_count(cmd, type_ARG) ? (struct segment_type *) lp->segtype : NULL,
 				       lp->yes, lp->force,
 				       arg_is_set(cmd, duplicate_ARG), arg_is_set(cmd, unduplicate_ARG),
 				       data_copies, lp->region_size,
 				       stripes, stripe_size,
-				       lp->lv_split_name, lp->pvh);
+				       lp->pool_data_name ?: lp->lv_split_name, lp->pvh);
 	}
 
 	if (arg_count(cmd, replace_ARG))
