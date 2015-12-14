@@ -2137,8 +2137,24 @@ static int _seg_parity_chunks_disp(struct dm_report *rh, struct dm_pool *mem,
 	const struct lv_segment *seg = (const struct lv_segment *) data;
 	uint32_t parity_chunks = seg->segtype->parity_devs ?: seg->data_copies - 1;
 
-	if (parity_chunks)
+	if (parity_chunks) {
+		uint32_t s, resilient_sub_lvs = 0;
+
+		for (s = 0; s < seg->area_count; s++) {
+			if (seg_type(seg, s) == AREA_LV) {
+				struct lv_segment *seg1 = first_seg(seg_lv(seg, s));
+
+				if (seg1->segtype->parity_devs ||
+				    seg1->data_copies > 1)
+					resilient_sub_lvs++;
+			}
+		}
+
+		if (resilient_sub_lvs && resilient_sub_lvs == seg->area_count)
+			parity_chunks++;
+
 		return dm_report_field_uint32(rh, field, &parity_chunks);
+	}
 
 	return _field_set_value(field, "", &GET_TYPE_RESERVED_VALUE(num_undef_32));
 }
