@@ -3289,6 +3289,7 @@ int process_each_pv(struct cmd_context *cmd,
 		    int argc, char **argv,
 		    const char *only_this_vgname,
 		    uint32_t read_flags,
+		    uint32_t each_flags,
 		    struct processing_handle *handle,
 		    process_single_pv_fn_t process_single_pv)
 {
@@ -3343,7 +3344,7 @@ int process_each_pv(struct cmd_context *cmd,
 	process_all_pvs = dm_list_empty(&arg_pvnames) && dm_list_empty(&arg_tags);
 
 	process_all_devices = process_all_pvs && (cmd->command->flags & ENABLE_ALL_DEVS) &&
-			      arg_count(cmd, all_ARG);
+			      (each_flags & EACH_ALL);
 
 	/* Needed for a current listing of the global VG namespace. */
 	if (!only_this_vgname && !lockd_gl(cmd, "sh", 0))
@@ -3498,3 +3499,405 @@ int lvremove_single(struct cmd_context *cmd, struct logical_volume *lv,
 
 	return ECMD_PROCESSED;
 }
+
+struct pvcreate_device {
+	struct dm_list list;
+	const char *name;
+	struct device *dev;
+};
+
+/*
+ * When a prompt entry is created, save any strings or info
+ * in this struct that are needed for the prompt messages.
+ * The VG/PV structs are not be available when the prompt
+ * is run.
+ */
+struct pvcreate_prompt {
+	struct dm_list list;
+	uint32_t prompt_type;
+	const char *pv_name;
+	const char *vg_name;
+	struct device *dev;
+	unsigned answer : 1;
+	unsigned abort_command : 1;
+};
+
+static void _run_pvcreate_prompt(struct cmd_context *cmd,
+				 struct pvcreate_each_params *pep,
+				 struct pvcreate_prompt *prompt)
+{
+	if (prompt->type == PROMPT_PVCREATE_PV_IN_VG) {
+		if (pep->force != DONT_PROMPT_OVERRIDE) {
+			pep->answer = 0;
+			log_error("Can't initialize physical volume \"%s\" of volume group \"%s\" without -ff",
+				  prompt->pv_name, prompt->vg_name);
+		} else if (pp->yes) {
+			pep->answer = 1;
+		} else {
+			if (yes_no_prompt("Really INITIALIZE physical volume \"%s\" of volume group \"%s\" [y/n]? ",
+					  prompt->pv_name, prompt->vg_name) == 'n') {
+				pep->answer = 0;
+				log_error("%s: physical volume not initialized", prompt->pv_name);
+			} else {
+				pep->answer = 1;
+			}
+		}
+	}
+}
+
+
+static pvcreate_device *_pvcreate_list_find_name(struct dm_list *devices, const char *name)
+{
+	struct pvcreate_device *pd;
+
+	dm_list_iterate_items(pd, devices) {
+		if (!strcmp(name, pd->name))
+			return pd;
+	}
+	return NULL;
+}
+
+/*
+ * If this function returns ECMD_FAILED, it will
+ * cause the entire command to fail.
+ *
+ * If this function decides that a arg_names entry cannot be
+ * used, but the command might be able to continue without it,
+ * then it moves that entry from arg_names to arg_fail
+ * and returns ECMD_SUCCESS.
+ *
+ * If this function decides that an arg_names entry could be used
+ * (possibly requiring a prompt), then it moves the entry from
+ * arg_names to arg_create and returns ECMD_SUCCESS.
+ *
+ * Any arg_names entries that are not moved to arg_fail or
+ * arg_create were not found.  The caller will decide if the
+ * command can continue if any arg_names entries were not found,
+ * or if any were moved to arg_fail.
+ */
+
+static int _pvcreate_check_single(struct cmd_context *cmd,
+				  struct volume_group *vg,
+				  struct physical_volume *pv,
+				  struct processing_handle *handle)
+{
+	struct pvcreate_each_params *pep = (struct pvcreate_each_params *) handle->custom_handle;
+	struct pvcreate_device *pd;
+	struct pvcreate_prompt *prompt;
+
+	/*
+	 * Check if pv uuid matches a uuid specified by the command.
+	 */
+	if (pep->uuid_str && id_equal(&pv->id, &pep->id)) {
+		log_error("uuid %s already in use on \"%s\"", pep->uuid_str, pv_dev_name(pv));
+		return ECMD_FAILED;
+	}
+
+	/*
+	 * Check if pvcreate has asked for this device.
+	 */
+	if (!(pd = _pvcreate_list_find_name(&pep->arg_names, pv_dev_name(pv))))
+		return ECMD_PROCESSED;
+
+#if 0
+	/* TODO: see code in _pvcreate_check() I don't understand */
+	dev = dev_cache_get(pd->name, cmd->full_filter);
+	/* TODO: Do we need to check if dev is NULL here? */
+	/* TODO: obtain_device_list_from_udev, filter_refresh_needed, scan_needed ? */
+#endif
+
+	/*
+	 * This test will fail if the device belongs to an MD array.
+	 */
+	if (!dev_test_excl(pv->dev)) {
+		/* FIXME Detect whether device-mapper itself is still using it */
+		log_error("Can't open %s exclusively.  Mounted filesystem?",
+			  pv_dev_name(pv));
+		dm_list_move(&pep->arg_fail, &pd->list);
+		return ECMD_PROCESSED;
+	}
+
+	/*
+	 * pvcreate is being run on this device, and it's not a PV,
+	 * or is an orphan PV.  Neither case requires a prompt.
+	 */
+	if (!vg || is_orphan(pv)) {
+		pd->dev = pv->dev;
+		dm_list_move(&pep->arg_create, &pd->list);
+		return ECMD_PROCESSED;
+	}
+
+	/*
+	 * pvcreate is being run on this device, but the device is already
+	 * a PV in a VG.  A prompt or force option is required to use it.
+	 */
+
+	if (!(prompt = dm_pool_zalloc(cmd->mem, sizeof(*prompt)))) {
+		log_error("prompt alloc failed");
+		return ECMD_FAILED;
+	}
+
+	prompt->pv_name = dm_pool_strdup(cmd->mem, pd->name);
+	prompt->vg_name = dm_pool_strdup(cmd->mem, vg->name);
+	prompt->prompt_type = PROMPT_PVCREATE_PV_IN_VG;
+	dm_list_add(&pep->prompts, &prompt->list);
+
+	pd->dev = pv->dev;
+	dm_list_move(&pep->arg_create, &pd->list);
+	return ECMD_PROCESSED;
+}
+
+/*
+ * This can be used by pvcreate, vgcreate and vgextend to create PVs.
+ * The callers need to set up the pvcreate_each_params structure based
+ * on command line args.  This includes the pv_names field which specifies
+ * the devices to create PVs on.
+ *
+ * This function is a specialized instance of process_each_pv() and
+ * should be called from a high level in the command.
+ *
+ * This function returns ECMD_FAILED if the caller requires all
+ * specified devices to be created, and any of those devices are
+ * not found, or any of them cannot be pvcreated.
+ *
+ * This function returns ECMD_PROCESSED if the caller requires all
+ * specified devices to be created, and all were created, or if
+ * the caller does not require all specified devices to be created
+ * and one or more were created.
+ */
+
+int pvcreate_each_device(struct cmd_context *cmd, struct pvcreate_each_params *pep)
+{
+	struct processing_handle *handle;
+	struct pvcreate_restorable_params rp;
+	struct pvcreate_device *pd, *pd2;
+	struct pvcreate_prompt *prompt, *prompt2;
+	struct physical_volume *pv;
+	const char *pv_name;
+	int must_use_all = (cmd->command->flags & MUST_USE_ALL_ARGS);
+	int ret;
+	int i;
+
+	for (i = 0; i < pep->pv_count; i++) {
+		dm_unescape_colons_and_at_signs(pep->pv_names[i], NULL, NULL);
+
+		if (!(pd = dm_pool_zalloc(cmd->mem, sizeof(*pd)))) {
+			log_error("alloc failed");
+			return ECMD_FAILED;
+		}
+
+		if (!(pd->name = dm_pool_strdup(cmd->mem, pep->pv_names[i]))) {
+			log_error("strdup failed");
+			return ECMD_FAILED;
+		}
+
+		dm_list_add(&pep->arg_names, &pd->list);
+	}
+
+	/*
+	 * process all *existing* PVs and devices - this checks if arg_names
+	 * entries are known devices, and if so, if they are PVs, and if so,
+	 * if they are in a VG.
+	 *
+	 * If an arg_names entry is found, it's moved to arg_create if it
+	 * can be used, or arg_fail if it cannot be used.  If it's added
+	 * to arg_create but needs a prompt or force option, then an
+	 * corresponding prompt entry is added to pep->prompts.
+	 *
+	 * We don't want this process_each_pv to look at devices that have
+	 * been filtered out by this command.
+	 * FIXME: does it work that way?
+	 */
+
+	if (!(handle = init_processing_handle(cmd))) {
+		log_error("Failed to initialize processing handle.");
+		return ECMD_FAILED;
+	}
+
+	handle->custom_handle = pep;
+
+	cmd->command->flags |= ENABLE_ALL_DEVS;
+
+	ret = process_each_pv(cmd, 0, NULL, NULL, 0, EACH_ALL, handle, _pvcreate_check_single);
+	if (ret == ECMD_FAILED)
+		return ECMD_FAILED;
+
+	destroy_processing_handle(cmd, handle);
+
+	/*
+	 * Check if all arg_names were found by process_each_pv.
+	 */
+	dm_list_iterate_items(pd, &pep->arg_names)
+		log_error("Device %s not found (or ignored by filtering).", pd->name);
+
+	/*
+	 * Can the command continue if some specified devices were not found?
+	 */
+	if (!dm_list_empty(&pep->arg_names) && must_use_all)
+		return ECMD_FAILED;
+
+	/*
+	 * Can the command continue if some specified devices cannot be used?
+	 */
+	if (!dm_list_empty(&pep->arg_fail) && must_use_all)
+		return ECMD_FAILED;
+
+	/*
+	 * The command cannot continue if there are no devices to create.
+	 */
+	if (dm_list_empty(&pep->arg_create)) {
+		log_error("No devices found.");
+		return ECMD_FAILED;
+	}
+
+	/*
+	 * Process any prompts that were gathered during the process_each_pv
+	 * checks.  Options can override/force/skip prompts.
+	 */
+	dm_list_iterate_items_safe(prompt, prompt2, &pep->prompt_devices) {
+		_run_pvcreate_prompt(cmd, pep, prompt);
+
+		if (!prompt->answer) {
+			if ((pd = _pvcreate_list_find_name(&pep->arg_create, prompt->pv_name))) {
+				dm_list_move(&pep->arg_fail, &pd->list);
+			} else {
+				/* should never happen */
+				return_ECMD_FAILED;
+			}
+		}
+
+		if (!dm_list_empty(&pep->arg_fail) && must_use_all)
+			break;
+
+		if (prompt->abort_command)
+			return_ECMD_FAILED;
+
+		if (sigint_caught())
+			return_ECMD_FAILED;
+	}
+
+	if (!dm_list_empty(&pep->arg_fail) && must_use_all)
+		return ECMD_FAILED;
+
+	/*
+	 * wipe signatures on devices being created (was in _pvcreate_check)
+	 */
+	dm_list_iterate_items_safe(pd, pd2, &pep->arg_create) {
+		if (!wipe_known_signatures(cmd, pd->dev, pd->name, TYPE_LVM1_MEMBER | TYPE_LVM2_MEMBER,
+					    0, pep->yes, pep->force, wiped)) {
+			dm_list_move(&pep->arg_fail, &pd->list);
+		}
+
+		if (!dm_list_empty(&pep->arg_fail) && must_use_all)
+			break;
+
+#if 0
+		/*
+		 * FIXME: is this still needed or need changing?
+		 * FIXME: replace pd->dev with new dev?
+		 * 
+		 * wipe_known_signatures fires
+		 * WATCH event to update udev database. But at the moment,
+		 * we have no way to synchronize with such event - we may
+		 * end up still seeing the old info in udev db and pvcreate
+		 * can fail to proceed because of the device still being
+		 * filtered (because of the stale info in udev db).
+		 * Disable udev dev-ext source temporarily here for
+		 * this reason and rescan with DEV_EXT_NONE dev-ext
+		 * source (so filters use DEV_EXT_NONE source).
+		 */
+		dev_ext_src = external_device_info_source();
+		if (wiped && (dev_ext_src == DEV_EXT_UDEV))
+			init_external_device_info_source(DEV_EXT_NONE);
+
+		dev = dev_cache_get(pd->name, cmd->full_filter);
+
+		init_external_device_info_source(dev_ext_src);
+
+		if (!dev) {
+			log_error("%s: Couldn't find device.  Check your filters?", pd->name);
+			dm_list_move(&pep->arg_fail, &pd->list);
+		}
+#endif
+	}
+
+	if (!dm_list_empty(&pep->arg_fail) && must_use_all)
+		return ECMD_FAILED;
+
+	/*
+	 * create pvs on devices
+	 */
+	dm_list_iterate_items_safe(pd, pd2, &pep->arg_create) {
+
+		if (!dm_list_empty(&pep->arg_fail) && must_use_all)
+			break;
+
+		pv_name = pd->name;
+
+		/* FIXME: get rid of rp usage in pv_create to avoid this. */
+		rp.restorefile = pep->restorefile;
+		rp.id = pep->id;
+		rp.idp = &pdp->id;
+		rp.ba_start = pep->ba_start;
+		rp.ba_size = pep->ba_size;
+		rp.pe_start = pep->pe_start;
+		rp.extent_count = pep->extent_count;
+		rp.extent_size = pep->extent_size;
+
+		if (!(pv = pv_create(cmd, pd->dev, pep->size, pep->data_alignment,
+				     pep->data_alignment_offset, pep->labelsector,
+				     pep->pvmetadatacopies, pep->pvmetadatasize,
+				     pep->metadataignore, &rp))) {
+			log_error("Failed to setup physical volume \"%s\"", pv_name);
+			dm_list_move(&pep->arg_fail, &pd->list);
+			continue;
+		}
+
+		log_verbose("Set up physical volume for \"%s\" with %" PRIu64
+			    " available sectors", pv_name, pv_size(pv));
+
+		pv->status |= UNLABELLED_PV;
+
+		if (!label_remove(pv->dev)) {
+			log_error("Failed to wipe existing label on %s", pv_name);
+			dm_list_move(&pep->arg_fail, &pd->list);
+			continue;
+
+		}
+
+		if (pep->zero) {
+			log_verbose("Zeroing start of device %s", pv_name);
+
+			if (!dev_open_quiet(pv->dev)) {
+				log_error("%s not opened: device not zeroed", pv_name);
+				dm_list_move(&pep->arg_fail, &pd->list);
+				continue;
+			}
+
+			if (!dev_set(pv->dev, UINT64_C(0), (size_t) 2048, 0)) {
+                        	log_error("%s not wiped: aborting", pv_name);
+                        	if (!dev_close(dev))
+                                	stack;
+				dm_list_move(&pep->arg_fail, &pd->list);
+				continue;
+                	}
+                	if (!dev_close(pv->dev))
+                        	stack;
+		}
+
+		log_verbose("Writing physical volume data to disk \"%s\"", pv_name);
+
+		if (!pv_write(cmd, pv, 1)) {
+			log_error("Failed to write physical volume \"%s\"", pv_name);
+			dm_list_move(&pep->arg_fail, &pd->list);
+		}
+
+		log_print_unless_silent("Physical volume \"%s\" successfully created", pv_name);
+	}
+
+	if (!dm_list_empty(&pep->arg_fail) && must_use_all)
+		return ECMD_FAILED;
+
+	return ECMD_PROCESSED;
+}
+
