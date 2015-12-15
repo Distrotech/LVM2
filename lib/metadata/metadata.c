@@ -3271,8 +3271,9 @@ static int _vg_read_orphan_pv(struct lvmcache_info *info, void *baton)
 	struct physical_volume *pv = NULL;
 	struct pv_list *pvl;
 
+	/* FIXME: 0 was changed to 1 here.  Pass arg to do that. */
 	if (!(pv = _pv_read(b->vg->cmd, b->vg->vgmem, dev_name(lvmcache_device(info)),
-			    b->vg->fid, b->warn_flags, 0))) {
+			    b->vg->fid, b->warn_flags, 1))) {
 		stack;
 		return 1;
 	}

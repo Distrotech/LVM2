@@ -101,8 +101,8 @@ int process_each_vg(struct cmd_context *cmd, int argc, char **argv,
 		    struct processing_handle *handle,
 		    process_single_vg_fn_t process_single_vg);
 
-int process_each_pv(struct cmd_context *cmd, int argc, char **argv,
-		    const char *vg_name, uint32_t lock_type,
+int process_each_pv(struct cmd_context *cmd, int argc, char **argv, const char *vg_name,
+		    int all_is_set, uint32_t read_flags,
 		    struct processing_handle *handle,
 		    process_single_pv_fn_t process_single_pv);
 
@@ -135,6 +135,8 @@ int process_each_lv_in_vg(struct cmd_context *cmd, struct volume_group *vg,
 			  struct dm_list *arg_lvnames, const struct dm_list *tagsl,
 			  int stop_on_error, struct processing_handle *handle,
 			  process_single_lv_fn_t process_single_lv);
+
+int pvcreate_each_device(struct cmd_context *cmd, struct pvcreate_each_params *pp);
 
 struct processing_handle *init_processing_handle(struct cmd_context *cmd);
 int init_selection_handle(struct cmd_context *cmd, struct processing_handle *handle,
