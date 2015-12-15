@@ -964,14 +964,14 @@ static int _convert_raid_to_striped(struct logical_volume *lv,
 	return _convert_raid_to_linear(lv, removal_lvs);
 }
 
-#if 1
 /*
- * _clear_lv
- * @lv
+ * HM Helper
  *
- * we're holding an exlcusive lock, we we can clear the
- * first block of the metadata LV directly on PV avoiding
- * activation of the metadata lv!
+ * clear first 4K of @lv
+ *
+ * We're holding an exclusive lock, so we can clear the
+ * first block of the (metadata) LV directly on the respective PV
+ * avoiding activation of the metadata lv altogether and hence latencies.
  *
  * Returns: 1 on success, 0 on failure
  */
@@ -981,29 +981,30 @@ static int _clear_lv(struct logical_volume *lv)
 	struct physical_volume *pv;
 	uint64_t offset;
 
-	RETURN_IF_LV_SEG_ZERO(lv, (seg = first_seg(lv)));
-	RETURN_IF_ZERO(seg->area_count == 1, "area count == 1");
-	RETURN_IF_ZERO(seg_type(seg, 0) == AREA_PV, "area PV");
-
 	if (test_mode())
 		return 1;
 
-	pv = seg_pv(seg, 0);
-	offset = (pv->pe_start + seg_pe(seg, 0) * lv->vg->extent_size) << 9;
+	RETURN_IF_LV_SEG_ZERO(lv, (seg = first_seg(lv)));
+	RETURN_IF_ZERO(seg->area_count == 1, "area count == 1");
+	RETURN_IF_ZERO(seg_type(seg, 0) == AREA_PV, "area PV");
+	RETURN_IF_ZERO((pv = seg_pv(seg, 0)), "physical volume");
+	RETURN_IF_ZERO(pv->pe_start, "no PE start address");
 
 	/*
-	 * Rather than wiping lv->size, we can simply wipe the first sector
+	 * Rather than wiping lv->size, we can simply wipe the first 4KiB
 	 * to remove the superblock of any previous RAID devices.  It is much
 	 * quicker than wiping a potentially larger metadata device completely.
 	 */
 	log_verbose("Clearing metadata area of %s", display_lvname(lv));
+	offset = (pv->pe_start + seg_pe(seg, 0) * lv->vg->extent_size) << 9;
+
 	return dev_set(pv->dev, offset, 4096, 0);
 }
 
 /*
- * HM
+ * HM Helper:
  *
- * Wipe all LVs on @lv_list
+ * wipe all LVs on @lv_list
  *
  * Does _not_ make any on-disk metadata changes!
  *
@@ -1019,111 +1020,13 @@ static int _clear_lvs(struct dm_list *lv_list)
 		log_debug_metadata(INTERNAL_ERROR "Empty list of LVs given for clearing");
 		return 1;
 	}
-PFL();
+
 	dm_list_iterate_items(lvl, lv_list)
 		if (!_clear_lv(lvl->lv))
 			return 0;
 
 	return 1;
 }
-#else
-/*
- * _clear_lv
- * @lv
- *
- * If LV is active:
- *        clear first block of device
- * otherwise:
- *        activate, clear, deactivate
- *
- * Returns: 1 on success, 0 on failure
- */
-static int _clear_lv(struct logical_volume *lv)
-{
-	int was_active;
-
-	RETURN_IF_ZERO(lv, "lv argument");
-
-	was_active = lv_is_active_locally(lv);
-
-	if (test_mode())
-		return 1;
-
-	lv->status |= LV_TEMPORARY;
-	if (!was_active && !activate_lv_local(lv->vg->cmd, lv)) {
-		log_error("Failed to activate localy %s for clearing",
-			  display_lvname(lv));
-		return 0;
-	}
-	lv->status &= ~LV_TEMPORARY;
-
-PFLA("Clearing metadata area of %s", display_lvname(lv));
-	log_verbose("Clearing metadata area of %s", display_lvname(lv));
-	/*
-	 * Rather than wiping lv->size, we can simply
-	 * wipe the first sector to remove the superblock of any previous
-	 * RAID devices.  It is much quicker.
-	 */
-	if (!wipe_lv(lv, (struct wipe_params) { .do_zero = 1, .zero_sectors = 1 })) {
-		log_error("Failed to zero %s", display_lvname(lv));
-		return 0;
-	}
-
-	if (!was_active && !deactivate_lv(lv->vg->cmd, lv)) {
-		log_error("Failed to deactivate %s", display_lvname(lv));
-		return 0;
-	}
-
-	return 1;
-}
-
-/*
- * HM
- *
- * Wipe all LVs on @lv_list
- *
- * Makes on-disk metadata changes!
- *
- * Returns 1 on success or 0 on failure
- */
-static int _clear_lvs(struct dm_list *lv_list)
-{
-	struct lv_list *lvl;
-	struct volume_group *vg = NULL;
-
-	RETURN_IF_ZERO(lv_list, "lv list argument");
-
-	if (dm_list_empty(lv_list)) {
-		log_debug_metadata(INTERNAL_ERROR "Empty list of LVs given for clearing");
-		return 1;
-	}
-
-	dm_list_iterate_items(lvl, lv_list) {
-		if (!lv_is_visible(lvl->lv)) {
-			log_error(INTERNAL_ERROR "LVs must be set visible before clearing");
-			return 0;
-		}
-
-		vg = lvl->lv->vg;
-	}
-
-	/*
-	 * FIXME: only vg_[write|commit] if LVs are not already written
-	 * as visible in the LVM metadata (which is never the case yet).
-	 */
-PFL();
-PFLA("vg_validate(vg)=%d", vg_validate(vg));
-PFL();
-	if (!vg || !vg_write(vg) || !vg_commit(vg))
-		return_0;
-PFL();
-	dm_list_iterate_items(lvl, lv_list)
-		if (!_clear_lv(lvl->lv))
-			return 0;
-
-	return 1;
-}
-#endif
 
 /*
  * HM
@@ -1876,7 +1779,15 @@ PFLA("data_lv=%s rmeta_extents=%u", display_lvname(data_lv), _raid_rmeta_extents
 				    allocate_pvs, data_lv->alloc, 0, NULL)))
 		return_0;
 
-	if (!(*meta_lv = _alloc_image_component(data_lv, data_lv->name, ah, 0, RAID_META)))
+	if ((*meta_lv = _alloc_image_component(data_lv, data_lv->name, ah, 0, RAID_META))) {
+		/*
+		 * Wipe metadata device at beginning in order to avoid
+		 * discovering a valid, but unrelated superblock in the kernel.
+		 */
+		if (!_clear_lv(*meta_lv))
+			r = 0;
+
+	} else
 		r = 0;
 
 	alloc_destroy(ah);
@@ -2702,6 +2613,55 @@ static int _reset_flags_passed_to_kernel(struct logical_volume *lv, int *flag_cl
 	return 1;
 }
 
+/*
+ * Helper:
+ *
+ * update metadata, reload origin @lv, eliminate any LVs listed on @removal_lvs
+ * and then clear flags passed to the kernel (if any) in the metadata or
+ * manipulate metadata before second update in case of @fn_on_lv
+ */
+static int _lv_update_reload_fn_reset_eliminate_lvs(struct logical_volume *lv,
+						    struct dm_list *removal_lvs,
+						    int (*fn_on_lv)(struct logical_volume *lv))
+{
+	int flags_cleared;
+
+	RETURN_IF_ZERO(lv, "lv argument");
+
+	log_debug_metadata("Updating metadata and reloading mappings for %s,",
+			   display_lvname(lv));
+	if (!lv_update_and_reload_origin(lv))
+		return_0;
+
+	if (fn_on_lv && !fn_on_lv(lv))
+		return 0;
+	/*
+	 * Now that any 'REBUILD' or 'RESHAPE_DELTA_DISKS' etc.
+	 * has/have made its/their way to the kernel, we must
+	 * remove the flag(s) so that the individual devices are
+	 * not rebuilt/reshaped/taken over upon every activation.
+	 */
+	if (!_reset_flags_passed_to_kernel(lv, &flags_cleared))
+		return 0;
+
+	if (flags_cleared || fn_on_lv) {
+		log_debug_metadata("Clearing any flags for %s passed to the kernel and/or update changed metadata.",
+				   display_lvname(lv));
+		if (!lv_update_and_reload_origin(lv))
+			log_error("second update of %s failed", display_lvname(lv));
+	}
+
+	/* Eliminate any residual LV, write VG, commit it and take a backup */
+	return _eliminate_extracted_lvs(lv->vg, removal_lvs);
+}
+
+/* HM Helper: convenience wrapper */
+static int _lv_update_reload_reset_eliminate_lvs(struct logical_volume *lv,
+						 struct dm_list *removal_lvs)
+{
+	return _lv_update_reload_fn_reset_eliminate_lvs(lv, removal_lvs, NULL);
+}
+
 /* Area reorder helper: swap 2 LV segment areas @a1 and @a2 */
 static int _swap_areas(struct lv_segment_area *a1, struct lv_segment_area *a2)
 {
@@ -3042,8 +3002,6 @@ PFLA("lv=%s", display_lvname(lvl->lv));
  * Split off raid1 images of @lv, prefix with @split_name or selecet duplicated LV by @split_name,
  * leave @new_image_count in the raid1 set and find them on @splittable_pvs
  */
-static int _lv_update_reload_reset_eliminate_lvs(struct logical_volume *lv,
-						 struct dm_list *removal_lvs);
 static int _raid_split_duplicate(struct logical_volume *lv, const char *split_name,
 				 uint32_t new_image_count);
 int lv_raid_split(struct logical_volume *lv, const char *split_name,
@@ -5221,54 +5179,6 @@ PFL();
 /****************************************************************************/
 /* Construction site of takeover handler function jump table solution */
 
-/*
- * Update metadata, reload origin @lv, eliminate any LVs listed on @removal_lvs
- * and then clear flags passed to the kernel (if any) in the metadata or
- * update because of @forced_update != 0
- */
-static int _lv_update_reload_fn_reset_eliminate_lvs(struct logical_volume *lv,
-						    struct dm_list *removal_lvs,
-						    int (*fn)(struct logical_volume *lv),
-						    void *fn_arg)
-{
-	int flags_cleared, r = 1;
-
-	RETURN_IF_ZERO(lv, "lv argument");
-
-	log_debug_metadata("Updating metadata and reloading mappings for %s,",
-			   display_lvname(lv));
-	if (!lv_update_and_reload_origin(lv))
-		return_0;
-
-	/*
-	 * Now that any 'REBUILD' or 'RESHAPE_DELTA_DISKS' etc.
-	 * has/have made its/their way to the kernel, we must
-	 * remove the flag(s) so that the individual devices are
-	 * not rebuilt/reshaped/taken over upon every activation.
-	 */
-	if (!_reset_flags_passed_to_kernel(lv, &flags_cleared))
-		return 0;
-
-	if (fn)
-		r = fn(fn_arg);
-
-	if (flags_cleared || fn) {
-		log_debug_metadata("Clearing any flags for %s passed to the kernel and/or update changed metadata.",
-				   display_lvname(lv));
-		if (!(r = lv_update_and_reload_origin(lv)))
-			log_error("second update of %s failed", display_lvname(lv));
-	}
-PFL();
-	/* Eliminate any residual LV, write VG, commit it and take a backup */
-	return (!_eliminate_extracted_lvs(lv->vg, removal_lvs) || !r) ? 0 : 1;
-}
-
-static int _lv_update_reload_reset_eliminate_lvs(struct logical_volume *lv,
-						 struct dm_list *removal_lvs)
-{
-	return _lv_update_reload_fn_reset_eliminate_lvs(lv, removal_lvs, NULL, NULL);
-}
-
 /* Display error message and return 0 if @lv is not synced, else 1 */
 static int _lv_is_synced(struct logical_volume *lv)
 {
@@ -5980,7 +5890,7 @@ static int _raid_conv_duplicate_rename_metadata_sub_lvs(struct logical_volume *l
 
 		RETURN_IF_NONZERO((seg_type(seg, s) != AREA_LV || !(mlv = seg_metalv(seg, s))), "metadata sub-lv");
 		if (strstr(mlv->name, "_dup_"))
-			RETURN_IF_ZERO((mlv->name = _generate_raid_name(lv, "rmeta_", s)), "first sub LV name created");
+			RETURN_IF_ZERO((mlv->name = _generate_raid_name(lv, "rmeta_", s)), "metadata sub LV name created");
 	}
 
 	return 1;
@@ -6134,8 +6044,8 @@ PFLA("lv->name=%s lv->le_count=%u seg_lv(seg, 0)=%s", lv->name, lv->le_count, se
 	seg->data_copies = seg->area_count;
 PFL();
 	/* Set @layer_lv as the LV of @area of @lv */
-	log_debug_metadata("Add dduplicated LV %s to top-level LV %s as second raid1 leg",
-			   display_lvname(dup_lv), display_lvname(lv));
+	log_debug_metadata("Add duplicated LV %s to top-level LV %s as raid1 leg %u",
+			   display_lvname(dup_lv), display_lvname(lv), new_area_idx);
 	if (!set_lv_segment_area_lv(seg, new_area_idx, dup_lv, dup_lv->le_count, dup_lv->status)) {
 		log_error("Failed to add duplicated sub-lv %s to LV %s",
 			  display_lvname(dup_lv), display_lvname(lv));
@@ -6149,15 +6059,8 @@ PFLA("seg_lv(seg, %u)=%s", new_area_idx, display_lvname(seg_lv(seg, new_area_idx
 
 	if (!_alloc_rmeta_for_lv_and_set_hidden(seg_lv(seg, new_area_idx), &seg_metalv(seg, new_area_idx)))
 		return 0;
-PFL();
-#if 1
-	for (s = 0; s < seg->area_count; s++) {
-PFLA("seg_lv(seg, %u)=%s", s, seg_lv(seg, s)->name);
-PFLA("seg_metalv(seg, %u)=%s", s, seg_metalv(seg, s)->name);
-	}
-#endif
 
-	for (s = 0; s < seg->area_count; s++)
+	for (s = 0; s < new_area_idx; s++)
 		seg_lv(seg, s)->status &= ~LV_REBUILD;
 
 	dup_lv->status |= LV_REBUILD;
@@ -6172,7 +6075,7 @@ PFLA("lv0->le_count=%u lv1->le_count=%u", seg_lv(seg, 0)->le_count, seg_lv(seg, 
 PFL();
 	init_mirror_in_sync(0);
 
-	return _lv_update_reload_fn_reset_eliminate_lvs(lv, NULL, _raid_conv_duplicate_rename_metadata_sub_lvs, lv);
+	return _lv_update_reload_fn_reset_eliminate_lvs(lv, NULL, _raid_conv_duplicate_rename_metadata_sub_lvs);
 }
 
 /*
