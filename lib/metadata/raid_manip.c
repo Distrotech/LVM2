@@ -2691,8 +2691,8 @@ static int _reset_flags_passed_to_kernel(struct logical_volume *lv, int *flag_cl
 
 	if (*flag_cleared) {
 		if (!vg_write(lv->vg) || !vg_commit(lv->vg)) {
-			log_error("Failed to clear flags for %s components",
-					display_lvname(lv));
+			log_error("Failed to clear flags for %s components in metadata",
+				  display_lvname(lv));
 			return 0;
 		}
 
@@ -3042,8 +3042,8 @@ PFLA("lv=%s", display_lvname(lvl->lv));
  * Split off raid1 images of @lv, prefix with @split_name or selecet duplicated LV by @split_name,
  * leave @new_image_count in the raid1 set and find them on @splittable_pvs
  */
-static int _lv_update_and_reload_origin_eliminate_lvs(struct logical_volume *lv,
-						      struct dm_list *removal_lvs);
+static int _lv_update_reload_reset_eliminate_lvs(struct logical_volume *lv,
+						 struct dm_list *removal_lvs);
 static int _raid_split_duplicate(struct logical_volume *lv, const char *split_name,
 				 uint32_t new_image_count);
 int lv_raid_split(struct logical_volume *lv, const char *split_name,
@@ -3521,7 +3521,7 @@ static int _convert_mirror_to_raid(struct logical_volume *lv,
 			return 0;
 	}
 
-	return update_and_reload ? _lv_update_and_reload_origin_eliminate_lvs(lv, removal_lvs) : 1;
+	return update_and_reload ? _lv_update_reload_reset_eliminate_lvs(lv, removal_lvs) : 1;
 }
 
 /*
@@ -3593,7 +3593,7 @@ PFL();
 	}
 
 PFL();
-	return update_and_reload ? _lv_update_and_reload_origin_eliminate_lvs(lv, removal_lvs) : 1;
+	return update_and_reload ? _lv_update_reload_reset_eliminate_lvs(lv, removal_lvs) : 1;
 }
 
 /* BEGIN: striped -> raid0 conversion */
@@ -4486,7 +4486,7 @@ PFLA("old_image_count=%u new_image_count=%u new_region_size=%u", old_image_count
 			if (where == alloc_begin)
 				seg->data_offset = 1;
 
-			return _lv_update_and_reload_origin_eliminate_lvs(lv, NULL);
+			return _lv_update_reload_reset_eliminate_lvs(lv, NULL);
 		}
 
 		log_error("No reshape to do on %s", display_lvname(lv));
@@ -4594,7 +4594,7 @@ PFL();
 	/* HM FIXME: workaround for lvcreate not resetting "nosync" flag */
 	init_mirror_in_sync(0);
 PFLA("new_segtype=%s seg->area_count=%u", new_segtype->name, seg->area_count);
-	if (!_lv_update_and_reload_origin_eliminate_lvs(lv, &removal_lvs))
+	if (!_lv_update_reload_reset_eliminate_lvs(lv, &removal_lvs))
 		return 0;
 
 	return force_repair ? _lv_cond_repair(lv) : 1;
@@ -5222,38 +5222,51 @@ PFL();
 /* Construction site of takeover handler function jump table solution */
 
 /*
- * Update metadata, reload origin @lv, eliminate any LVs listed on @remova_lvs
- * and then clear flags passed to the kernel (if any) in the metadata
+ * Update metadata, reload origin @lv, eliminate any LVs listed on @removal_lvs
+ * and then clear flags passed to the kernel (if any) in the metadata or
+ * update because of @forced_update != 0
  */
-static int _lv_update_and_reload_origin_eliminate_lvs(struct logical_volume *lv,
-						      struct dm_list *removal_lvs)
+static int _lv_update_reload_fn_reset_eliminate_lvs(struct logical_volume *lv,
+						    struct dm_list *removal_lvs,
+						    int (*fn)(struct logical_volume *lv),
+						    void *fn_arg)
 {
-	int flag_cleared;
+	int flags_cleared, r = 1;
 
 	RETURN_IF_ZERO(lv, "lv argument");
 
 	log_debug_metadata("Updating metadata and reloading mappings for %s,",
 			   display_lvname(lv));
-PFL();
 	if (!lv_update_and_reload_origin(lv))
 		return_0;
 
-	/* Eliminate any residual LV, write VG, commit it and take a backup */
-	if (!_eliminate_extracted_lvs(lv->vg, removal_lvs))
-		return_0;
-
 	/*
-	 * Now that any 'REBUILD' or 'RESHAPE_DELTA_DISKS' etc. has/have made
-	 * its/their way to the kernel, we must remove the flag(s) so that the
-	 * individual devices are not rebuilt/reshaped upon every activation.
+	 * Now that any 'REBUILD' or 'RESHAPE_DELTA_DISKS' etc.
+	 * has/have made its/their way to the kernel, we must
+	 * remove the flag(s) so that the individual devices are
+	 * not rebuilt/reshaped/taken over upon every activation.
 	 */
-	log_debug_metadata("Clearing any flags for %s passed to the kernel.",
-			   display_lvname(lv));
-PFL();
-	if (!_reset_flags_passed_to_kernel(lv, &flag_cleared))
+	if (!_reset_flags_passed_to_kernel(lv, &flags_cleared))
 		return 0;
+
+	if (fn)
+		r = fn(fn_arg);
+
+	if (flags_cleared || fn) {
+		log_debug_metadata("Clearing any flags for %s passed to the kernel and/or update changed metadata.",
+				   display_lvname(lv));
+		if (!(r = lv_update_and_reload_origin(lv)))
+			log_error("second update of %s failed", display_lvname(lv));
+	}
 PFL();
-	return flag_cleared ? lv_update_and_reload_origin(lv) : 1;
+	/* Eliminate any residual LV, write VG, commit it and take a backup */
+	return (!_eliminate_extracted_lvs(lv->vg, removal_lvs) || !r) ? 0 : 1;
+}
+
+static int _lv_update_reload_reset_eliminate_lvs(struct logical_volume *lv,
+						 struct dm_list *removal_lvs)
+{
+	return _lv_update_reload_fn_reset_eliminate_lvs(lv, removal_lvs, NULL, NULL);
 }
 
 /* Display error message and return 0 if @lv is not synced, else 1 */
@@ -5661,10 +5674,9 @@ PFL();
 	/* Remove the raid1 layer from the LV */
 	if (!remove_layer_from_lv(lv, sub_lv))
 		return_0;
-#if 1
+
 	/* HM FIXME: in case _lv_reduce() recursion bugs, this may hit */
 	RETURN_IF_ZERO(first_seg(lv), "first segment!?");
-#endif
 PFL();
 	lv->status &= ~LV_DUPLICATED;
 	lv_set_visible(lv);
@@ -5770,7 +5782,7 @@ static int _raid_split_duplicate(struct logical_volume *lv, const char *split_na
 PFL();
 	log_debug_metadata("Updating VG metadata and reactivating %s and %s",
 			   display_lvname(lv), display_lvname(split_lv));
-	if (!_lv_update_and_reload_origin_eliminate_lvs(lv, &removal_lvs) ||
+	if (!_lv_update_reload_reset_eliminate_lvs(lv, &removal_lvs) ||
 	    !lv_update_and_reload_origin(split_lv))
 		return 0;
 
@@ -5800,7 +5812,7 @@ PFL();
 
 		log_debug_metadata("Updating VG metadata and reloading %s",
 				   display_lvname(lv));
-		if (!_lv_update_and_reload_origin_eliminate_lvs(lv, &removal_lvs))
+		if (!_lv_update_reload_reset_eliminate_lvs(lv, &removal_lvs))
 			return 0;
 
 		if (lv_is_raid(lv)) {
@@ -5890,7 +5902,7 @@ PFL();
 	if (!_remove_layer(lv, seg_lv(seg, 0), &removal_lvs))
 		return 0;
 
-	if (!_lv_update_and_reload_origin_eliminate_lvs(lv, &removal_lvs))
+	if (!_lv_update_reload_reset_eliminate_lvs(lv, &removal_lvs))
 		return 0;
 
 	if (lv_is_raid(lv)) {
@@ -5952,6 +5964,28 @@ static struct logical_volume *_dup_lv_create(struct logical_volume *lv,
 	return r;
 }
 
+/* Helper: callback function to rename metadata sub-lvs of top-level duplicating LV */
+static int _raid_conv_duplicate_rename_metadata_sub_lvs(struct logical_volume *lv)
+{
+	uint32_t s;
+	struct lv_segment *seg;
+
+	RETURN_IF_LV_SEG_ZERO(lv, (seg = first_seg(lv)));
+
+	/* Rename top-level raid1 metadata sub LVs to their final names */
+	log_debug_metadata("Renaming sub LVs of %s to final names",
+			   display_lvname(lv));
+	for (s = 0; s < seg->area_count; s++) {
+		struct logical_volume *mlv;
+
+		RETURN_IF_NONZERO((seg_type(seg, s) != AREA_LV || !(mlv = seg_metalv(seg, s))), "metadata sub-lv");
+		if (strstr(mlv->name, "_dup_"))
+			RETURN_IF_ZERO((mlv->name = _generate_raid_name(lv, "rmeta_", s)), "first sub LV name created");
+	}
+
+	return 1;
+}
+
 /*
  * Helper: raid to raid conversion by duplication
  *
@@ -5969,7 +6003,7 @@ static int _raid_conv_duplicate(struct logical_volume *lv,
 				const char *pool_lv_name,
 				struct dm_list *allocate_pvs)
 {
-	int duplicating, flag_cleared;
+	int duplicating;
 	uint32_t data_copies = new_data_copies, extents, new_area_idx, raid1_image_count, region_size = 1024, s;
 	char *lv_name, *p, *suffix;
 	struct logical_volume *dup_lv;
@@ -6137,24 +6171,8 @@ PFLA("lv0->le_count=%u lv1->le_count=%u", seg_lv(seg, 0)->le_count, seg_lv(seg, 
 	}
 PFL();
 	init_mirror_in_sync(0);
-	if (!lv_update_and_reload_origin(lv))
-		return_0;
 
-	/* Rename top-level raid1 metadata sub LVs to their final names */
-	log_debug_metadata("Renaming sub LVs of %s to final names",
-			   display_lvname(lv));
-	for (s = 0; s < seg->area_count; s++) {
-		struct logical_volume *mlv;
-
-		RETURN_IF_NONZERO((seg_type(seg, s) != AREA_LV || !(mlv = seg_metalv(seg, s))), "metadata sub-lv");
-		if (strstr(mlv->name, "_dup_"))
-			RETURN_IF_ZERO((mlv->name = _generate_raid_name(lv, "rmeta_", s)), "first sub LV name created");
-	}
-
-	if (!_reset_flags_passed_to_kernel(lv, &flag_cleared))
-		return 0;
-
-	return lv_update_and_reload_origin(lv);
+	return _lv_update_reload_fn_reset_eliminate_lvs(lv, NULL, _raid_conv_duplicate_rename_metadata_sub_lvs, lv);
 }
 
 /*
@@ -6264,7 +6282,7 @@ TAKEOVER_HELPER_FN(_linear_raid14510)
 	seg = first_seg(lv);
 	seg->segtype = new_segtype;
 
-	return _lv_update_and_reload_origin_eliminate_lvs(lv, NULL);
+	return _lv_update_reload_reset_eliminate_lvs(lv, NULL);
 }
 
 /* Helper: striped/raid0* -> raid4/5/6/10 */
@@ -6374,7 +6392,7 @@ PFL();
 
 	log_debug_metadata("Updating VG metadata and reloading %s LV %s",
 			   lvseg_name(seg), display_lvname(lv));
-	if (!_lv_update_and_reload_origin_eliminate_lvs(lv, NULL))
+	if (!_lv_update_reload_reset_eliminate_lvs(lv, NULL))
 		return 0;
 PFL();
 
@@ -6414,7 +6432,7 @@ TAKEOVER_HELPER_FN(_raid0_linear)
 	if (force)
 		return 1;
 
-	return _lv_update_and_reload_origin_eliminate_lvs(lv, &removal_lvs);
+	return _lv_update_reload_reset_eliminate_lvs(lv, &removal_lvs);
 }
 
 /* Helper: raid0* with one image -> mirror */
@@ -6506,7 +6524,7 @@ TAKEOVER_HELPER_FN(_raid0_raid1)
 	/* Master leg is the first sub LV */
 	seg_lv(seg, 0)->status &= ~LV_REBUILD;
 
-	return _lv_update_and_reload_origin_eliminate_lvs(lv, NULL);
+	return _lv_update_reload_reset_eliminate_lvs(lv, NULL);
 }
 
 /* Helper: mirror -> raid0* */
@@ -6550,7 +6568,7 @@ TAKEOVER_HELPER_FN(_mirror_raid0)
 
 	seg->segtype = new_segtype;
 
-	return _lv_update_and_reload_origin_eliminate_lvs(lv, &removal_lvs);
+	return _lv_update_reload_reset_eliminate_lvs(lv, &removal_lvs);
 }
 
 /* Helper: convert mirror with 2 images <-> raid4/5 */
@@ -6596,7 +6614,7 @@ TAKEOVER_HELPER_FN(_mirror_r45)
 	} else if (!_convert_mirror_to_raid(lv, new_segtype, 0, NULL, 0 /* update_and_reaload */, NULL))
 		return 0;
 
-	return _lv_update_and_reload_origin_eliminate_lvs(lv, &removal_lvs);
+	return _lv_update_reload_reset_eliminate_lvs(lv, &removal_lvs);
 }
 
 /* Helper: raid1 -> raid0* */
@@ -6634,7 +6652,7 @@ TAKEOVER_HELPER_FN(_raid1_raid0)
 			return 0;
 	}
 
-	return _lv_update_and_reload_origin_eliminate_lvs(lv, &removal_lvs);
+	return _lv_update_reload_reset_eliminate_lvs(lv, &removal_lvs);
 }
 
 /* raid45 -> raid0* / striped */
@@ -6689,7 +6707,7 @@ PFLA("seg->area_count=%u seg->len=%u seg->area_len=%u", seg->area_count, seg->le
 
 	first_seg(lv)->data_copies = 1;
 
-	return _lv_update_and_reload_origin_eliminate_lvs(lv, &removal_lvs);
+	return _lv_update_reload_reset_eliminate_lvs(lv, &removal_lvs);
 }
 
 /* helper raid1 with N images or raid4/5* with 2 images <-> linear */
@@ -6737,7 +6755,7 @@ PFL();
 	if (!_convert_raid_to_linear(lv, &removal_lvs))
 		return_0;
 
-	return _lv_update_and_reload_origin_eliminate_lvs(lv, &removal_lvs);
+	return _lv_update_reload_reset_eliminate_lvs(lv, &removal_lvs);
 }
 
 /* Helper: raid1 with N images to M images (N != M) and raid4/5 to raid6* */
@@ -6778,7 +6796,7 @@ TAKEOVER_HELPER_FN(_raid145_raid1_raid6)
 		 new_stripe_size)
 		seg->stripe_size = new_stripe_size;
 
-	return _lv_update_and_reload_origin_eliminate_lvs(lv, &removal_lvs);
+	return _lv_update_reload_reset_eliminate_lvs(lv, &removal_lvs);
 }
 
 /* Helper: raid1/5 with 2 images <-> raid4/5/10 or raid4 <-> raid5_n with any image count (no change to count!) */
@@ -6840,7 +6858,7 @@ TAKEOVER_HELPER_FN(_raid145_raid4510)
 
 	seg->stripe_size = new_stripe_size ?: DEFAULT_STRIPESIZE;
 
-	return _lv_update_and_reload_origin_eliminate_lvs(lv, NULL);
+	return _lv_update_reload_reset_eliminate_lvs(lv, NULL);
 }
 
 /* Helper: raid10 -> striped/raid0* */
@@ -6939,7 +6957,7 @@ PFLA("seg->chunk_size=%u", seg->chunk_size);
 	seg->segtype = new_segtype;
 
 	/* HM FIXME: overloading force argument here! */
-	return force ? 1 : _lv_update_and_reload_origin_eliminate_lvs(lv, removal_lvs);
+	return force ? 1 : _lv_update_reload_reset_eliminate_lvs(lv, removal_lvs);
 }
 
 /* Helper: raid10 with 2/N (if appropriate) images <-> raid1/raid4/raid5* */
@@ -6992,7 +7010,7 @@ TAKEOVER_HELPER_FN(_raid10_r1456)
 
 	seg->segtype = new_segtype;
 
-	return _lv_update_and_reload_origin_eliminate_lvs(lv, &removal_lvs);
+	return _lv_update_reload_reset_eliminate_lvs(lv, &removal_lvs);
 }
 /* End takeover helper funtions */
 
@@ -7642,7 +7660,7 @@ TAKEOVER_FN(_r6_r45)
 
 	seg->segtype = new_segtype;
 
-	return _lv_update_and_reload_origin_eliminate_lvs(lv, &removal_lvs);
+	return _lv_update_reload_reset_eliminate_lvs(lv, &removal_lvs);
 }
 
 /* raid10 with 2 images -> linear */
@@ -7702,7 +7720,7 @@ TAKEOVER_FN(_r10_m)
 	    !_convert_raid1_to_mirror(lv, new_segtype, new_image_count, allocate_pvs, 0, &removal_lvs))
 		return 0;
 
-	return _lv_update_and_reload_origin_eliminate_lvs(lv, &removal_lvs);
+	return _lv_update_reload_reset_eliminate_lvs(lv, &removal_lvs);
 }
 
 /* raid10 -> raid0 */
@@ -7812,7 +7830,7 @@ PFL();
 
 	seg->segtype = raid10_segtype;
 PFL();
-	return _lv_update_and_reload_origin_eliminate_lvs(lv, &removal_lvs);
+	return _lv_update_reload_reset_eliminate_lvs(lv, &removal_lvs);
 }
 
 /*
@@ -7995,7 +8013,7 @@ PFL();
 	if (!remove_layer_from_lv(lv, lv_tmp))
 		return_0;
 PFL();
-	return _lv_update_and_reload_origin_eliminate_lvs(lv, &removal_lvs);
+	return _lv_update_reload_reset_eliminate_lvs(lv, &removal_lvs);
 }
 
 /* Remove striped legs from raid01 */
@@ -8039,7 +8057,7 @@ TAKEOVER_FN(_r01_r10)
 	if (!_raid01_remove_images(lv, 1, &removal_lvs))
 		return 0;
 
-	if (!_lv_update_and_reload_origin_eliminate_lvs(lv, &removal_lvs))
+	if (!_lv_update_reload_reset_eliminate_lvs(lv, &removal_lvs))
 		return 0;
 
 	return _striped_raid0_raid45610(lv, new_segtype, yes, force,
@@ -8104,7 +8122,7 @@ PFL();
 	} else if (!_raid01_remove_images(lv, new_data_copies, &removal_lvs))
 		return 0;
 
-	return _lv_update_and_reload_origin_eliminate_lvs(lv, &removal_lvs);
+	return _lv_update_reload_reset_eliminate_lvs(lv, &removal_lvs);
 }
 
 /*
@@ -9213,7 +9231,7 @@ int lv_raid_replace(struct logical_volume *lv,
 	}
 PFL();
 	/* This'll reset the rebuild flags passed to the kernel */
-	if (!_lv_update_and_reload_origin_eliminate_lvs(lv, &old_lvs))
+	if (!_lv_update_reload_reset_eliminate_lvs(lv, &old_lvs))
 		return_0;
 PFL();
 	/* Update new sub-LVs to correct name and clear REBUILD flag in-kernel and in metadata */
