@@ -2864,6 +2864,8 @@ static int _get_all_devices(struct cmd_context *cmd, struct dm_list *all_devices
 	struct device_id_list *dil;
 	int r = ECMD_FAILED;
 
+	log_very_verbose("Getting list of all devices");
+
 	lvmcache_seed_infos_from_lvmetad(cmd);
 
 	if (!(iter = dev_iter_create(cmd->full_filter, 1))) {
@@ -2988,6 +2990,8 @@ static int _process_device_list(struct cmd_context *cmd, struct dm_list *all_dev
 	struct device_id_list *dil;
 	int ret_max = ECMD_PROCESSED;
 	int ret = 0;
+
+	log_verbose("Processing devices that are not PVs");
 
 	/*
 	 * Pretend that each device is a PV with dummy values.
@@ -3246,6 +3250,8 @@ static int _process_pvs_in_vgs(struct cmd_context *cmd, uint32_t read_flags,
 			continue;
 		}
 
+		log_verbose("Processing PVs in VG %s", vg_name);
+
 		vg = vg_read(cmd, vg_name, vg_uuid, read_flags, lockd_state);
 		if (_ignore_vg(vg, vg_name, NULL, read_flags, &skip, &notfound)) {
 			stack;
@@ -3286,9 +3292,8 @@ endvg:
 }
 
 int process_each_pv(struct cmd_context *cmd,
-		    int argc, char **argv,
-		    const char *only_this_vgname,
-		    uint32_t read_flags,
+		    int argc, char **argv, const char *only_this_vgname,
+		    int all_is_set, uint32_t read_flags,
 		    struct processing_handle *handle,
 		    process_single_pv_fn_t process_single_pv)
 {
@@ -3342,8 +3347,7 @@ int process_each_pv(struct cmd_context *cmd,
 
 	process_all_pvs = dm_list_empty(&arg_pvnames) && dm_list_empty(&arg_tags);
 
-	process_all_devices = process_all_pvs && (cmd->command->flags & ENABLE_ALL_DEVS) &&
-			      arg_count(cmd, all_ARG);
+	process_all_devices = process_all_pvs && (cmd->command->flags & ENABLE_ALL_DEVS) && all_is_set;
 
 	/* Needed for a current listing of the global VG namespace. */
 	if (!only_this_vgname && !lockd_gl(cmd, "sh", 0))
@@ -3355,6 +3359,7 @@ int process_each_pv(struct cmd_context *cmd,
 	 * so that get_vgnameids() will look at any new devices.
 	 */
 	if (!trust_cache()) {
+		log_verbose("Scanning for available devices");
 		dev_cache_full_scan(cmd->full_filter);
 		lvmcache_destroy(cmd, 1, 0);
 	}
@@ -3498,3 +3503,470 @@ int lvremove_single(struct cmd_context *cmd, struct logical_volume *lv,
 
 	return ECMD_PROCESSED;
 }
+
+enum {
+	PROMPT_PVCREATE_PV_IN_VG = 1,
+};
+
+/*
+ * When a prompt entry is created, save any strings or info
+ * in this struct that are needed for the prompt messages.
+ * The VG/PV structs are not be available when the prompt
+ * is run.
+ */
+struct pvcreate_prompt {
+	struct dm_list list;
+	uint32_t type;
+	const char *pv_name;
+	const char *vg_name;
+	struct device *dev;
+	unsigned answer : 1;
+	unsigned abort_command : 1;
+};
+
+struct pvcreate_device {
+	struct dm_list list;
+	const char *name;
+	struct device *dev;
+	char pvid[ID_LEN + 1];
+	int wiped;
+};
+
+static void _run_pvcreate_prompt(struct cmd_context *cmd,
+				 struct pvcreate_each_params *pp,
+				 struct pvcreate_prompt *prompt)
+{
+	if (prompt->type == PROMPT_PVCREATE_PV_IN_VG) {
+		if (pp->force != DONT_PROMPT_OVERRIDE) {
+			prompt->answer = 0;
+			log_error("Can't initialize physical volume \"%s\" of volume group \"%s\" without -ff",
+				  prompt->pv_name, prompt->vg_name);
+		} else if (pp->yes) {
+			prompt->answer = 1;
+		} else {
+			if (yes_no_prompt("Really INITIALIZE physical volume \"%s\" of volume group \"%s\" [y/n]? ",
+					  prompt->pv_name, prompt->vg_name) == 'n') {
+				prompt->answer = 0;
+				log_error("%s: physical volume not initialized", prompt->pv_name);
+			} else {
+				prompt->answer = 1;
+			}
+		}
+	}
+}
+
+
+static struct pvcreate_device *_pvcreate_list_find_dev(struct dm_list *devices, struct device *dev)
+{
+	struct pvcreate_device *pd;
+
+	dm_list_iterate_items(pd, devices) {
+		if (pd->dev == dev)
+			return pd;
+	}
+
+	return NULL;
+}
+
+/*
+ * If this function returns ECMD_FAILED, it will
+ * cause the entire command to fail.
+ *
+ * If this function decides that a arg_devices entry cannot be
+ * used, but the command might be able to continue without it,
+ * then it moves that entry from arg_devices to arg_fail
+ * and returns ECMD_SUCCESS.
+ *
+ * If this function decides that an arg_devices entry could be used
+ * (possibly requiring a prompt), then it moves the entry from
+ * arg_devices to arg_create and returns ECMD_SUCCESS.
+ *
+ * Any arg_devices entries that are not moved to arg_fail or
+ * arg_create were not found.  The caller will decide if the
+ * command can continue if any arg_devices entries were not found,
+ * or if any were moved to arg_fail.
+ */
+
+static int _pvcreate_check_single(struct cmd_context *cmd,
+				  struct volume_group *vg,
+				  struct physical_volume *pv,
+				  struct processing_handle *handle)
+{
+	struct pvcreate_each_params *pp = (struct pvcreate_each_params *) handle->custom_handle;
+	struct pvcreate_device *pd;
+	struct pvcreate_prompt *prompt;
+	struct device *dev;
+	int found = 0;
+
+	/*
+	 * Check if pv uuid matches a uuid specified by the command.
+	 */
+	if (pp->uuid_str && id_equal(&pv->id, &pp->id)) {
+		log_error("uuid %s already in use on \"%s\"", pp->uuid_str, pv_dev_name(pv));
+		return ECMD_FAILED;
+	}
+
+	/*
+	 * Check if one of the command args in arg_devices
+	 * matches this device.
+	 *
+	 * (Possible optimization: the first time this _single
+	 * function is called, we could iterate through all
+	 * arg_devices entries, do the name to dev lookup
+	 * with dev_cache_get() and set the pd->dev fields.
+	 * Subsequent _single calls would just compare devs
+	 * and not do any dev_cache_get(). This would avoid
+	 * repeating dev_cache_get() for arg_devices entries.)
+	 */
+	dm_list_iterate_items(pd, &pp->arg_devices) {
+		dev = dev_cache_get(pd->name, cmd->full_filter);
+		if (dev != pv->dev)
+			continue;
+
+		pd->dev = pv->dev;
+		if (pv->dev->pvid[0])
+			strncpy(pd->pvid, pv->dev->pvid, ID_LEN);
+		found = 1;
+		break;
+	}
+
+	/*
+	 * The command is not interested in this device.
+	 */
+	if (!found)
+		return ECMD_PROCESSED;
+
+	log_verbose("Checking device %s for pvcreate %s",
+		    pv_dev_name(pv), pv->dev->pvid[0] ? pv->dev->pvid : "");
+
+	/*
+	 * This test will fail if the device belongs to an MD array.
+	 */
+	if (!dev_test_excl(pv->dev)) {
+		/* FIXME Detect whether device-mapper itself is still using it */
+		log_error("Can't open %s exclusively.  Mounted filesystem?",
+			  pv_dev_name(pv));
+		dm_list_move(&pp->arg_fail, &pd->list);
+		return ECMD_PROCESSED;
+	}
+
+	/*
+	 * pvcreate is being run on this device, and it's not a PV,
+	 * or is an orphan PV.  Neither case requires a prompt.
+	 */
+	if (!vg || is_orphan(pv)) {
+		pd->dev = pv->dev;
+		dm_list_move(&pp->arg_create, &pd->list);
+		return ECMD_PROCESSED;
+	}
+
+	/*
+	 * pvcreate is being run on this device, but the device is already
+	 * a PV in a VG.  A prompt or force option is required to use it.
+	 */
+
+	if (!(prompt = dm_pool_zalloc(cmd->mem, sizeof(*prompt)))) {
+		log_error("prompt alloc failed");
+		return ECMD_FAILED;
+	}
+
+	prompt->dev = pd->dev;
+	prompt->pv_name = dm_pool_strdup(cmd->mem, pd->name);
+	prompt->vg_name = dm_pool_strdup(cmd->mem, vg->name);
+	prompt->type = PROMPT_PVCREATE_PV_IN_VG;
+	dm_list_add(&pp->prompts, &prompt->list);
+
+	dm_list_move(&pp->arg_create, &pd->list);
+	return ECMD_PROCESSED;
+}
+
+/*
+ * This can be used by pvcreate, vgcreate and vgextend to create PVs.  The
+ * callers need to set up the pvcreate_each_params structure based on command
+ * line args.  This includes the pv_names field which specifies the devices to
+ * create PVs on.
+ *
+ * This uses process_each_pv() and should be called from a high level in the
+ * command -- the same level at which other instances of process_each are
+ * called.
+ *
+ * This function returns ECMD_FAILED if the caller requires all specified
+ * devices to be created, and any of those devices are not found, or any of
+ * them cannot be created.
+ *
+ * This function returns ECMD_PROCESSED if the caller requires all specified
+ * devices to be created, and all are created, or if the caller does not
+ * require all specified devices to be created and one or more were created.
+ */
+
+int pvcreate_each_device(struct cmd_context *cmd, struct pvcreate_each_params *pp)
+{
+	struct processing_handle *handle;
+	struct pvcreate_restorable_params rp;
+	struct pvcreate_device *pd, *pd2;
+	struct pvcreate_prompt *prompt, *prompt2;
+	struct physical_volume *pv;
+	struct device *dev;
+	const char *pv_name;
+	int must_use_all = (cmd->command->flags & MUST_USE_ALL_ARGS);
+	int ret;
+	int i;
+
+	/*
+	 * Find the device for each name arg.
+	 */
+	for (i = 0; i < pp->pv_count; i++) {
+		dm_unescape_colons_and_at_signs(pp->pv_names[i], NULL, NULL);
+
+		pv_name = pp->pv_names[i];
+
+		if (!(pd = dm_pool_zalloc(cmd->mem, sizeof(*pd)))) {
+			log_error("alloc failed");
+			return ECMD_FAILED;
+		}
+
+		if (!(pd->name = dm_pool_strdup(cmd->mem, pv_name))) {
+			log_error("strdup failed");
+			return ECMD_FAILED;
+		}
+
+		dm_list_add(&pp->arg_devices, &pd->list);
+	}
+
+	/*
+	 * process all existing PVs and devices.
+	 *
+	 * This is a slightly different way to use process_each_pv, because the
+	 * command args (arg_devices) are not being processed directly by
+	 * process_each_pv (argc and argv are not passed).  Instead,
+	 * process_each_pv is processing all existing PVs and devices, and the
+	 * single function is matching each of those against the command args
+	 * (arg_devices).
+	 *
+	 * If an arg_devices entry is found during process_each, it's moved to
+	 * arg_create if it can be used, or arg_fail if it cannot be used.  If
+	 * it's added to arg_create but needs a prompt or force option, then a
+	 * corresponding prompt entry is added to pp->prompts.
+	 */
+
+	if (!(handle = init_processing_handle(cmd))) {
+		log_error("Failed to initialize processing handle.");
+		return ECMD_FAILED;
+	}
+
+	handle->custom_handle = pp;
+
+	cmd->command->flags |= ENABLE_ALL_DEVS;
+
+	ret = process_each_pv(cmd, 0, NULL, NULL, 1, 0, handle, _pvcreate_check_single);
+	if (ret == ECMD_FAILED)
+		return ECMD_FAILED;
+
+	destroy_processing_handle(cmd, handle);
+
+	log_debug("Checking devices for pvcreate found %u to use", dm_list_size(&pp->arg_create));
+
+	/*
+	 * Check if all arg_devices were found by process_each_pv.
+	 */
+	dm_list_iterate_items(pd, &pp->arg_devices)
+		log_error("Device %s not found (or ignored by filtering).", pd->name);
+
+	/*
+	 * Can the command continue if some specified devices were not found?
+	 */
+	if (!dm_list_empty(&pp->arg_devices) && must_use_all)
+		return ECMD_FAILED;
+
+	/*
+	 * Can the command continue if some specified devices cannot be used?
+	 */
+	if (!dm_list_empty(&pp->arg_fail) && must_use_all)
+		return ECMD_FAILED;
+
+	/*
+	 * The command cannot continue if there are no devices to create.
+	 */
+	if (dm_list_empty(&pp->arg_create)) {
+		log_error("No devices found.");
+		return ECMD_FAILED;
+	}
+
+	/*
+	 * Process any prompts that were gathered during the process_each_pv
+	 * checks.  Options can override/force/skip prompts.
+	 */
+	dm_list_iterate_items_safe(prompt, prompt2, &pp->prompts) {
+		_run_pvcreate_prompt(cmd, pp, prompt);
+
+		if (!prompt->answer) {
+			/* Remove the corresponding entry from arg_create. */
+
+			if ((pd = _pvcreate_list_find_dev(&pp->arg_create, prompt->dev))) {
+				dm_list_move(&pp->arg_fail, &pd->list);
+			} else {
+				/* should never happen */
+				return_ECMD_FAILED;
+			}
+		}
+
+		if (!dm_list_empty(&pp->arg_fail) && must_use_all)
+			return_ECMD_FAILED;
+
+		if (sigint_caught())
+			return_ECMD_FAILED;
+
+		if (prompt->abort_command)
+			return_ECMD_FAILED;
+	}
+
+	/*
+	 * Clear the cache because we are going to rescan after the
+	 * orphan lock is reacquired, to verify that nothing was
+	 * changed during prompts.
+	 */
+	lvmcache_destroy(cmd, 1, 0);
+
+	/*
+	 * Reacquire the orphans lock to write the new PVs.
+	 * It was locked for reading for the process_each_pv check.
+	 */
+	if (!lock_vol(cmd, VG_ORPHANS, LCK_VG_WRITE, NULL)) {
+		log_error("Can't get lock for orphan PVs");
+		goto_out;
+	}
+
+	/*
+	 * The orphans lock was acquired and released during the
+	 * process_each_pv read/check, and is now reacquired to write.  The
+	 * devices being created could have been changed while the lock was not
+	 * held (during the prompts).  So, each device in arg_create should now
+	 * be checked again to verify it was not changed while the lock was not
+	 * held. lvmcache is destroyed after the prompts, and rescanned here.
+	 * The pvids from the rescanned info are compared with the pvids seen
+	 * during the check.  An optimization may be to only reread the labels
+	 * only from devices in arg_create.
+	 */
+	lvmcache_label_scan(cmd);
+
+	dm_list_iterate_items_safe(pd, pd2, &pp->arg_create) {
+		log_debug("Verifying that device %s pvid %s is unchanged",
+			  pd->name, pd->pvid[0] ? pd->pvid : "<none>");
+
+		if (!(dev = dev_cache_get(pd->name, cmd->full_filter))) {
+			log_error("%s: Couldn't find device.  Check your filters?", pd->name);
+			dm_list_move(&pp->arg_fail, &pd->list);
+		} else if (strcmp(pd->pvid, dev->pvid)) {
+			log_error("Cannot use device %s: PV ID changed during command.", pd->name);
+			dm_list_move(&pp->arg_fail, &pd->list);
+		}
+	}
+
+	if (!dm_list_empty(&pp->arg_fail) && must_use_all)
+		return_ECMD_FAILED;
+
+	/*
+	 * wipe signatures on devices being created
+	 */
+	dm_list_iterate_items_safe(pd, pd2, &pp->arg_create) {
+		log_verbose("Wiping signatures on new PV %s", pd->name);
+
+		if (!wipe_known_signatures(cmd, pd->dev, pd->name, TYPE_LVM1_MEMBER | TYPE_LVM2_MEMBER,
+					    0, pp->yes, pp->force, &pd->wiped)) {
+			dm_list_move(&pp->arg_fail, &pd->list);
+		}
+
+		if (!dm_list_empty(&pp->arg_fail) && must_use_all)
+			goto_out;
+
+		if (sigint_caught())
+			goto_out;
+	}
+
+	/*
+	 * create pvs on devices
+	 */
+	dm_list_iterate_items_safe(pd, pd2, &pp->arg_create) {
+
+		if (!dm_list_empty(&pp->arg_fail) && must_use_all)
+			break;
+
+		pv_name = pd->name;
+
+		log_verbose("Creating new PV %s", pv_name);
+
+		/* FIXME: get rid of rp usage in pv_create to avoid this. */
+		memset(&rp, 0, sizeof(rp));
+		rp.restorefile = pp->restorefile;
+		if (pp->uuid_str) {
+			rp.id = pp->id;
+			rp.idp = &pp->id;
+		}
+		rp.ba_start = pp->ba_start;
+		rp.ba_size = pp->ba_size;
+		rp.pe_start = pp->pe_start;
+		rp.extent_count = pp->extent_count;
+		rp.extent_size = pp->extent_size;
+
+		if (!(pv = pv_create(cmd, pd->dev, pp->size, pp->data_alignment,
+				     pp->data_alignment_offset, pp->labelsector,
+				     pp->pvmetadatacopies, pp->pvmetadatasize,
+				     pp->metadataignore, &rp))) {
+			log_error("Failed to setup physical volume \"%s\"", pv_name);
+			dm_list_move(&pp->arg_fail, &pd->list);
+			continue;
+		}
+
+		log_verbose("Set up physical volume for \"%s\" with %" PRIu64
+			    " available sectors", pv_name, pv_size(pv));
+
+		pv->status |= UNLABELLED_PV;
+
+		if (!label_remove(pv->dev)) {
+			log_error("Failed to wipe existing label on %s", pv_name);
+			dm_list_move(&pp->arg_fail, &pd->list);
+			continue;
+		}
+
+		if (pp->zero) {
+			log_verbose("Zeroing start of device %s", pv_name);
+
+			if (!dev_open_quiet(pv->dev)) {
+				log_error("%s not opened: device not zeroed", pv_name);
+				dm_list_move(&pp->arg_fail, &pd->list);
+				continue;
+			}
+
+			if (!dev_set(pv->dev, UINT64_C(0), (size_t) 2048, 0)) {
+                        	log_error("%s not wiped: aborting", pv_name);
+                        	if (!dev_close(pv->dev))
+                                	stack;
+				dm_list_move(&pp->arg_fail, &pd->list);
+				continue;
+                	}
+                	if (!dev_close(pv->dev))
+                        	stack;
+		}
+
+		log_verbose("Writing physical volume data to disk \"%s\"", pv_name);
+
+		if (!pv_write(cmd, pv, 1)) {
+			log_error("Failed to write physical volume \"%s\"", pv_name);
+			dm_list_move(&pp->arg_fail, &pd->list);
+		}
+
+		log_print_unless_silent("Physical volume \"%s\" successfully created", pv_name);
+	}
+
+	unlock_vg(cmd, VG_ORPHANS);
+
+	if (!dm_list_empty(&pp->arg_fail) && must_use_all)
+		return_ECMD_FAILED;
+
+	return ECMD_PROCESSED;
+
+out:
+	unlock_vg(cmd, VG_ORPHANS);
+	return ECMD_FAILED;
+}
+

@@ -535,6 +535,56 @@ struct pvcreate_params {
 	struct pvcreate_restorable_params rp;
 };
 
+/*
+ * FIXME: rename this pvcreate_params once the old pvcreate_params is unused.
+ * This can probably be put in toollib.h.
+ */
+struct pvcreate_each_params {
+	/*
+	 * From argc and argv.
+	 */
+	char **pv_names;
+	uint32_t pv_count;
+
+	/*
+	 * From command line args.
+	 */
+	int zero;
+	uint64_t size;
+	uint64_t data_alignment;
+	uint64_t data_alignment_offset;
+	int pvmetadatacopies;
+	uint64_t pvmetadatasize;
+	int64_t labelsector;
+	force_t force;
+	unsigned yes;
+	unsigned metadataignore;
+
+	/*
+	 * From recovery-specific command line args.
+	 */
+	const char *restorefile; /* NULL if no --restorefile option */
+	const char *uuid_str;    /* id in printable format, NULL if no id */
+	struct id id;
+
+	/*
+	 * From reading VG backup file.
+	 */
+	uint64_t ba_start;
+	uint64_t ba_size;
+	uint64_t pe_start;
+	uint32_t extent_count;
+	uint32_t extent_size;
+
+	/*
+	 * Used for command processing.
+	 */
+	struct dm_list prompts;         /* pvcreate_prompt */
+	struct dm_list arg_devices;     /* pvcreate_device, one for each pv_name */
+	struct dm_list arg_create;      /* pvcreate_device, processing from arg_devices */
+	struct dm_list arg_fail;        /* pvcreate_device, cannot process */
+};
+
 struct lvresize_params {
 	const char *vg_name; /* only-used when VG is not yet opened (in /tools) */
 	const char *lv_name;

@@ -204,4 +204,6 @@ int lvmcache_vg_is_foreign(struct cmd_context *cmd, const char *vgname, const ch
 
 void lvmcache_lock_ordering(int enable);
 
+void lvmcache_keep_orphan_cache(int keep);
+
 #endif
