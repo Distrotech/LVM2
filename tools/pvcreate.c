@@ -92,32 +92,26 @@ static int pvcreate_restore_params_validate(struct cmd_context *cmd,
 
 int pvcreate(struct cmd_context *cmd, int argc, char **argv)
 {
-	int i;
-	int ret = ECMD_PROCESSED;
-	struct pvcreate_params pp;
+	struct pvcreate_each_params pep;
+	int ret;
+
+	/* TODO: set pep fields from args */
+
+	pep->pv_count = argc;
+	pep->pv_names = argv;
 
 	/* Needed to change the set of orphan PVs. */
 	if (!lockd_gl(cmd, "ex", 0))
 		return_ECMD_FAILED;
 
-	pvcreate_params_set_defaults(&pp);
-
-	if (!pvcreate_restore_params_validate(cmd, argc, argv, &pp)) {
-		return EINVALID_CMD_LINE;
-	}
-	if (!pvcreate_params_validate(cmd, argc, &pp)) {
-		return EINVALID_CMD_LINE;
+	if (!lock_vol(cmd, VG_ORPHANS, LCK_VG_WRITE, NULL)) {
+		log_error("Can't get lock for orphan PVs");
+		return 0;
 	}
 
-	for (i = 0; i < argc; i++) {
-		if (sigint_caught())
-			return_ECMD_FAILED;
+	ret = pvcreate_each_device(cmd, &pep);
 
-		dm_unescape_colons_and_at_signs(argv[i], NULL, NULL);
-
-		if (!pvcreate_single(cmd, argv[i], &pp))
-			ret = ECMD_FAILED;
-	}
+	unlock_vg(cmd, VG_ORPHANS);
 
 	return ret;
 }

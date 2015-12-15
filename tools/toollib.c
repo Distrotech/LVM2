@@ -3289,6 +3289,7 @@ int process_each_pv(struct cmd_context *cmd,
 		    int argc, char **argv,
 		    const char *only_this_vgname,
 		    uint32_t read_flags,
+		    uint32_t each_flags,
 		    struct processing_handle *handle,
 		    process_single_pv_fn_t process_single_pv)
 {
@@ -3343,7 +3344,7 @@ int process_each_pv(struct cmd_context *cmd,
 	process_all_pvs = dm_list_empty(&arg_pvnames) && dm_list_empty(&arg_tags);
 
 	process_all_devices = process_all_pvs && (cmd->command->flags & ENABLE_ALL_DEVS) &&
-			      arg_count(cmd, all_ARG);
+			      (each_flags & EACH_ALL);
 
 	/* Needed for a current listing of the global VG namespace. */
 	if (!only_this_vgname && !lockd_gl(cmd, "sh", 0))
@@ -3498,3 +3499,148 @@ int lvremove_single(struct cmd_context *cmd, struct logical_volume *lv,
 
 	return ECMD_PROCESSED;
 }
+
+struct pvcreate_device {
+	struct dm_list list;
+	const char *name;
+	struct device *dev;
+};
+
+struct prompt_device {
+	struct dm_list list;
+	const char *name;
+	struct device *dev;
+	pvcreate_prompt_fn_t pvcreate_prompt;
+};
+
+struct pvcreate_each_params {
+	char **pv_names;               /* argv */
+	uint32_t pv_count;             /* argc */
+	uint32_t create_count;
+	struct dm_list prompt_devices; /* struct prompt_device */
+	struct dm_list create_devices; /* struct pvcreate_device */
+};
+
+static int _pvcreate_check_single(struct cmd_context *cmd,
+				  struct volume_group *vg,
+				  struct physical_volume *pv,
+				  struct processing_handle *handle)
+{
+
+	/*
+	 * Check if pv uuid matches a new uuid specified by command.
+	 * (was in pvcreate_vol, see pp->rp.idp)
+	 */
+
+	/*
+	 * If pv->dev matches nothing in pep->pv_names, then return.
+	 */
+
+	/*
+	 * If pv->dev matches something in pep->pv_names, then pvcreate
+	 * is being run on this device.
+	 *
+	 * If vg is not NULL, then this is running pvcreate over
+	 * an existing PV:
+	 * . Add a prompt to pep->prompt_devices to confirm this
+	 *   after process_each is done.
+	 * . Add an entry for pv->dev to pep->create_devices.
+	 *   (Will be removed if prompt is negative.)
+	 *
+	 * If vg is NULL, then this dev is not an existing PV:
+	 * . Add an etry for pv->dev to pep->create_devices.
+	 */
+
+}
+
+/*
+ * This can be used by pvcreate, vgcreate and vgextend to create PVs.
+ * The callers need to set up the pvcreate_each_params structure based
+ * on command line args.  This includes the pv_names field which specifies
+ * the devices to create PVs on.
+ *
+ * This function is a specialized instance of process_each_pv() and
+ * should be called from a high level in the command.
+ */
+
+int pvcreate_each_device(struct cmd_context *cmd, struct pvcreate_each_params *pep)
+{
+
+	if (!_validate_pvcreate_each_params(pep))
+		return EINVALID_CMD_LINE;
+
+	for (i = 0; i < pep->pv_count; i++)
+		dm_unescape_colons_and_at_signs(pep->pv_names[i], NULL, NULL);
+
+	/*
+	 * process all *existing* PVs and devices - this checks if pv_names
+	 * entries are already PVs, and matches a known dev to each pv_names
+	 * entry.  A create_devices entry is added for each pv_names entry
+	 * for which a matching device is found.
+	 *
+	 * This creates lists pep->create_devices and pep->prompt_devices.
+	 * This does not modify any of the devices specified for pvcreate.
+	 */
+
+	cmd->command->flags |= ENABLE_ALL_DEVS;
+
+	process_each_pv(cmd, 0, NULL, NULL, 0, EACH_ALL, handle, _pvcreate_check_single);
+
+	/*
+	 * check if all pep->pv_names were found by process_each.
+	 */
+
+	if (pep->create_count != pep->pv_count) {
+	}
+
+	/*
+	 * process any prompts that were gathered during the process_each_pv checks
+	 * (was in _pvcreate_check)
+	 */
+
+	dm_list_iterate_items(prompt, &pep->prompt_devices) {
+		/* TODO: call prompt->pvcreate_prompt(prompt) */
+	}
+
+	/*
+	 * wipe signatures on devices being created (was in _pvcreate_check)
+	 * (pvcreate_vol also has some code to re-get the dev after the wipe.)
+	 */
+
+	dm_list_iterate_items(pd, &pep->create_devices) {
+		if (!wipe_known_signatures(cmd, pd->dev, pd->name, TYPE_LVM1_MEMBER | TYPE_LVM2_MEMBER,
+					    0, pep->yes, pep->force, wiped)) {
+		}
+					  
+	}
+
+	/*
+	 * create pvs on devices
+	 */
+	dm_list_iterate_items(pd, &pep->create_devices) {
+
+		if (!(pv = pv_create(cmd, pd->dev, pp->size, pp->data_alignment,
+			     pp->data_alignment_offset, pp->labelsector,
+			     pp->pvmetadatacopies, pp->pvmetadatasize,
+			     pp->metadataignore, &pp->rp))) {
+		}
+
+		pv->status |= UNLABELLED_PV;
+
+		/* wipe existing label (was in _pvcreate_write) */
+
+        	if (!label_remove(pd->dev)) {
+        	}
+
+		/* zero start of device (was in _pvcreate_write) */
+
+		if (zero) {
+                }
+
+		/* write the pv (was in _pvcreate_write) */
+
+		if (!pv_write(cmd, pv, 1)) {
+		}
+	}
+}
+
