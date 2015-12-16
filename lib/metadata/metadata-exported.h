@@ -864,6 +864,21 @@ static inline int is_change_activating(activation_change_t change)
         return ((change != CHANGE_AN) && (change != CHANGE_ALN));
 }
 
+struct lv_raid_convert_params {
+	struct segment_type *segtype;
+	int yes;
+	int force;
+	int duplicate;
+	int unduplicate;
+	const int data_copies; /* to be able to detect -m0; -1 if no data copy change requested */
+	const unsigned region_size;
+	const int region_size_arg;
+	const unsigned stripes;
+	const unsigned stripe_size;
+	const char *lv_name; /* sub-lv name to unduplicate or pool LV name to create a duplicated thin LV */
+	struct dm_list *allocate_pvs;
+};
+
 /* FIXME: refactor and reduce the size of this struct! */
 struct lvcreate_params {
 	/* flags */
@@ -1145,22 +1160,15 @@ uint32_t raid_rmeta_extents_delta(struct cmd_context *cmd,
 				  uint32_t region_size, uint32_t extent_size);
 int lv_is_raid_with_tracking(const struct logical_volume *lv);
 uint32_t lv_raid_image_count(const struct logical_volume *lv);
-int lv_raid_split(struct logical_volume *lv, const char *split_name,
+int lv_raid_split(struct logical_volume *lv, int yes, const char *split_name,
 		  uint32_t new_count, struct dm_list *splittable_pvs);
 int lv_raid_split_and_track(struct logical_volume *lv,
+			    int yes,
 			    const char *sub_lv_name,
 			    struct dm_list *splittable_pvs);
 int lv_raid_merge(struct logical_volume *lv);
 int lv_raid_convert(struct logical_volume *lv,
-		    struct segment_type *new_segtype,
-		    int yes, int force,
-		    int duplicate, int unduplicate,
-		    const int data_copies,
-		    const unsigned region_size,
-		    const unsigned stripes,
-		    const unsigned stripe_size,
-		    const char *sub_lv_name,
-		    struct dm_list *allocate_pvs);
+		    struct lv_raid_convert_params p);
 int lv_raid_replace(struct logical_volume *lv, int yes,
 		    struct dm_list *remove_pvs,
 		    struct dm_list *allocate_pvs);
@@ -1169,7 +1177,8 @@ int partial_raid_lv_supports_degraded_activation(const struct logical_volume *lv
 int lv_raid10_far_reorder_segments(struct logical_volume *lv, uint32_t extents, int extend);
 uint32_t raid_rimage_extents(const struct segment_type *segtype, uint32_t extents, uint32_t stripes, uint32_t data_copies);
 uint32_t raid_total_extents(const struct segment_type *segtype, uint32_t extents, uint32_t stripes, uint32_t data_copies);
-int lv_create_raid01(struct logical_volume *lv, const struct segment_type *segtype,
+int lv_create_raid01(struct logical_volume *lv,
+		     const struct segment_type *segtype,
 		     unsigned mirrors, unsigned stripes,
 		     unsigned stripe_size, unsigned region_size,
 		     unsigned extents,

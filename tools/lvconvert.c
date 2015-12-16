@@ -1772,10 +1772,10 @@ PFLA("image_count=%u\n", image_count);
 		return lv_raid_merge(lv);
 
 	if (arg_count(cmd, trackchanges_ARG))
-		return lv_raid_split_and_track(lv, lp->lv_split_name, lp->pvh);
+		return lv_raid_split_and_track(lv, lp->yes, lp->lv_split_name, lp->pvh);
 
 	if (arg_count(cmd, splitmirrors_ARG))
-		return lv_raid_split(lv, lp->lv_split_name, image_count, lp->pvh);
+		return lv_raid_split(lv, lp->yes, lp->lv_split_name, image_count, lp->pvh);
 
 	if ((seg_is_linear(seg) || seg_is_striped(seg) || seg_is_mirror(seg) || seg_is_raid(seg)) &&
 	    (arg_count(cmd, type_ARG) ||
@@ -1846,12 +1846,19 @@ PFLA("image_count=%u\n", image_count);
 
 PFLA("lp->region_size=%u", lp->region_size);
 PFLA("lp->pool_data_name=%s lp->lv_split_name=%s lp->lv_name=%s", lp->pool_data_name, lp->lv_split_name, lp->lv_name);
-		return lv_raid_convert(lv, arg_count(cmd, type_ARG) ? (struct segment_type *) lp->segtype : NULL,
-				       lp->yes, lp->force,
-				       arg_is_set(cmd, duplicate_ARG), arg_is_set(cmd, unduplicate_ARG),
-				       data_copies, lp->region_size,
-				       stripes, stripe_size,
-				       lp->pool_data_name ?: lp->lv_split_name, lp->pvh);
+		return lv_raid_convert(lv, (struct lv_raid_convert_params)
+				       { .segtype = arg_count(cmd, type_ARG) ? (struct segment_type *) lp->segtype : NULL,
+					 .yes = lp->yes,
+					 .force = lp->force,
+					 .duplicate = arg_is_set(cmd, duplicate_ARG),
+					 .unduplicate = arg_is_set(cmd, unduplicate_ARG),
+					 .data_copies = data_copies,
+					 .region_size = lp->region_size,
+					 .region_size_arg = arg_count(cmd, regionsize_ARG),
+					 .stripes = stripes,
+					 .stripe_size = stripe_size,
+					 .lv_name = lp->pool_data_name ?: lp->lv_split_name,
+					 .allocate_pvs= lp->pvh } );
 	}
 
 	if (arg_count(cmd, replace_ARG))

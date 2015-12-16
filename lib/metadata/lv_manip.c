@@ -7349,7 +7349,7 @@ int insert_layer_for_segments_on_pv(struct cmd_context *cmd,
 }
 
 /*
- * Initialize the LV with 'value'.
+ * Initialize the LV with @wp.zero_value, length wp.zero_sectors or 4KiB default if 0
  */
 int wipe_lv(struct logical_volume *lv, struct wipe_params wp)
 {
