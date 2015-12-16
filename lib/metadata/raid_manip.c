@@ -295,12 +295,13 @@ static int _lv_is_active(struct logical_volume *lv)
 {
 	if (vg_is_clustered(lv->vg)) {
 		if (!lv_is_active_exclusive_locally(lv)) {
-			log_error("%s must be active exclusive locally to perform this operation.",
+			log_error("%s in clustered VG must be active exclusive "
+				  "locally to perform this operation.",
 				  display_lvname(lv));
 			return 0;
 		}
 	} else if (!lv_is_active(lv)) {
-		log_error("%s must be locally to perform this operation.",
+		log_error("%s must be active to perform this operation.",
 			  display_lvname(lv));
 		return 0;
 	}
@@ -1116,6 +1117,7 @@ static int _lv_name_add_string_index(struct cmd_context *cmd, const char **lv_na
 	strcpy(newname, prefix);
 	strcat(newname, b);
 	*lv_name = newname;
+
 	return 1;
 }
 
@@ -1170,7 +1172,7 @@ static int __shift_lv_name(char *shift_name, char **name, unsigned s, unsigned m
 log_very_verbose("Before shifting %s", *name);
 	/* Handle duplicating sub LV names */
 	if ((numptr = strstr(shift_name, "_dup_")) &&
-	    (_strstr_strings(shift_name, "_rimage_", "_rmeta"))) {
+	    (_strstr_strings(shift_name, "_rimage_", "_rmeta_"))) {
 		char *suffix;
 log_very_verbose("shifting duplicating sub LV %s", shift_name);
 
@@ -1193,13 +1195,12 @@ log_very_verbose("shifting duplicating sub LV %s numptr=%s suffix=%s len=%ld", s
 		}
 log_very_verbose("shifting s=%u num=%u", s, num);
 
-	/* Handle (sub) LV names */
+	/* Handle regular (sub) LV names */
 	} else {
 		if ((numptr = strrchr(shift_name, '_')) &&
 		    (num = atoi(numptr + 1)) == s) {
 			*name = shift_name;
 			len = strlen(++numptr) + 1;
-
 			r = dm_snprintf(numptr, len, "%u", num - missing) < 0 ? 0 : 1;
 		}
 	}
@@ -1770,7 +1771,6 @@ static int __alloc_rmeta_for_lv(struct logical_volume *data_lv,
 	if (!_top_level_lv_name(data_lv))
 		return 0;
 
-PFLA("data_lv=%s rmeta_extents=%u", display_lvname(data_lv), _raid_rmeta_extents(data_lv->vg->cmd, data_lv->le_count, seg->region_size, data_lv->vg->extent_size));
 	rmeta_extents = _raid_rmeta_extents(data_lv->vg->cmd, data_lv->le_count,
 					    0 /* region_size */, data_lv->vg->extent_size);
 	if (!(ah = allocate_extents(data_lv->vg, NULL, striped_segtype,
@@ -2633,8 +2633,10 @@ static int _lv_update_reload_fn_reset_eliminate_lvs(struct logical_volume *lv,
 	if (!lv_update_and_reload_origin(lv))
 		return_0;
 
+	/* Call any @fn_on_lv between the 2 metadata updates and reloads */
 	if (fn_on_lv && !fn_on_lv(lv))
 		return 0;
+
 	/*
 	 * Now that any 'REBUILD' or 'RESHAPE_DELTA_DISKS' etc.
 	 * has/have made its/their way to the kernel, we must
@@ -3023,8 +3025,7 @@ int lv_raid_split(struct logical_volume *lv, const char *split_name,
 	dm_list_init(&data_lvs);
 
 	if (!new_image_count) {
-		log_error("Unable to split all images from %s",
-				display_lvname(lv));
+		log_error("Unable to split all images from %s", display_lvname(lv));
 		return 0;
 	}
 
@@ -5448,7 +5449,8 @@ static int _rename_lv_and_sub_lvs(struct logical_volume *lv, const char *from, c
 	RETURN_IF_LV_SEG_ZERO(lv, (seg = first_seg(lv)));
 
 	for (s = 0; s < seg->area_count; s++) {
-		if (seg_metalv(seg, s) && !_rename_lv(seg_metalv(seg, s), from, to))
+		if (seg->meta_areas && seg_metalv(seg, s) &&
+		    !_rename_lv(seg_metalv(seg, s), from, to))
 				return 0;
 		if (!_rename_lv(seg_lv(seg, s), from, to))
 				return 0;
@@ -5485,7 +5487,12 @@ static int _get_max_sub_lv_name_index(struct logical_volume *lv, uint32_t *max_i
 	return 1;
 }
 
-/* Prepare first segment of @lv to suit _shift_image_components() */
+/*
+ * Prepare first segment of @lv to suit _shift_image_components()
+ * 
+ * Being called with areas arrays one larger than seg->area_count
+ * and all slots shifted to the front with the last one unassigned.
+ */
 static int _prepare_seg_for_name_shift(struct logical_volume *lv)
 {
 	int s;
@@ -5495,37 +5502,33 @@ static int _prepare_seg_for_name_shift(struct logical_volume *lv)
 	RETURN_IF_LV_SEG_ZERO(lv, (seg = first_seg(lv)));
 	RETURN_IF_ZERO(seg->area_count, "lv segment areas");
 
-PFL();
 	if (!_get_max_sub_lv_name_index(lv, &max_idx))
 		return 0;
 PFL();
-	max_idx++;
-
-	/* Allocate areas array for @max_idx */
-	if (!_realloc_meta_and_data_seg_areas(lv, max_idx))
-		return 0;
-PFL();
-	seg->area_count = max_idx;
+	seg->area_count++;
+	RETURN_IF_ZERO((max_idx < seg->area_count), "valid maximum index");
 
 	for (s = seg->area_count - 1; s > -1; s--) {
-		if (seg_type(seg, s) == AREA_UNASSIGNED)
-			continue;
-
+		RETURN_IF_ZERO(seg_type(seg, s) == AREA_LV, "valid data sub-lv")
+		RETURN_IF_ZERO(seg_metatype(seg, s) == AREA_LV, "valid metadata sub-lv")
 PFL();
 		if (!_lv_name_get_string_index(seg_lv(seg, s), &idx))
 			return 0;
 PFLA("idx=%u", idx);
-		seg->areas[idx] = seg->areas[s];
-		seg->meta_areas[idx] = seg->meta_areas[s];
-		if (idx != s)
+		RETURN_IF_ZERO(idx < seg->area_count, "valid sub-lv index");
+		if (idx != s) {
+			seg->areas[idx] = seg->areas[s];
+			seg->meta_areas[idx] = seg->meta_areas[s];
 			seg_type(seg, s) = seg_metatype(seg, s) = AREA_UNASSIGNED;
+		}
 	}
 
 	return 1;
 }
 
 /* HM Helper: rename sub LVs to avoid conflict on creation of new metadata LVs */
-enum dir { to_standard = 0, from_standard };
+/* HM FIXME: optimize to avoid ft-array duplication */
+enum dir { to_standard = 0, from_standard, to_ddup, from_ddup };
 static int _rename_sub_lvs(struct logical_volume *lv, enum dir dir)
 {
 	uint32_t s;
@@ -5535,6 +5538,8 @@ static int _rename_sub_lvs(struct logical_volume *lv, enum dir dir)
 	static struct ft ft[] = {
 		{ "__rimage_", "_rimage_", "__rmeta_", "_rmeta_" },	/* to_standard */
 		{ "_rimage_", "__rimage_", "_rmeta_", "__rmeta_" },	/* from_standard */
+		{ "_dup_", "_ddup_", "_rmeta_", "_rrmeta_"	 },	/* to_ddup */
+		{ "_ddup_", "_dup_", "_rrmeta_", "_rmeta_"	 },	/* from_ddup */
 	};
 	struct ft *ftp = ft + dir;
 	struct lv_segment *seg;
@@ -5544,7 +5549,7 @@ static int _rename_sub_lvs(struct logical_volume *lv, enum dir dir)
 	if (!lv_is_raid(lv))
 		return 1;
 
-	RETURN_IF_NONZERO(dir < 0 || dir > from_standard, "valid rename request");
+	RETURN_IF_NONZERO(dir < 0 || dir > from_ddup, "valid rename request");
 
 	for (s = 0; s < seg->area_count; s++) {
 		if (ftp->from_rmeta &&
@@ -5558,6 +5563,27 @@ static int _rename_sub_lvs(struct logical_volume *lv, enum dir dir)
 	}
 
 	return 1;
+}
+
+/* rename @dlv and @mlv to / from ddup to avoid name collisions during name shift */
+static int _rename_split_duplicate_lv_and_sub_lvs(struct logical_volume *dlv, struct logical_volume *mlv, enum dir dir)
+{
+	const char *in[] = { "_dup_", "_ddup_" };
+	const char *mn[] = { "_rmeta_", "_rrmeta_" };
+	int d;
+
+	switch (dir) {
+	case to_ddup:
+		d = 1; break;
+	case from_ddup:
+		d = 0; break;
+	default:
+		RETURN_IF_ZERO(0, "proper directionto rename");
+	}
+PFL();
+	return _rename_sub_lvs(dlv, dir) &&
+	       _rename_lv(dlv, in[!d], in[d]) &&
+	       _rename_lv(mlv, mn[!d], mn[d]);
 }
 
 /*
@@ -5613,6 +5639,7 @@ static int _raid_split_duplicate(struct logical_volume *lv, const char *split_na
 	struct logical_volume *split_lv = NULL;
 
 	RETURN_IF_LV_SEG_ZERO(lv, (seg = first_seg(lv)));
+	RETURN_IF_ZERO(_lv_is_duplicating(lv), "Called with non-duplicating LV");
 	RETURN_IF_ZERO(split_name, "split name argument");
 	RETURN_IF_ZERO(seg->area_count, "lv segment areas");
 
@@ -5620,12 +5647,6 @@ static int _raid_split_duplicate(struct logical_volume *lv, const char *split_na
 		return 0;
 
 	dm_list_init(&removal_lvs);
-
-	if (!_lv_is_duplicating(lv)) {
-		log_error(INTERNAL_ERROR "Called with non-duplicating LV %s",
-			  display_lvname(lv));
-		return 0;
-	}
 
 	/* If user passed in the sub-lv name to split off and no --name option, use it */
 	if (!_valid_name_requested(&lv, &split_name, 0 /* properties */, "split"))
@@ -5643,6 +5664,7 @@ static int _raid_split_duplicate(struct logical_volume *lv, const char *split_na
 		return 0;
 	}
 
+	/* Allow for intentionally splitting off unsynchronized LV in case user e.g. created a duplicated LV in error */
 	if (!_dev_in_sync(lv, s)) {
 		log_warn("Splitting off unsynchronized sub LV %s!", 
 			 display_lvname(split_lv));
@@ -5663,11 +5685,11 @@ static int _raid_split_duplicate(struct logical_volume *lv, const char *split_na
 	if (!_extract_image_component_sublist(seg, RAID_META, s, s + 1, &removal_lvs, 1))
 		return 0;
 
-	seg_metatype(seg, s) = AREA_UNASSIGNED;
-
 	/* remove reference from @seg to @split_lv */
 	if (!remove_seg_from_segs_using_this_lv(split_lv, seg))
 		return 0;
+
+	seg_type(seg, s) = AREA_UNASSIGNED;
 
 	/* Create unique split LV name to use (previous splits may exist) */
 	RETURN_IF_ZERO((lv_name = _generate_unique_raid_name(lv, "split_")), "unique LV name allocatable");
@@ -5689,14 +5711,23 @@ static int _raid_split_duplicate(struct logical_volume *lv, const char *split_na
 	seg->data_copies--;
 	lv_set_visible(split_lv);
 	split_lv->status &= ~LV_NOTSYNCED;
-PFL();
+
+	/* Rename the sub-lv following the split off one temporarilly to allow for name shift w/o name collision */
+	for (s = 0; s < seg->area_count; s++)
+		if (!_rename_split_duplicate_lv_and_sub_lvs(seg_lv(seg, s), seg_metalv(seg, s), to_ddup))
+			return 0;
+
 	log_debug_metadata("Updating VG metadata and reactivating %s and %s",
 			   display_lvname(lv), display_lvname(split_lv));
 	if (!_lv_update_reload_reset_eliminate_lvs(lv, &removal_lvs) ||
-	    !lv_update_and_reload_origin(split_lv))
-		return 0;
+	    !lv_update_and_reload(split_lv))
+		return_0;
 
-PFL();
+	/* Rename the sub-lv following the split off one back */
+	for (s = 0; s < seg->area_count; s++)
+		if (!_rename_split_duplicate_lv_and_sub_lvs(seg_lv(seg, s), seg_metalv(seg, s), from_ddup))
+			return 0;
+
 	/* Shift area numerical indexes down and reload */
 	if (!_prepare_seg_for_name_shift(lv))
 		return 0;
@@ -5704,6 +5735,7 @@ PFL();
 	if (!_shift_image_components(seg))
 		return 0;
 PFL();
+	log_debug_metadata("Updating VG metadata and reactivating %s", display_lvname(lv));
 	if (!lv_update_and_reload_origin(lv))
 		return 0;
 PFL();
@@ -5729,7 +5761,7 @@ PFL();
 			if (!_rename_sub_lvs(lv, to_standard))
 				return 0;
 
-			return lv_update_and_reload_origin(lv);
+			return lv_update_and_reload(lv);
 		}
 	}
 PFL();
