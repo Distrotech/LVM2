@@ -3104,7 +3104,7 @@ int lv_raid_split(struct logical_volume *lv, int yes,
 			return_0;
 		}
 
-		/* Create the one top-level segment for our raid1 split LV and add it to the LV  */
+		/* Create the one top-level segment for our new raid1 split LV and add it to the LV  */
 		if (!(raid1_seg = alloc_lv_segment(seg->segtype, split_lv, 0, seg->len, 0, status,
 						   seg->stripe_size, NULL,
 						   split_count, seg->area_len,
@@ -3114,18 +3114,17 @@ int lv_raid_split(struct logical_volume *lv, int yes,
 		}
 		dm_list_add(&split_lv->segments, &raid1_seg->list);
 
-		/* Set segment area data image LVs and give them proper names */
+		/* Set new raid1 segment area data and metadata image LVs and give them proper names */
 		if(!_set_lv_areas_from_data_lvs_and_create_names(split_lv, &data_lvs, RAID_IMAGE) ||
 		   !_set_lv_areas_from_data_lvs_and_create_names(split_lv, &meta_lvs, RAID_META))
 			return 0;
 
 		split_lv->le_count = seg->len;
 		split_lv->size = seg->len * lv->vg->extent_size;
-PFLA("split_lv->le_count=%u", split_lv->le_count);
 	} 
 
-	seg->area_count = new_image_count;
-	seg->data_copies = new_image_count;
+	/* Adjust numbers of raid1 areas and data copies (i.e. sub LVs) */
+	seg->area_count = seg->data_copies = new_image_count;
 
 	if (!_vg_write_lv_suspend_vg_commit(lv))
 		return 0;
@@ -3152,7 +3151,6 @@ PFLA("split_lv->le_count=%u", split_lv->le_count);
 
 	return 1;
 }
-
 
 /*
  * lv_raid_split_and_track
@@ -3251,11 +3249,9 @@ int lv_raid_split_and_track(struct logical_volume *lv,
 					  _lv_is_degraded(lv) ? "degraded " : "",
 					  lvseg_name(seg1), display_lvname(seg_lv(seg, !s)));
 
-		} else {
+		} else
 			log_error("Tracking an image in 2-way raid1 LV %s will cause loss of redundancy!",
 				  display_lvname(lv));
-		}
-
 	
 		if (!redundant) {	
 			log_error("Run \"lvconvert %s %s\" to have 3 legs before splitting of %s and redo",
@@ -5652,7 +5648,7 @@ static int _raid_split_duplicate(struct logical_volume *lv, int yes,
 				 const char *split_name, uint32_t new_image_count)
 {
 	uint32_t s;
-	enum rename_dir dir;
+	enum rename_dir dir = to_flat;
 	const char *lv_name;
 	struct dm_list removal_lvs;
 	struct lv_segment *seg;
@@ -5779,9 +5775,8 @@ PFL();
 PFL();
 	log_debug_metadata("Updating VG metadata and reloading %s",
 			   display_lvname(lv));
-	dir = to_flat;
 	return _lv_update_reload_fn_reset_eliminate_lvs(lv, &removal_lvs, _raid_split_duplicate_rename_sub_lvs, &dir) &&
-	       lv_update_and_reload(split_lv);
+	       activate_lv_excl_local(lv->vg->cmd, split_lv);
 }
 
 /*
