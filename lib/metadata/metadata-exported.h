@@ -583,6 +583,8 @@ struct pvcreate_each_params {
 	struct dm_list arg_devices;     /* pvcreate_device, one for each pv_name */
 	struct dm_list arg_create;      /* pvcreate_device, processing from arg_devices */
 	struct dm_list arg_fail;        /* pvcreate_device, cannot process */
+	struct dm_list pvs;             /* pv_list */
+	int preserve_existing;
 };
 
 struct lvresize_params {
@@ -749,6 +751,7 @@ int vg_rename(struct cmd_context *cmd, struct volume_group *vg,
 	      const char *new_name);
 int vg_extend(struct volume_group *vg, int pv_count, const char *const *pv_names,
 	      struct pvcreate_params *pp);
+int vg_extend_each_pv(struct volume_group *vg, struct pvcreate_each_params *pp);
 int vg_reduce(struct volume_group *vg, const char *pv_name);
 
 int vgreduce_single(struct cmd_context *cmd, struct volume_group *vg,

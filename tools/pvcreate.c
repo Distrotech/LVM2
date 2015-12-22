@@ -15,7 +15,34 @@
 
 #include "tools.h"
 
-static int pvcreate_each_params_from_args(struct cmd_context *cmd, struct pvcreate_each_params *pp)
+void pvcreate_each_params_set_defaults(struct pvcreate_each_params *pp)
+{
+	pp->zero = 1;
+	pp->size = 0;
+	pp->data_alignment = UINT64_C(0);
+	pp->data_alignment_offset = UINT64_C(0);
+	pp->pvmetadatacopies = DEFAULT_PVMETADATACOPIES;
+	pp->pvmetadatasize = DEFAULT_PVMETADATASIZE;
+	pp->labelsector = DEFAULT_LABELSECTOR;
+	pp->force = PROMPT;
+	pp->yes = 0;
+	pp->metadataignore = DEFAULT_PVMETADATAIGNORE;
+	pp->restorefile = NULL;
+	pp->uuid_str = NULL;
+	pp->ba_start = 0;
+	pp->ba_size = 0;
+	pp->pe_start = PV_PE_START_CALC;
+	pp->extent_count = 0;
+	pp->extent_size = 0;
+
+	dm_list_init(&pp->prompts);
+	dm_list_init(&pp->arg_devices);
+	dm_list_init(&pp->arg_create);
+	dm_list_init(&pp->arg_fail);
+	dm_list_init(&pp->pvs);
+}
+
+int pvcreate_each_params_from_args(struct cmd_context *cmd, struct pvcreate_each_params *pp)
 {
 	pp->yes = arg_count(cmd, yes_ARG);
 	pp->force = (force_t) arg_count(cmd, force_ARG);
@@ -207,32 +234,6 @@ static int pvcreate_each_restore_params_from_backup(struct cmd_context *cmd,
 
 	release_vg(vg);
 	return 1;
-}
-
-static void pvcreate_each_params_set_defaults(struct pvcreate_each_params *pp)
-{
-	pp->zero = 1;
-	pp->size = 0;
-	pp->data_alignment = UINT64_C(0);
-	pp->data_alignment_offset = UINT64_C(0);
-	pp->pvmetadatacopies = DEFAULT_PVMETADATACOPIES;
-	pp->pvmetadatasize = DEFAULT_PVMETADATASIZE;
-	pp->labelsector = DEFAULT_LABELSECTOR;
-	pp->force = PROMPT;
-	pp->yes = 0;
-	pp->metadataignore = DEFAULT_PVMETADATAIGNORE;
-	pp->restorefile = NULL;
-	pp->uuid_str = NULL;
-	pp->ba_start = 0;
-	pp->ba_size = 0;
-	pp->pe_start = PV_PE_START_CALC;
-	pp->extent_count = 0;
-	pp->extent_size = 0;
-
-	dm_list_init(&pp->prompts);
-	dm_list_init(&pp->arg_devices);
-	dm_list_init(&pp->arg_create);
-	dm_list_init(&pp->arg_fail);
 }
 
 int pvcreate(struct cmd_context *cmd, int argc, char **argv)

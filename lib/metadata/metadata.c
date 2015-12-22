@@ -274,6 +274,7 @@ int add_pv_to_vg(struct volume_group *vg, const char *pv_name,
 			break;
 		}
 
+#if 0
 	if (pv->status & UNLABELLED_PV) {
 		if (!(pvc = dm_pool_zalloc(mem, sizeof(*pvc)))) {
 			log_error("pv_to_create allocation for '%s' failed", pv_name);
@@ -283,6 +284,7 @@ int add_pv_to_vg(struct volume_group *vg, const char *pv_name,
 		pvc->pp = pp;
 		dm_list_add(&vg->pvs_to_create, &pvc->list);
 	}
+#endif
 
 	return 1;
 }
@@ -739,6 +741,43 @@ int vg_extend(struct volume_group *vg, int pv_count, const char *const *pv_names
 	}
 
 /* FIXME Decide whether to initialise and add new mdahs to format instance */
+
+	return 1;
+}
+
+int vg_extend_each_pv(struct volume_group *vg, struct pvcreate_each_params *pp)
+{
+	struct pv_list *pvl;
+	unsigned int max_phys_block_size = 0;
+
+	log_debug_metadata("Adding PVs to VG %s", vg->name);
+
+	if (_vg_bad_status_bits(vg, RESIZEABLE_VG))
+		return_0;
+
+	dm_list_iterate_items(pvl, &pp->pvs) {
+		log_debug_metadata("Adding PV %s to VG %s", pv_dev_name(pvl->pv), vg->name);
+
+		if (!(check_dev_block_size_for_vg(pvl->pv->dev,
+						  (const struct volume_group *) vg,
+						  &max_phys_block_size))) {
+			log_error("PV %s has wrong block size", pv_dev_name(pvl->pv));
+			return_0;
+		}
+
+		if (!add_pv_to_vg(vg, pv_dev_name(pvl->pv), pvl->pv, NULL)) {
+			log_error("PV %s cannot be added to the VG.", pv_dev_name(pvl->pv));
+			return_0;
+		}
+
+		log_verbose("Writing PV data to disk for %s VG %s",
+			    pv_dev_name(pvl->pv), vg->name);
+
+		if (!(pv_write(vg->cmd, pvl->pv, 1))) {
+			log_error("Failed to write physical volume \"%s\"", pv_dev_name(pvl->pv));
+			return_0;
+		}
+	}
 
 	return 1;
 }
@@ -1571,7 +1610,6 @@ void pvcreate_params_set_defaults(struct pvcreate_params *pp)
 	pp->rp.extent_count = 0;
 	pp->rp.extent_size = 0;
 }
-
 
 static int _pvcreate_write(struct cmd_context *cmd, struct pv_to_create *pvc)
 {

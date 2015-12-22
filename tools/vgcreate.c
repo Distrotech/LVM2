@@ -15,15 +15,19 @@
 
 #include "tools.h"
 
+/* TODO: move these */
+int pvcreate_each_params_from_args(struct cmd_context *cmd, struct pvcreate_each_params *pp);
+void pvcreate_each_params_set_defaults(struct pvcreate_each_params *pp);
+
 int vgcreate(struct cmd_context *cmd, int argc, char **argv)
 {
+	struct pvcreate_each_params pp;
 	struct vgcreate_params vp_new;
 	struct vgcreate_params vp_def;
 	struct volume_group *vg;
 	const char *tag;
 	const char *clustered_message = "";
 	char *vg_name;
-	struct pvcreate_params pp;
 	struct arg_value_group_list *current_group;
 
 	if (!argc) {
@@ -36,10 +40,26 @@ int vgcreate(struct cmd_context *cmd, int argc, char **argv)
 	argc--;
 	argv++;
 
-	pvcreate_params_set_defaults(&pp);
-	if (!pvcreate_params_validate(cmd, argc, &pp)) {
+	pvcreate_each_params_set_defaults(&pp);
+
+	if (!pvcreate_each_params_from_args(cmd, &pp))
 		return EINVALID_CMD_LINE;
-	}
+
+	pp.pv_count = argc;
+	pp.pv_names = argv;
+
+	/* Don't create a new PV on top of an existing PV like pvcreate does. */
+	pp.preserve_existing = 1;
+
+	/*
+	 * Needed to change the global VG namespace,
+	 * and to change the set of orphan PVs.
+	 */
+	if (!lockd_gl_create(cmd, "ex", vp_new.lock_type))
+		return ECMD_FAILED;
+
+	if (!pvcreate_each_device(cmd, &pp))
+		return ECMD_FAILED;
 
 	if (!vgcreate_params_set_defaults(cmd, &vp_def, NULL))
 		return EINVALID_CMD_LINE;
@@ -48,14 +68,7 @@ int vgcreate(struct cmd_context *cmd, int argc, char **argv)
 		return EINVALID_CMD_LINE;
 
 	if (!vgcreate_params_validate(cmd, &vp_new))
-	    return EINVALID_CMD_LINE;
-
-	/*
-	 * Needed to change the global VG namespace,
-	 * and to change the set of orphan PVs.
-	 */
-	if (!lockd_gl_create(cmd, "ex", vp_new.lock_type))
-		return ECMD_FAILED;
+		return EINVALID_CMD_LINE;
 
 	lvmcache_seed_infos_from_lvmetad(cmd);
 
@@ -82,13 +95,18 @@ int vgcreate(struct cmd_context *cmd, int argc, char **argv)
 	    !vg_set_mda_copies(vg, vp_new.vgmetadatacopies))
 		goto bad_orphan;
 
+	/*
+	 * TODO: pass a flag to pvcreate_each_device to tell it
+	 * not to release VG_ORPHANS after creating PVs, but
+	 * to leave it locked, then remove this lock call.
+	 */
 	if (!lock_vol(cmd, VG_ORPHANS, LCK_VG_WRITE, NULL)) {
 		log_error("Can't get lock for orphan PVs");
 		goto bad_orphan;
 	}
 
 	/* attach the pv's */
-	if (!vg_extend(vg, argc, (const char* const*)argv, &pp))
+	if (!vg_extend_each_pv(vg, &pp))
 		goto_bad;
 
 	if (vp_new.max_lv != vg->max_lv)

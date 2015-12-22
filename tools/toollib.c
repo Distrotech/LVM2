@@ -3530,6 +3530,7 @@ struct pvcreate_device {
 	struct device *dev;
 	char pvid[ID_LEN + 1];
 	int wiped;
+	int found_existing_label;
 };
 
 static void _run_pvcreate_prompt(struct cmd_context *cmd,
@@ -3650,6 +3651,9 @@ static int _pvcreate_check_single(struct cmd_context *cmd,
 		return ECMD_PROCESSED;
 	}
 
+	if (is_orphan(pv))
+		pd->found_existing_label = 1;
+
 	/*
 	 * pvcreate is being run on this device, and it's not a PV,
 	 * or is an orphan PV.  Neither case requires a prompt.
@@ -3669,13 +3673,13 @@ static int _pvcreate_check_single(struct cmd_context *cmd,
 		log_error("prompt alloc failed");
 		return ECMD_FAILED;
 	}
-
 	prompt->dev = pd->dev;
 	prompt->pv_name = dm_pool_strdup(cmd->mem, pd->name);
 	prompt->vg_name = dm_pool_strdup(cmd->mem, vg->name);
 	prompt->type = PROMPT_PVCREATE_PV_IN_VG;
 	dm_list_add(&pp->prompts, &prompt->list);
 
+	pd->dev = pv->dev;
 	dm_list_move(&pp->arg_create, &pd->list);
 	return ECMD_PROCESSED;
 }
@@ -3706,9 +3710,14 @@ int pvcreate_each_device(struct cmd_context *cmd, struct pvcreate_each_params *p
 	struct pvcreate_device *pd, *pd2;
 	struct pvcreate_prompt *prompt, *prompt2;
 	struct physical_volume *pv;
+	struct volume_group *orphan_vg;
+	struct pv_list *pvl;
+	struct pv_list *vgpvl;
 	struct device *dev;
 	const char *pv_name;
+	int consistent = 0;
 	int must_use_all = (cmd->command->flags & MUST_USE_ALL_ARGS);
+	int found;
 	int ret;
 	int i;
 
@@ -3821,33 +3830,34 @@ int pvcreate_each_device(struct cmd_context *cmd, struct pvcreate_each_params *p
 	}
 
 	/*
-	 * Clear the cache because we are going to rescan after the
-	 * orphan lock is reacquired, to verify that nothing was
-	 * changed during prompts.
-	 */
-	lvmcache_destroy(cmd, 1, 0);
-
-	/*
-	 * Reacquire the orphans lock to write the new PVs.
-	 * It was locked for reading for the process_each_pv check.
-	 */
-	if (!lock_vol(cmd, VG_ORPHANS, LCK_VG_WRITE, NULL)) {
-		log_error("Can't get lock for orphan PVs");
-		goto_out;
-	}
-
-	/*
 	 * The orphans lock was acquired and released during the
 	 * process_each_pv read/check, and is now reacquired to write.  The
 	 * devices being created could have been changed while the lock was not
 	 * held (during the prompts).  So, each device in arg_create should now
 	 * be checked again to verify it was not changed while the lock was not
-	 * held. lvmcache is destroyed after the prompts, and rescanned here.
-	 * The pvids from the rescanned info are compared with the pvids seen
-	 * during the check.  An optimization may be to only reread the labels
-	 * only from devices in arg_create.
+	 * held.  lvmcache is destroyed after the prompts, and orphans are
+	 * reread here.  The pvids from the rescanned info are compared with
+	 * the pvids seen during the check.
+	 *
+	 * FIXME: is checking for unchanged pvids enough?  What if an existing
+	 * PV was added to another VG while the lock was released, then the
+	 * pvid would still be unchanged?  What would have changed in the PV
+	 * struct if the PV had been reused while the lock was released?
 	 */
-	lvmcache_label_scan(cmd);
+
+	lvmcache_destroy(cmd, 1, 0);
+
+	if (!lock_vol(cmd, VG_ORPHANS, LCK_VG_WRITE, NULL)) {
+		log_error("Can't get lock for orphan PVs");
+		goto_out;
+	}
+
+	log_debug("Reread orphans");
+
+	if (!(orphan_vg = vg_read_internal(cmd, cmd->fmt->orphan_vg_name, NULL, 0, &consistent))) {
+		log_error("Cannot read orphans");
+		return 0;
+	}
 
 	dm_list_iterate_items_safe(pd, pd2, &pp->arg_create) {
 		log_debug("Verifying that device %s pvid %s is unchanged",
@@ -3866,7 +3876,7 @@ int pvcreate_each_device(struct cmd_context *cmd, struct pvcreate_each_params *p
 		return_ECMD_FAILED;
 
 	/*
-	 * wipe signatures on devices being created
+	 * Wipe signatures on devices being created.
 	 */
 	dm_list_iterate_items_safe(pd, pd2, &pp->arg_create) {
 		log_verbose("Wiping signatures on new PV %s", pd->name);
@@ -3884,16 +3894,60 @@ int pvcreate_each_device(struct cmd_context *cmd, struct pvcreate_each_params *p
 	}
 
 	/*
-	 * create pvs on devices
+	 * Find existing orphan PVs that vgcreate or vgextend want to use.
+	 * "preserve_existing" means that the command wants to use existing
+	 * PVs and not recreate a new PV on top of an existing PV.
+	 */
+	if (pp->preserve_existing) {
+		dm_list_iterate_items_safe(pd, pd2, &pp->arg_create) {
+			if (!pd->found_existing_label)
+				continue;
+
+			if (!(pvl = dm_pool_alloc(cmd->mem, sizeof(*pvl)))) {
+				log_error("alloc pvl failed");
+				dm_list_move(&pp->arg_fail, &pd->list);
+			}
+
+			log_verbose("Using an existing PV on %s", pv_name);
+
+			found = 0;
+			dm_list_iterate_items(vgpvl, &orphan_vg->pvs) {
+				if (vgpvl->pv->dev == pd->dev) {
+					found = 1;
+					break;
+				}
+			}
+
+			if (found) {
+				pvl->pv = vgpvl->pv;
+				dm_list_add(&pp->pvs, &pvl->list);
+			} else {
+				log_error("Failed to find PV %s", pd->name);
+				dm_list_move(&pp->arg_fail, &pd->list);
+			}
+		}
+	}
+
+	/*
+	 * Create PVs on devices.  Either create a new PV on top of an existing
+	 * one (e.g. for pvcreate), or create a new PV on a device that is not
+	 * a PV.
 	 */
 	dm_list_iterate_items_safe(pd, pd2, &pp->arg_create) {
+		if (pp->preserve_existing && pd->found_existing_label)
+			continue;
 
 		if (!dm_list_empty(&pp->arg_fail) && must_use_all)
 			break;
 
+		if (!(pvl = dm_pool_alloc(cmd->mem, sizeof(*pvl)))) {
+			log_error("alloc pvl failed");
+			dm_list_move(&pp->arg_fail, &pd->list);
+		}
+
 		pv_name = pd->name;
 
-		log_verbose("Creating new PV %s", pv_name);
+		log_verbose("Creating a new PV on %s", pv_name);
 
 		/* FIXME: get rid of rp usage in pv_create to avoid this. */
 		memset(&rp, 0, sizeof(rp));
@@ -3919,8 +3973,6 @@ int pvcreate_each_device(struct cmd_context *cmd, struct pvcreate_each_params *p
 
 		log_verbose("Set up physical volume for \"%s\" with %" PRIu64
 			    " available sectors", pv_name, pv_size(pv));
-
-		pv->status |= UNLABELLED_PV;
 
 		if (!label_remove(pv->dev)) {
 			log_error("Failed to wipe existing label on %s", pv_name);
@@ -3950,12 +4002,15 @@ int pvcreate_each_device(struct cmd_context *cmd, struct pvcreate_each_params *p
 
 		log_verbose("Writing physical volume data to disk \"%s\"", pv_name);
 
-		if (!pv_write(cmd, pv, 1)) {
+		if (!pv_write(cmd, pv, 0)) {
 			log_error("Failed to write physical volume \"%s\"", pv_name);
 			dm_list_move(&pp->arg_fail, &pd->list);
 		}
 
 		log_print_unless_silent("Physical volume \"%s\" successfully created", pv_name);
+
+		pvl->pv = pv;
+		dm_list_add(&pp->pvs, &pvl->list);
 	}
 
 	unlock_vg(cmd, VG_ORPHANS);
